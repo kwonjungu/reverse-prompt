@@ -22,6 +22,8 @@ type PracticeAttempt = {
   id: string;
   attendanceNumber: string;
   questionIndex: number;
+  questionLevel?: number;
+  questionTitle?: string;
   originalPrompt: string;
   studentPrompt: string;
   score: number;
@@ -240,9 +242,14 @@ export default function TeacherPage() {
                           <div key={qIdx} className="border rounded-xl p-4 bg-background/60">
                             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                               <div>
-                                <p className="text-xs text-muted-foreground font-bold uppercase">문제 {qIdx + 1}</p>
-                                <p className="text-sm text-muted-foreground italic">
-                                  원본 프롬프트: {attempts[0].originalPrompt}
+                                <div className="flex items-center gap-2 mb-0.5">
+                                  <p className="text-xs text-muted-foreground font-bold uppercase">문제 {qIdx + 1}</p>
+                                  {attempts[0].questionLevel && (
+                                    <span className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">Lv.{attempts[0].questionLevel}</span>
+                                  )}
+                                </div>
+                                <p className="text-sm font-medium">
+                                  {attempts[0].questionTitle ?? attempts[0].originalPrompt.slice(0, 40) + '…'}
                                 </p>
                               </div>
                               {attempts.length > 1 && (
@@ -346,7 +353,12 @@ export default function TeacherPage() {
                           {sub.results.map((res: any, idx: number) => (
                             <TableRow key={idx}>
                               <TableCell className="font-bold text-lg">{idx + 1}</TableCell>
-                              <TableCell className="text-sm text-muted-foreground italic whitespace-pre-wrap py-4">{res.originalPrompt ?? '-'}</TableCell>
+                              <TableCell className="text-sm py-4">
+                                {res.questionTitle
+                                  ? <span className="font-medium">{res.questionTitle}</span>
+                                  : <span className="text-muted-foreground italic">{(res.originalPrompt ?? '-').slice(0, 50)}…</span>
+                                }
+                              </TableCell>
                               <TableCell className="whitespace-pre-wrap font-body py-4 leading-relaxed">{res.studentPrompt}</TableCell>
                               <TableCell className="text-right font-black text-primary text-xl">{res.score}</TableCell>
                             </TableRow>
