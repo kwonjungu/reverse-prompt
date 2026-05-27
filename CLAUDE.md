@@ -137,6 +137,31 @@ classes/
 - 게임/시간제한 모드는 평가 실패해도 0점으로 결과 저장됨 (Firestore에 들어감).
 - `package-lock.json` 커밋됨 — npm 사용 가정. yarn/pnpm 쓰면 lockfile 충돌.
 
+## ⚠️ 미해결: 이미지 모델이 프롬프트에 없는 요소를 자기 마음대로 추가
+
+**증상**: 연습 모드 Q1 (`dataAiHint: 'a cute puppy, white background'`)에서 매번 **빨간 스카프**를 두른 강아지가 생성됨. 프롬프트엔 스카프 언급 없음.
+
+**진단 (코드 전체 확인 완료)**:
+- 코드 어디에도 "scarf/clothing/accessory" 단어 없음 (grep 0건)
+- system prompt 없음, negative prompt 없음, Genkit 추가 instruction 없음
+- `buildImagePrompt()` 결과가 Gemini에 보내는 유일한 텍스트
+- → 원인은 **gemini-2.5-flash-image의 stylistic bias** ("cute puppy" 입력 시 학습 데이터 분포상 액세서리 자동 추가)
+
+**왜 큰 문제냐**: 학생이 "하얀 강아지"라고 정확히 묘사해도, 평가 모델은 이미지를 보면서 "빨간 스카프 빠뜨림" 식으로 감점 가능. **프롬프트에 없는 걸 못 맞춰서 학생이 점수를 잃는 구조** → 교육적으로 부당.
+
+**해결 옵션 (사용자 결정 대기 중)**:
+1. `src/lib/image-prompt.ts` `buildImagePrompt()`에 일괄 negative constraint 추가
+   ```ts
+   return `Generate a high-quality, detailed image of: ${subject}. ` +
+          `Strictly only include what is described above. ` +
+          `No clothing, no accessories, no extra props, no added text, ` +
+          `no items not explicitly mentioned. Plain composition.`;
+   ```
+2. `src/app/practice/page.tsx` (그리고 game/time-attack도) `dataAiHint`를 더 구체화 — 게임 모드처럼 형용사·색·자세 등을 명시
+3. 둘 다 (추천)
+
+**작업 시 주의**: rubric도 같이 일치시켜야 함. 이미지가 단순해지면 rubric도 그에 맞게 단순화 (현재 rubric에 "분위기/표정" 항목이 있는데 단순 이미지면 채점 어려움).
+
 ## 자주 손볼 만한 곳
 
 | 원하는 변경 | 건드릴 파일 |
