@@ -1,0 +1,56 @@
+
+{
+  "entities": {
+    "Submission": {
+      "title": "Submission",
+      "description": "학생의 프롬프트 엔지니어링 제출 결과",
+      "type": "object",
+      "properties": {
+        "attendanceNumber": {
+          "type": "string",
+          "description": "학생 출석 번호"
+        },
+        "nickname": {
+          "type": "string",
+          "description": "학생 닉네임"
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "questionIndex": { "type": "number" },
+              "studentPrompt": { "type": "string" },
+              "feedback": { "type": "string" },
+              "score": { "type": "number" }
+            }
+          }
+        },
+        "averageScore": {
+          "type": "number",
+          "description": "평균 점수"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["game", "time-attack"],
+          "description": "플레이 모드"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "제출 일시"
+        }
+      },
+      "required": ["attendanceNumber", "nickname", "results", "averageScore", "mode", "createdAt"]
+    }
+  },
+  "auth": {
+    "providers": ["anonymous"]
+  },
+  "firestore": {
+    "/classes/{classCode}/submissions/{submissionId}": {
+      "schema": "#/entities/Submission",
+      "description": "학급별 학생 제출 결과"
+    }
+  }
+}
