@@ -31,91 +31,91 @@ const questions = [
   {
     level: 1,
     dataAiHint: 'a small white fluffy puppy sitting, tongue out, plain pure white background, no collar, no accessories, no objects except the puppy',
-    rubric: '① 무엇: 어떤 동물인가요?\n② 색깔: 어떤 색인가요?\n③ 자세: 어떤 자세로 있나요?',
+    rubric: '이 그림을 한 번도 못 본 친구에게 문자로 보낸다면?\n\n색깔은 어떤지, 어떤 자세인지, 어떤 느낌인지 생각나는 대로 써봐요.\n더 자세히 쓸수록 AI가 똑같은 그림을 만들 수 있어요!',
   },
   // ── 2단계 ──
   {
     level: 2,
     dataAiHint: 'a shiny red apple with a short green stem and one small green leaf, centered on plain pure white background, no other objects',
-    rubric: '① 무엇: 무엇이 그려져 있나요?\n② 색깔: 어떤 색인가요?\n③ 특징: 꼭지나 잎이 있나요?',
+    rubric: '이 물건을 눈 감고 머릿속으로 떠올릴 수 있게 설명해봐요.\n\n색깔, 모양, 크기, 어떤 특징이 있는지... 단어를 많이 쓸수록 좋아요!',
   },
   // ── 3단계 ──
   {
     level: 3,
     dataAiHint: 'a single bright yellow sunflower facing forward, thick green stem, plain pure white background, no other flowers, no vase',
-    rubric: '① 무엇: 어떤 꽃인가요?\n② 색깔: 꽃잎과 가운데 색은요?\n③ 방향: 꽃이 어느 쪽을 향하고 있나요?',
+    rubric: '꽃집 주인이 되어 이 꽃을 소개하는 설명을 써봐요.\n\n꽃 색깔, 잎 색깔, 크기, 어떤 방향을 향하는지, 어떤 느낌인지... 꽃을 처음 보는 손님도 바로 알 수 있게!',
   },
   // ── 4단계 ──
   {
     level: 4,
     dataAiHint: 'a gray humanoid robot with a square silver head, two round blue glowing eyes, rectangular body, standing straight with arms at sides, plain pure white background, no weapons',
-    rubric: '① 누가: 어떤 캐릭터인가요?\n② 머리 모양: 머리는 어떻게 생겼나요?\n③ 눈 색깔: 눈은 무슨 색인가요?\n④ 자세: 어떻게 서 있나요?',
+    rubric: '로봇 설계 도면을 글로 그려봐요!\n\n머리 모양, 몸 색깔, 눈 색깔, 팔과 다리 모양, 자세... 부품 하나하나를 써줄수록 정확한 로봇이 만들어져요.',
   },
   // ── 5단계 ──
   {
     level: 5,
     dataAiHint: 'a round brown chocolate chip cookie character with two large round white cartoon eyes and a big smiling mouth, two short stick arms and two short stick legs, standing pose, plain pure white background',
-    rubric: '① 무엇: 무슨 음식이 캐릭터로 나왔나요?\n② 색깔·모양: 어떻게 생겼나요?\n③ 얼굴: 어떤 표정인가요?\n④ 특징: 쿠키에 무엇이 박혀 있나요?',
+    rubric: '이 캐릭터의 프로필을 써봐요!\n\n어떤 음식이 살아났는지, 색깔·모양, 표정, 팔다리는 어떻게 생겼는지... 더 많이 써줄수록 생생한 캐릭터가 나와요.',
   },
   // ── 6단계 ──
   {
     level: 6,
     dataAiHint: 'a white cat standing upright on two legs, holding a round black microphone with one paw, mouth open wide singing, plain pure white background, no stage, no crowd',
-    rubric: '① 누가: 어떤 동물인가요?\n② 색깔: 무슨 색인가요?\n③ 자세: 어떻게 서 있나요?\n④ 행동: 무엇을 들고 무엇을 하고 있나요?',
+    rubric: '음악 방송 해설자가 되어 이 장면을 중계해봐요!\n\n어떤 동물인지, 색깔, 어떤 자세로 서 있는지, 손에 뭘 들고 있는지, 어떤 행동을 하는지... 생생하게 전달해봐요.',
   },
   // ── 7단계: 배경 첫 등장 (단색) ──
   {
     level: 7,
     dataAiHint: 'a pink cartoon pig with two small round white feathered wings on its back, hovering in midair with a big happy smile, solid light sky-blue background, no clouds, no other objects',
-    rubric: '① 누가: 어떤 동물이고 색깔은?\n② 특징: 어떤 특별한 부위가 있나요?\n③ 행동: 무엇을 하고 있나요?\n④ 배경: 배경은 무슨 색인가요?',
+    rubric: '뉴스 기자가 되어 이 신기한 장면을 보도해봐요!\n\n어떤 동물인지, 특별한 신체 부위, 무엇을 하고 있는지, 배경 색깔과 분위기... 시청자가 그림 없이도 상상할 수 있게 써봐요.',
   },
   // ── 8단계 ──
   {
     level: 8,
     dataAiHint: 'a yellow crescent moon shape with two closed eyes and a peaceful sleeping smile, surrounded by five small white stars, solid dark navy blue background, nothing else',
-    rubric: '① 무엇: 무슨 모양인가요?\n② 색깔: 달은 무슨 색인가요?\n③ 표정: 달이 어떤 표정인가요?\n④ 배경: 배경색과 배경에 무엇이 있나요?',
+    rubric: '동화책의 한 페이지를 글로 써봐요!\n\n달의 모양·색깔·표정, 주변에 무엇이 있는지, 하늘 색깔, 어떤 느낌인지... 독자가 삽화 없이도 그릴 수 있게 묘사해봐요.',
   },
   // ── 9단계 ──
   {
     level: 9,
     dataAiHint: 'a hamburger with two large round white cartoon eyes and a wide open smiling mouth, two small round legs, standing upright on a simple light yellow background, no extra props',
-    rubric: '① 무엇: 무슨 음식이 캐릭터로 나왔나요?\n② 표정·눈: 눈은 어떻게 생겼고 표정은요?\n③ 자세: 어떤 자세로 있나요?\n④ 배경: 배경은 무슨 색인가요?',
+    rubric: '이 캐릭터를 처음 만난 탐험가처럼 관찰 일지를 써봐요!\n\n어떤 생물인지, 눈과 표정, 몸의 모양, 어떤 자세인지, 배경은 어떤 색인지... 발견한 것 모두 기록해봐요.',
   },
   // ── 10단계 ──
   {
     level: 10,
     dataAiHint: 'a white horse with a single straight golden horn on its forehead and a long rainbow-colored mane and tail, standing still in a misty light green meadow, soft golden sunlight from above, no riders, no fairies',
-    rubric: '① 누가: 어떤 동물이고 특별한 부분은?\n② 털색: 갈기와 꼬리는 어떤 색인가요?\n③ 배경: 어떤 장소인가요?\n④ 빛: 어떤 빛이 있나요?',
+    rubric: '마법의 생물을 목격한 탐험가의 보고서를 써봐요!\n\n어떤 동물인지, 특별한 부위, 털과 갈기 색깔, 어디에 있는지, 어떤 빛·분위기인지... 믿기 어려운 목격담을 자세히 써봐요.',
   },
   // ── 11단계 ──
   {
     level: 11,
     dataAiHint: 'a small orange tabby cat wearing a purple wizard hat and robe, sitting at a wooden desk, holding a wooden wand, a glowing purple open spell book on the desk, simple gray stone wall background behind',
-    rubric: '① 누가: 어떤 동물인가요?\n② 옷: 무엇을 입고 있나요?\n③ 행동: 무엇을 하고 있나요?\n④ 배경·소품: 책상 위에 무엇이 있나요?',
+    rubric: '이 장면을 영화 대본처럼 묘사해봐요!\n\n등장인물이 무엇인지, 입은 옷, 하는 행동, 책상 위 소품들, 배경... 영화 감독이 그림 없이도 촬영할 수 있게 써봐요.',
   },
   // ── 12단계 ──
   {
     level: 12,
     dataAiHint: 'an astronaut in a white spacesuit floating in outer space, arms stretched out sideways, blue Earth visible in the upper left, white stars scattered on black background, one ringed planet visible in the far right distance',
-    rubric: '① 누가: 우주비행사는 어떤 복장인가요?\n② 행동: 어떤 자세로 있나요?\n③ 배경: 배경에 무엇이 보이나요?\n④ 분위기: 어떤 느낌인가요?',
+    rubric: '우주에서 찍은 사진을 지구 관제센터에 보고하는 전문가가 되어봐요!\n\n우주비행사 복장, 자세, 배경에 보이는 천체들, 위치, 어떤 느낌인지... 빠짐없이 보고해봐요.',
   },
   // ── 13단계 ──
   {
     level: 13,
     dataAiHint: 'a futuristic night city viewed from street level, three flying cars with glowing blue headlights in the sky, tall skyscrapers with pink and cyan neon signs on the sides, dark sky, no people, no animals',
-    rubric: '① 어디: 어떤 도시인가요?\n② 하늘: 하늘에 무엇이 날고 있나요?\n③ 건물: 건물들은 어떻게 생겼나요?\n④ 빛: 어떤 색의 빛이 있나요?',
+    rubric: '미래 여행 가이드북의 한 페이지를 써봐요!\n\n어떤 도시인지, 하늘에 무엇이 있는지, 건물 모양과 빛 색깔, 시간대, 전체적인 분위기... 여행자가 가고 싶어지도록 생생하게 써봐요.',
   },
   // ── 14단계 ──
   {
     level: 14,
     dataAiHint: 'an underwater ocean floor scene with round dome-shaped glowing teal buildings, a school of small colorful tropical fish swimming past in the foreground, hazy blue-green water, faint light rays coming from the surface above, no people, no submarines',
-    rubric: '① 어디: 어떤 곳인가요?\n② 건물: 건물은 어떤 모양이고 색깔인가요?\n③ 무엇: 물속에 무엇이 지나가고 있나요?\n④ 빛: 어떤 빛이 있나요?',
+    rubric: '바닷속 세계를 처음 발견한 탐험가의 일기를 써봐요!\n\n어떤 건물들이 있는지, 건물 모양과 색깔, 어떤 생물들이 지나가는지, 물빛, 빛의 방향과 색... 발견한 모든 것을 기록해봐요.',
   },
   // ── 15단계 ──
   {
     level: 15,
     dataAiHint: 'a magical fantasy library interior, tall wooden bookshelves on both walls filled with colorful books, five glowing crystal orbs floating in midair at different heights, warm golden lantern light, stone floor, no people',
-    rubric: '① 어디: 어떤 장소인가요?\n② 책장: 어떻게 생겼나요?\n③ 빛: 어떤 빛이 떠 있나요?\n④ 분위기: 어떤 느낌인가요?',
+    rubric: '마법 도서관에 처음 들어선 주인공의 눈에 보이는 것을 써봐요!\n\n책장 모양과 크기, 떠 있는 빛의 색깔과 개수, 바닥 재질, 전체 공기의 느낌... 그림 속에 있는 것을 빠짐없이 묘사해봐요.',
   },
 ];
 
@@ -214,7 +214,7 @@ export default function PracticePage() {
 
   const handleRetry = () => {
     setEvaluation(null);
-    setStudentPrompt('');
+    // studentPrompt는 유지 — 학생이 이전 답을 보고 수정할 수 있도록
   };
 
   const handleNextQuestion = () => {
