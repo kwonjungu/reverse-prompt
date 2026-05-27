@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useFirestore, useCollection } from '@/firebase';
-import { collection, query, orderBy, deleteDoc, doc } from 'firebase/firestore';
+import { collection, query, orderBy, deleteDoc, doc, getDocs, writeBatch } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { GraduationCap, ArrowLeft, Printer, Trash2, Search, ClipboardList, TrendingUp } from 'lucide-react';
+import { GraduationCap, ArrowLeft, Printer, Trash2, Search, ClipboardList, TrendingUp, AlertTriangle } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -111,6 +111,28 @@ export default function TeacherPage() {
 
   const handlePrint = () => window.print();
 
+  const handleDeleteAll = async () => {
+    if (!db || !activeClassCode) return;
+    const confirmed = confirm(
+      `⚠️ "${activeLabel}" 학급의 모든 데이터를 삭제합니다.\n연습 기록과 시험 결과가 영구 삭제됩니다. 계속할까요?`
+    );
+    if (!confirmed) return;
+
+    try {
+      const batch = writeBatch(db);
+      const [subSnap, pracSnap] = await Promise.all([
+        getDocs(collection(db, 'classes', activeClassCode, 'submissions')),
+        getDocs(collection(db, 'classes', activeClassCode, 'practice_attempts')),
+      ]);
+      subSnap.forEach(d => batch.delete(d.ref));
+      pracSnap.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+      toast({ title: '삭제 완료', description: `${subSnap.size + pracSnap.size}건의 데이터를 삭제했습니다.` });
+    } catch (e) {
+      toast({ variant: 'destructive', title: '삭제 실패', description: String(e) });
+    }
+  };
+
   if (!activeClassCode) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
@@ -183,12 +205,19 @@ export default function TeacherPage() {
           </h1>
           <p className="text-muted-foreground font-body">학생들의 학습 기록을 확인하세요.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <Button variant="outline" onClick={() => setActiveClassCode(null)}>
             <Search className="mr-2 h-4 w-4" /> 다른 학급
           </Button>
           <Button onClick={handlePrint} className="font-bold">
             <Printer className="mr-2 h-4 w-4" /> 인쇄
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={handleDeleteAll}
+            className="font-bold"
+          >
+            <AlertTriangle className="mr-2 h-4 w-4" /> 수업 결과 전체 삭제
           </Button>
         </div>
       </header>

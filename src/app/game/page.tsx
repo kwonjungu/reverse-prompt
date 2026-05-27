@@ -18,34 +18,45 @@ import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { useFirestore } from '@/firebase';
+import { buildImagePrompt } from '@/lib/image-prompt';
 
 const allQuestions = [
   {
+    level: 10,
+    koreanTitle: '햇살 가득한 방의 흰 강아지',
     dataAiHint: 'a cute puppy with white fur, golden eyes, wagging tail, sitting in a sunny room',
-    rubric: '누가: 강아지의 모습(종류, 털 색깔, 눈동자 등)을 자세히 써보세요.\n어떻게: 강아지가 지금 무엇을 하고 있나요? (예: 기뻐서 꼬리를 흔듬)\n어디에: 주변에 무엇이 있나요? (예: 따뜻한 햇살이 비치는 거실)'
+    rubric: '강아지를 처음 보는 친구에게 자세히 소개해봐요!\n\n털 색깔, 눈 색, 어떤 자세인지, 무엇을 하고 있는지, 주변 환경은 어떤지... 그림 속 모든 것을 전해줘요.',
   },
   {
+    level: 11,
+    koreanTitle: '아침 햇살 속 나무 테이블의 사과',
     dataAiHint: 'a bright red shiny apple with a green leaf, on a wooden table, soft morning light',
-    rubric: '무엇을: 사과의 겉모습(색깔, 질감, 잎사귀 등)을 묘사해보세요.\n어떻게: 사과가 어디에 어떤 모습으로 있나요? (예: 나무 테이블 위)\n분위기: 그림 전체에서 느껴지는 빛과 느낌은 어떤가요? (예: 아침 햇살)'
+    rubric: '과일 가게 광고 문구를 써보듯이 이 사과를 설명해봐요!\n\n색깔, 빛나는 정도, 테이블의 재질, 빛의 느낌, 어떤 분위기인지... 먹고 싶어지도록 생생하게 써봐요.',
   },
   {
+    level: 11,
+    koreanTitle: '파란 하늘 아래 웃는 해바라기',
     dataAiHint: 'a cheerful sunflower with a smiley face, blue sky background, fluffy white clouds',
-    rubric: '누가: 해바라기의 표정과 꽃잎의 색깔을 생생하게 설명하세요.\n어디에: 하늘과 구름은 어떤 모습인가요? (예: 솜사탕 같은 구름)\n분위기: 이 그림을 보면 어떤 기분이 드나요? 그 이유도 써보세요.'
+    rubric: '동화책 삽화를 설명하는 작가가 되어봐요!\n\n해바라기의 표정, 꽃잎 색깔, 하늘 색, 구름 모양, 이 그림의 전체 분위기... 독자가 삽화 없이도 그릴 수 있게 묘사해봐요.',
   },
   {
+    level: 7,
+    koreanTitle: '손 흔드는 은색 로봇',
     dataAiHint: 'a friendly small silver robot waving its hand, white clean background',
-    rubric: '누가: 로봇의 몸은 어떤 재질이고 어떻게 생겼나요?\n어떻게: 로봇이 우리에게 어떤 인사를 하고 있나요?\n배치: 로봇이 화면의 어디쯤에서 우리를 보고 있나요?'
+    rubric: '로봇 제품 설명서를 쓰듯이 이 로봇을 소개해봐요!\n\n몸의 색깔과 재질, 크기, 손 동작, 표정, 어떤 느낌인지... 이 로봇을 본 적 없는 사람도 바로 상상할 수 있게 써봐요.',
   },
   {
+    level: 13,
+    koreanTitle: '밤의 안개 숲을 달리는 빛나는 유니콘',
     dataAiHint: 'a glowing magical unicorn running through a misty lavender forest at night',
-    rubric: '누가: 유니콘의 신비로운 특징(뿔의 빛, 털색 등)을 써보세요.\n어디에: 숲의 색깔과 안개의 느낌을 자세히 묘사하세요.\n시간: 지금은 어떤 시간대이고, 어떤 마법 같은 일이 일어날 것 같나요?'
-  }
+    rubric: '마법 세계를 탐험한 모험가의 일지를 써봐요!\n\n유니콘 색깔과 특징, 뿔의 모습, 숲의 색깔과 안개, 밤하늘, 전체 분위기... 읽는 사람이 그 자리에 있는 것처럼 써봐요.',
+  },
 ];
 
 const GAME_QUESTION_COUNT = 5;
 
 type GameState = 'nickname' | 'playing' | 'results';
-type Result = EvaluatePromptOutput & { questionIndex: number; studentPrompt: string; originalPrompt: string; };
+type Result = EvaluatePromptOutput & { questionIndex: number; questionLevel: number; koreanTitle: string; studentPrompt: string; originalPrompt: string; };
 
 export default function GamePage() {
   const db = useFirestore();
@@ -120,9 +131,15 @@ export default function GamePage() {
     startEvaluationTransition(async () => {
       try {
         if (!generatedImageUrl) throw new Error("Image not available.");
-        const result = await evaluatePrompt({ studentPrompt, photoDataUri: generatedImageUrl });
-        
-        const newResults = [...results, { ...result, questionIndex: currentQuestionIndex, studentPrompt, originalPrompt: buildImagePrompt(currentQuestion.dataAiHint) }];
+        const result = await evaluatePrompt({ studentPrompt, photoDataUri: generatedImageUrl, questionLevel: currentQuestion.level });
+        const newResults = [...results, {
+          ...result,
+          questionIndex: currentQuestionIndex,
+          questionLevel: currentQuestion.level,
+          koreanTitle: currentQuestion.koreanTitle,
+          studentPrompt,
+          originalPrompt: buildImagePrompt(currentQuestion.dataAiHint),
+        }];
         setResults(newResults);
 
         if (currentQuestionIndex < GAME_QUESTION_COUNT - 1) {

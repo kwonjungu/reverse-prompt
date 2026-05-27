@@ -148,10 +148,15 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          <div className="mt-8 text-center">
+          <div className="mt-8 text-center flex flex-col items-center gap-2">
             <Link href="/teacher">
               <Button variant="link" className="text-muted-foreground hover:text-primary">
                 <GraduationCap className="mr-2 h-4 w-4" /> 선생님이신가요? (결과 확인하기)
+              </Button>
+            </Link>
+            <Link href="/admin">
+              <Button variant="link" className="text-xs text-muted-foreground/50 hover:text-muted-foreground">
+                시스템 감수
               </Button>
             </Link>
           </div>

@@ -20,32 +20,42 @@ import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { useFirestore } from '@/firebase';
 
 const allQuestions = [
-    {
-        dataAiHint: 'a futuristic city with flying cars and towering skyscrapers at night',
-        rubric: '누가/무엇을: 도시에 무엇이 보이나요? (고층 빌딩, 날아다니는 자동차 등)\n어떻게: 조명이나 도시의 움직임은 어떤가요? (반짝이는 불빛, 빠른 움직임)\n분위기: 미래 도시의 화려하고 역동적인 느낌을 설명하세요.'
-    },
-    {
-        dataAiHint: 'an astronaut floating in space, stars and planets in the background',
-        rubric: '누가: 우주비행사의 모습은 어떤가요? (우주복의 색깔, 헬멧에 비치는 모습 등)\n어디에: 주변 우주의 풍경(행성, 별, 성운)을 묘사해보세요.\n배치: 우주비행사가 화면의 어디에 어떻게 떠 있나요?'
-    },
-    {
-        dataAiHint: 'a glowing magical unicorn running through a misty lavender forest at night',
-        rubric: '누가: 유니콘의 신비로운 특징(뿔의 빛, 털색 등)을 써보세요.\n어디에: 숲의 색깔과 안개의 느낌을 자세히 묘사하세요.\n시간: 지금은 어떤 시간대이고, 어떤 마법 같은 일이 일어날 것 같나요?'
-    },
-    {
-        dataAiHint: 'an underwater city with glowing buildings and fish swimming by',
-        rubric: '어디에: 물속 도시는 어떤 모습인가요? (산호로 된 건물, 스스로 빛나는 집)\n어떻게: 어떤 물고기들이 옆을 지나가고 있나요? (알록달록한 색깔, 무리지어 헤엄치는 모습)\n분위기: 바다 깊은 곳의 고요하고 신비로운 분위기를 설명하세요.'
-    },
-    {
-        dataAiHint: 'a robot cat singing on a stage, colorful spotlights, futuristic audience',
-        rubric: '누가: 로봇 고양이는 어떻게 생겼고 무엇을 하고 있나요?\n어디에: 무대 위의 조명과 배경은 어떤가요? (화려한 스포트라이트)\n분위기: 공연장의 열기와 즐거운 분위기를 묘사하세요.'
-    }
+  {
+    level: 13,
+    koreanTitle: '네온 빛 미래 도시의 밤거리',
+    dataAiHint: 'a futuristic city with flying cars and towering skyscrapers at night',
+    rubric: '미래 도시 여행 가이드를 쓰듯 이 장면을 설명해봐요!\n\n어떤 도시인지, 하늘에 무엇이 날고 있는지, 건물 빛 색깔, 전체 분위기... 빠르게, 하지만 생생하게!',
+  },
+  {
+    level: 12,
+    koreanTitle: '우주를 떠다니는 우주비행사',
+    dataAiHint: 'an astronaut floating in space, stars and planets in the background',
+    rubric: '우주 탐사 보고서를 빠르게 작성해봐요!\n\n우주비행사 복장, 자세, 배경에 보이는 지구·별·행성, 전체 느낌... 30초 안에 최대한 자세히!',
+  },
+  {
+    level: 13,
+    koreanTitle: '밤의 안개 숲을 달리는 빛나는 유니콘',
+    dataAiHint: 'a glowing magical unicorn running through a misty lavender forest at night',
+    rubric: '마법 생물 목격 신고서를 빠르게 써봐요!\n\n유니콘 색깔·특징, 달리는 모습, 숲 배경, 빛과 안개, 분위기... 시간이 없어요!',
+  },
+  {
+    level: 14,
+    koreanTitle: '빛나는 건물과 물고기 떼의 바닷속 도시',
+    dataAiHint: 'an underwater city with glowing buildings and fish swimming by',
+    rubric: '바닷속 도시 첫 발견 보고서를 작성해봐요!\n\n건물 모양과 빛 색깔, 지나가는 물고기들, 물빛, 전체 분위기... 최대한 많이!',
+  },
+  {
+    level: 11,
+    koreanTitle: '무대 위 노래하는 로봇 고양이',
+    dataAiHint: 'a robot cat singing on a stage, colorful spotlights, futuristic audience',
+    rubric: '공연 실황 중계를 해봐요!\n\n로봇 고양이 모습, 무대 조명 색깔, 관중석 분위기, 전체 에너지... 생생하게 전달해봐요!',
+  },
 ];
 
 const GAME_QUESTION_COUNT = 5;
 
 type GameState = 'setup' | 'playing' | 'results';
-type Result = EvaluatePromptOutput & { questionIndex: number; studentPrompt: string; originalPrompt: string; };
+type Result = EvaluatePromptOutput & { questionIndex: number; questionLevel: number; koreanTitle: string; studentPrompt: string; originalPrompt: string; };
 
 export default function TimeAttackPage() {
   const db = useFirestore();
@@ -122,12 +132,20 @@ export default function TimeAttackPage() {
 
       try {
         if (!generatedImageUrl) throw new Error("No image");
-        result = await evaluatePrompt({ studentPrompt: promptToEvaluate, photoDataUri: generatedImageUrl });
+        result = await evaluatePrompt({ studentPrompt: promptToEvaluate, photoDataUri: generatedImageUrl, questionLevel: questions[currentQuestionIndex]?.level });
       } catch (error) {
         result = { score: 0, feedback: 'AI 평가에 실패했습니다.' };
       }
       
-      const newResults = [...results, { ...result, questionIndex: currentQuestionIndex, studentPrompt: promptToEvaluate, originalPrompt: buildImagePrompt(questions[currentQuestionIndex]?.dataAiHint ?? '') }];
+      const q = questions[currentQuestionIndex];
+      const newResults = [...results, {
+        ...result,
+        questionIndex: currentQuestionIndex,
+        questionLevel: q?.level ?? 0,
+        koreanTitle: q?.koreanTitle ?? '',
+        studentPrompt: promptToEvaluate,
+        originalPrompt: buildImagePrompt(q?.dataAiHint ?? ''),
+      }];
       setResults(newResults);
 
       if (currentQuestionIndex < GAME_QUESTION_COUNT - 1) {
