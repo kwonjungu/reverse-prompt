@@ -6,6 +6,8 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { evaluatePrompt, type EvaluatePromptOutput } from '@/ai/flows/evaluate-prompt';
 import { generateImage } from '@/ai/flows/generate-image';
+import { useFirestore } from '@/firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -92,6 +94,7 @@ export default function PracticePage() {
   const [imageGenerationError, setImageGenerationError] = useState(false);
   const [isEvaluating, startEvaluationTransition] = useTransition();
   const { toast } = useToast();
+  const db = useFirestore();
 
   const isPending = isGeneratingImage || isEvaluating;
 
@@ -165,6 +168,21 @@ export default function PracticePage() {
           photoDataUri,
         });
         setEvaluation(result);
+
+        // 교사 대시보드용 연습 기록 저장
+        const classCode = sessionStorage.getItem('classCode');
+        const attendanceNumber = sessionStorage.getItem('attendanceNumber');
+        if (db && classCode && attendanceNumber) {
+          addDoc(collection(db, 'classes', classCode, 'practice_attempts'), {
+            attendanceNumber,
+            questionIndex: currentQuestionIndex,
+            originalPrompt: currentQuestion.dataAiHint,
+            studentPrompt,
+            score: result.score,
+            feedback: result.feedback,
+            createdAt: serverTimestamp(),
+          }).catch((err) => console.error('연습 기록 저장 실패:', err));
+        }
       } catch (error) {
         console.error("Evaluation failed:", error);
         toast({

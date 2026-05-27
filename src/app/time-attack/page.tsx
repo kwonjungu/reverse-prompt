@@ -45,7 +45,7 @@ const allQuestions = [
 const GAME_QUESTION_COUNT = 5;
 
 type GameState = 'setup' | 'playing' | 'results';
-type Result = EvaluatePromptOutput & { questionIndex: number; studentPrompt: string; };
+type Result = EvaluatePromptOutput & { questionIndex: number; studentPrompt: string; originalPrompt: string; };
 
 export default function TimeAttackPage() {
   const db = useFirestore();
@@ -127,7 +127,7 @@ export default function TimeAttackPage() {
         result = { score: 0, feedback: 'AI 평가에 실패했습니다.' };
       }
       
-      const newResults = [...results, { ...result, questionIndex: currentQuestionIndex, studentPrompt: promptToEvaluate }];
+      const newResults = [...results, { ...result, questionIndex: currentQuestionIndex, studentPrompt: promptToEvaluate, originalPrompt: questions[currentQuestionIndex]?.dataAiHint ?? '' }];
       setResults(newResults);
 
       if (currentQuestionIndex < GAME_QUESTION_COUNT - 1) {

@@ -45,7 +45,7 @@ const allQuestions = [
 const GAME_QUESTION_COUNT = 5;
 
 type GameState = 'nickname' | 'playing' | 'results';
-type Result = EvaluatePromptOutput & { questionIndex: number; studentPrompt: string; };
+type Result = EvaluatePromptOutput & { questionIndex: number; studentPrompt: string; originalPrompt: string; };
 
 export default function GamePage() {
   const db = useFirestore();
@@ -122,7 +122,7 @@ export default function GamePage() {
         if (!generatedImageUrl) throw new Error("Image not available.");
         const result = await evaluatePrompt({ studentPrompt, photoDataUri: generatedImageUrl });
         
-        const newResults = [...results, { ...result, questionIndex: currentQuestionIndex, studentPrompt }];
+        const newResults = [...results, { ...result, questionIndex: currentQuestionIndex, studentPrompt, originalPrompt: currentQuestion.dataAiHint }];
         setResults(newResults);
 
         if (currentQuestionIndex < GAME_QUESTION_COUNT - 1) {
