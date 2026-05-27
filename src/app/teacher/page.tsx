@@ -8,12 +8,15 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { GraduationCap, ArrowLeft, Printer, Trash2, Search, ClipboardList, TrendingUp } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { SchoolPicker } from '@/components/school-picker';
+import type { SchoolMatch } from '@/lib/school-search';
 
 type PracticeAttempt = {
   id: string;
@@ -27,8 +30,11 @@ type PracticeAttempt = {
 };
 
 export default function TeacherPage() {
-  const [classCodeInput, setClassCodeInput] = useState('');
+  const [school, setSchool] = useState<SchoolMatch | null>(null);
+  const [grade, setGrade] = useState('');
+  const [classNumber, setClassNumber] = useState('');
   const [activeClassCode, setActiveClassCode] = useState<string | null>(null);
+  const [activeLabel, setActiveLabel] = useState('');
   const db = useFirestore();
   const { toast } = useToast();
 
@@ -71,8 +77,10 @@ export default function TeacherPage() {
 
   const handleClassEntry = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!classCodeInput.trim()) return;
-    setActiveClassCode(classCodeInput.trim());
+    if (!school || !grade || !classNumber) return;
+    const code = `${school.code}_${grade}-${classNumber}`;
+    setActiveClassCode(code);
+    setActiveLabel(`${school.name} ${grade}학년 ${classNumber}반`);
   };
 
   const handleDelete = async (id: string) => {
@@ -109,20 +117,49 @@ export default function TeacherPage() {
             <CardHeader className="text-center">
               <GraduationCap className="h-12 w-12 mx-auto text-primary mb-2" />
               <CardTitle className="text-3xl font-headline">교사 대시보드</CardTitle>
-              <CardDescription>학급 코드를 입력하여 학생들의 결과를 확인하세요.</CardDescription>
+              <CardDescription>학교·학년·반을 선택하여 학생 기록을 확인하세요.</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleClassEntry} className="space-y-4">
                 <div className="space-y-2">
-                  <Label>학급 코드</Label>
-                  <Input
-                    placeholder="예: 3-1"
-                    value={classCodeInput}
-                    onChange={(e) => setClassCodeInput(e.target.value)}
-                    className="h-12 text-lg"
-                  />
+                  <Label>학교</Label>
+                  <SchoolPicker value={school} onChange={setSchool} />
                 </div>
-                <Button type="submit" className="w-full font-bold h-12" size="lg">확인하기</Button>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label>학년</Label>
+                    <Select value={grade} onValueChange={setGrade}>
+                      <SelectTrigger className="h-12 text-lg">
+                        <SelectValue placeholder="학년" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {[1,2,3,4,5,6].map(g => (
+                          <SelectItem key={g} value={String(g)}>{g}학년</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>반</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={20}
+                      placeholder="반 번호"
+                      value={classNumber}
+                      onChange={e => setClassNumber(e.target.value)}
+                      className="h-12 text-lg"
+                    />
+                  </div>
+                </div>
+                <Button
+                  type="submit"
+                  className="w-full font-bold h-12"
+                  size="lg"
+                  disabled={!school || !grade || !classNumber}
+                >
+                  확인하기
+                </Button>
                 <Link href="/" className="block text-center mt-4 text-sm text-muted-foreground hover:text-primary flex items-center justify-center">
                   <ArrowLeft className="mr-2 h-4 w-4" /> 홈으로 돌아가기
                 </Link>
@@ -140,7 +177,7 @@ export default function TeacherPage() {
         <div>
           <h1 className="text-3xl font-black flex items-center gap-3 font-headline">
             <ClipboardList className="h-8 w-8 text-primary" />
-            {activeClassCode}반 결과지
+            {activeLabel} 결과지
           </h1>
           <p className="text-muted-foreground font-body">학생들의 학습 기록을 확인하세요.</p>
         </div>
