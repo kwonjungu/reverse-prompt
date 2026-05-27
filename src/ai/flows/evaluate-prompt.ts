@@ -35,7 +35,7 @@ const evaluatePromptFlow = ai.defineFlow(
 
     try {
       const response = await ai.generate({
-        model: 'googleai/gemini-1.5-flash',
+        model: 'googleai/gemini-2.5-flash',
         output: { schema: EvaluatePromptOutputSchema },
         prompt: [
           { media: { url: input.photoDataUri, contentType } },
