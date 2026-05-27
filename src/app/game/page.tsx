@@ -122,7 +122,7 @@ export default function GamePage() {
         if (!generatedImageUrl) throw new Error("Image not available.");
         const result = await evaluatePrompt({ studentPrompt, photoDataUri: generatedImageUrl });
         
-        const newResults = [...results, { ...result, questionIndex: currentQuestionIndex, studentPrompt, originalPrompt: currentQuestion.dataAiHint }];
+        const newResults = [...results, { ...result, questionIndex: currentQuestionIndex, studentPrompt, originalPrompt: buildImagePrompt(currentQuestion.dataAiHint) }];
         setResults(newResults);
 
         if (currentQuestionIndex < GAME_QUESTION_COUNT - 1) {

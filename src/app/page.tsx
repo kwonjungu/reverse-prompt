@@ -1,57 +1,79 @@
-
 'use client';
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Zap, Gamepad2, ArrowRight, Timer, BookOpen, GraduationCap, User } from 'lucide-react';
-import { useToast } from "@/hooks/use-toast";
+import { useToast } from '@/hooks/use-toast';
+import { SchoolPicker } from '@/components/school-picker';
+import type { SchoolMatch } from '@/lib/school-search';
 
 export default function Home() {
-  const [classCode, setClassCode] = useState('');
+  const [school, setSchool] = useState<SchoolMatch | null>(null);
+  const [grade, setGrade] = useState('');
+  const [classNumber, setClassNumber] = useState('');
   const [attendanceNumber, setAttendanceNumber] = useState('');
   const [isEntered, setIsEntered] = useState(false);
   const { toast } = useToast();
-  const router = useRouter();
 
   useEffect(() => {
-    const savedCode = sessionStorage.getItem('classCode');
+    const savedSchool = sessionStorage.getItem('school');
+    const savedGrade = sessionStorage.getItem('grade');
+    const savedClass = sessionStorage.getItem('classNumber');
     const savedNum = sessionStorage.getItem('attendanceNumber');
-    if (savedCode && savedNum) {
-      setClassCode(savedCode);
-      setAttendanceNumber(savedNum);
-      setIsEntered(true);
+    if (savedSchool && savedGrade && savedClass && savedNum) {
+      try {
+        setSchool(JSON.parse(savedSchool));
+        setGrade(savedGrade);
+        setClassNumber(savedClass);
+        setAttendanceNumber(savedNum);
+        setIsEntered(true);
+      } catch {
+        // ignore corrupted session
+      }
     }
   }, []);
 
   const handleEntry = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!classCode.trim() || !attendanceNumber.trim()) {
+    if (!school || !grade || !classNumber.trim() || !attendanceNumber.trim()) {
       toast({
-        variant: "destructive",
-        title: "입력 오류",
-        description: "학급 코드와 출석 번호를 모두 입력해주세요.",
+        variant: 'destructive',
+        title: '입력 오류',
+        description: '학교, 학년, 반, 번호를 모두 입력해주세요.',
       });
       return;
     }
+
+    // 학급 코드 = 학교코드_학년-반 (예: 7531234_3-2)
+    const classCode = `${school.code}_${grade}-${classNumber.trim()}`;
+
     sessionStorage.setItem('classCode', classCode);
-    sessionStorage.setItem('attendanceNumber', attendanceNumber);
+    sessionStorage.setItem('school', JSON.stringify(school));
+    sessionStorage.setItem('grade', grade);
+    sessionStorage.setItem('classNumber', classNumber.trim());
+    sessionStorage.setItem('attendanceNumber', attendanceNumber.trim());
     setIsEntered(true);
     toast({
-      title: "입장 성공!",
-      description: `${classCode}반 ${attendanceNumber}번 학생, 환영합니다!`,
+      title: '입장 성공!',
+      description: `${school.name} ${grade}학년 ${classNumber}반 ${attendanceNumber}번 학생, 환영합니다!`,
     });
   };
 
   const handleLogout = () => {
     sessionStorage.removeItem('classCode');
+    sessionStorage.removeItem('school');
+    sessionStorage.removeItem('grade');
+    sessionStorage.removeItem('classNumber');
     sessionStorage.removeItem('attendanceNumber');
     setIsEntered(false);
-    setClassCode('');
+    setSchool(null);
+    setGrade('');
+    setClassNumber('');
     setAttendanceNumber('');
   };
 
@@ -62,7 +84,7 @@ export default function Home() {
         <main className="container mx-auto max-w-md z-10">
           <div className="text-center mb-8">
             <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary via-purple-400 to-pink-500 font-headline mb-4">나는 프롬프트 마스터</h1>
-            <p className="text-muted-foreground">우리 반 코드를 입력하고 시작해요!</p>
+            <p className="text-muted-foreground">우리 학교를 찾고 입장해요!</p>
           </div>
 
           <Card className="shadow-2xl shadow-primary/10 rounded-2xl bg-card/80 backdrop-blur-sm border-2 border-primary/20">
@@ -72,26 +94,53 @@ export default function Home() {
             <CardContent>
               <form onSubmit={handleEntry} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="classCode">학급 코드</Label>
-                  <Input 
-                    id="classCode" 
-                    placeholder="예: 3-1" 
-                    value={classCode}
-                    onChange={(e) => setClassCode(e.target.value)}
-                    className="bg-input/50"
-                  />
+                  <Label htmlFor="school">학교</Label>
+                  <SchoolPicker value={school} onChange={setSchool} />
                 </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="grade">학년</Label>
+                    <Select value={grade} onValueChange={setGrade}>
+                      <SelectTrigger id="grade" className="h-12 text-lg">
+                        <SelectValue placeholder="학년" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {[1, 2, 3, 4, 5, 6].map((g) => (
+                          <SelectItem key={g} value={String(g)}>
+                            {g}학년
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="classNumber">반</Label>
+                    <Input
+                      id="classNumber"
+                      type="number"
+                      min={1}
+                      placeholder="반"
+                      value={classNumber}
+                      onChange={(e) => setClassNumber(e.target.value)}
+                      className="h-12 text-lg"
+                    />
+                  </div>
+                </div>
+
                 <div className="space-y-2">
                   <Label htmlFor="attendanceNumber">출석 번호</Label>
-                  <Input 
-                    id="attendanceNumber" 
+                  <Input
+                    id="attendanceNumber"
                     type="number"
-                    placeholder="번호만 입력" 
+                    min={1}
+                    placeholder="번호만 입력"
                     value={attendanceNumber}
                     onChange={(e) => setAttendanceNumber(e.target.value)}
-                    className="bg-input/50"
+                    className="h-12 text-lg"
                   />
                 </div>
+
                 <Button type="submit" className="w-full font-bold" size="lg">
                   입장하기 <ArrowRight className="ml-2" />
                 </Button>
@@ -115,15 +164,19 @@ export default function Home() {
     <div className="min-h-screen bg-background font-sans flex flex-col items-center justify-center p-4">
       <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-primary/20 via-transparent to-primary/20 opacity-30 z-0"></div>
       <main className="container mx-auto text-center z-10">
-        <header className="fixed top-4 right-4 flex items-center gap-4 bg-card/50 p-2 px-4 rounded-full border border-border">
+        <header className="fixed top-4 right-4 flex items-center gap-3 bg-card/80 backdrop-blur-sm p-2 px-4 rounded-full border border-border shadow-lg">
           <div className="flex items-center gap-2 text-sm font-medium">
-            <User className="h-4 w-4 text-primary" />
-            <span>{classCode}반 {attendanceNumber}번</span>
+            <User className="h-4 w-4 text-primary shrink-0" />
+            <span className="max-w-[260px] truncate">
+              {school?.name} {grade}-{classNumber} {attendanceNumber}번
+            </span>
           </div>
-          <Button variant="ghost" size="sm" onClick={handleLogout} className="text-xs">로그아웃</Button>
+          <Button variant="ghost" size="sm" onClick={handleLogout} className="text-xs">
+            로그아웃
+          </Button>
         </header>
 
-        <div className="mb-12">
+        <div className="mb-12 mt-16">
           <h1 className="text-5xl md:text-7xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary via-purple-400 to-pink-500 font-headline mb-4">나는 프롬프트 마스터</h1>
           <p className="mt-3 text-lg text-muted-foreground max-w-2xl mx-auto">AI 프롬프트 엔지니어링 챌린지! 모드를 선택하고 실력을 뽐내보세요.</p>
         </div>

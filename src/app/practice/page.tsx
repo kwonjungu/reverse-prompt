@@ -8,6 +8,7 @@ import { evaluatePrompt, type EvaluatePromptOutput } from '@/ai/flows/evaluate-p
 import { generateImage } from '@/ai/flows/generate-image';
 import { useFirestore } from '@/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { buildImagePrompt } from '@/lib/image-prompt';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -176,7 +177,7 @@ export default function PracticePage() {
           addDoc(collection(db, 'classes', classCode, 'practice_attempts'), {
             attendanceNumber,
             questionIndex: currentQuestionIndex,
-            originalPrompt: currentQuestion.dataAiHint,
+            originalPrompt: buildImagePrompt(currentQuestion.dataAiHint),
             studentPrompt,
             score: result.score,
             feedback: result.feedback,

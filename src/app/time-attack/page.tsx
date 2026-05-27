@@ -127,7 +127,7 @@ export default function TimeAttackPage() {
         result = { score: 0, feedback: 'AI 평가에 실패했습니다.' };
       }
       
-      const newResults = [...results, { ...result, questionIndex: currentQuestionIndex, studentPrompt: promptToEvaluate, originalPrompt: questions[currentQuestionIndex]?.dataAiHint ?? '' }];
+      const newResults = [...results, { ...result, questionIndex: currentQuestionIndex, studentPrompt: promptToEvaluate, originalPrompt: buildImagePrompt(questions[currentQuestionIndex]?.dataAiHint ?? '') }];
       setResults(newResults);
 
       if (currentQuestionIndex < GAME_QUESTION_COUNT - 1) {

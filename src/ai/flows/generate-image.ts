@@ -10,6 +10,7 @@
 
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
+import {buildImagePrompt} from '@/lib/image-prompt';
 
 const GenerateImageInputSchema = z.string().describe('The text prompt for image generation.');
 export type GenerateImageInput = z.infer<typeof GenerateImageInputSchema>;
@@ -33,7 +34,7 @@ const generateImageFlow = ai.defineFlow(
       const { media } = await ai.generate({
         model: 'googleai/gemini-2.5-flash-image',
         prompt: [
-          { text: `Generate a high-quality, detailed image of: ${promptText}` }
+          { text: buildImagePrompt(promptText) }
         ],
         config: {
           responseModalities: ['TEXT', 'IMAGE'],
