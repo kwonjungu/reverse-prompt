@@ -9,15 +9,15 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Home, ArrowRight, Wand2, RefreshCw, BookOpen, Star, Trophy, Printer, Award, Rocket, MessageSquare } from 'lucide-react';
+import { Home, ArrowRight, Wand2, RefreshCw, BookOpen, Star, Trophy, Printer, Award, Rocket, MessageSquare, Users } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from '@/components/ui/badge';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { useFirestore } from '@/firebase';
+import { collection, addDoc, serverTimestamp, query, orderBy, limit, type Timestamp } from 'firebase/firestore';
+import { useFirestore, useCollection } from '@/firebase';
 import { buildImagePrompt } from '@/lib/image-prompt';
 import { getAxisBadge } from '@/lib/badges';
 
@@ -93,6 +93,14 @@ const COMBO_SCORE = 80;
 const FLASH_SECONDS = 10;
 
 type GameState = 'nickname' | 'playing' | 'results';
+// 리더보드용 submission 문서 (읽기 전용, 필요한 필드만)
+type Submission = {
+  id: string;
+  nickname?: string;
+  mode?: string;
+  averageScore?: number;
+  createdAt?: Timestamp | null;
+};
 type Result = EvaluatePromptOutput & { questionIndex: number; questionLevel: number; koreanTitle: string; studentPrompt: string; originalPrompt: string; isFlash: boolean; };
 
 // results 배열에서 콤보를 파생.
@@ -130,7 +138,24 @@ export default function GamePage() {
   // 플래시 문제에서 그림을 보여줄 남은 시간(초). null이면 카운트다운 없음.
   const [flashRemaining, setFlashRemaining] = useState<number | null>(null);
 
+  // 리더보드: results 화면 진입 후 sessionStorage의 classCode로 조회
+  const [classCode, setClassCode] = useState<string | null>(null);
+
   const { toast } = useToast();
+
+  // 복합 인덱스(where+orderBy)를 피하려고 orderBy+limit만 사용하고
+  // 클라이언트에서 mode/오늘/정렬을 필터링. 결과 화면에서만 쿼리 활성화.
+  const leaderboardQuery = useMemo(() => {
+    if (!db || !classCode || gameState !== 'results') return null;
+    return query(
+      collection(db, 'classes', classCode, 'submissions'),
+      orderBy('createdAt', 'desc'),
+      limit(50)
+    );
+  }, [db, classCode, gameState]);
+
+  const { data: leaderboardRaw } = useCollection(leaderboardQuery);
+  const leaderboardData = (leaderboardRaw ?? []) as Submission[];
 
   const isPending = isEvaluating;
   const currentQuestion = useMemo(() => questions[currentQuestionIndex], [questions, currentQuestionIndex]);
@@ -149,6 +174,8 @@ export default function GamePage() {
     setCurrentDate(new Date().toLocaleDateString('ko-KR'));
     // 5문제 중 랜덤 1개를 플래시 라운드로 지정
     setFlashQuestionIndex(Math.floor(Math.random() * GAME_QUESTION_COUNT));
+    // 리더보드 조회용 classCode (없으면 null → 카드 숨김)
+    setClassCode(sessionStorage.getItem('classCode'));
   }, []);
 
   useEffect(() => {
@@ -322,6 +349,26 @@ export default function GamePage() {
 
   if (gameState === 'results') {
     const averageScore = results.reduce((acc, r) => acc + r.score, 0) / results.length;
+
+    // 오늘 자정(로컬) 이후 게임 모드 기록만 추려 점수 내림차순 TOP 5
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const topFive = leaderboardData
+      .filter((s) => s.mode === 'game' && typeof s.averageScore === 'number')
+      .filter((s) => {
+        const created = s.createdAt?.toDate?.();
+        return created ? created >= todayStart : false;
+      })
+      .sort((a, b) => (b.averageScore ?? 0) - (a.averageScore ?? 0))
+      .slice(0, 5);
+
+    // 내 세션 강조: 닉네임+반올림 점수 일치(1회만). 여러 줄 중복 방지.
+    const myRounded = Math.round(averageScore);
+    let myHighlighted = false;
+
+    const rankBadge = (rank: number) =>
+      rank === 0 ? '🥇' : rank === 1 ? '🥈' : rank === 2 ? '🥉' : `${rank + 1}`;
+
     return (
         <div className="min-h-screen bg-background font-sans">
             <header className="p-4 flex justify-end">
@@ -346,6 +393,46 @@ export default function GamePage() {
                               </p>
                             )}
                         </div>
+                        {topFive.length > 0 && (
+                          <div>
+                            <h3 className="text-2xl font-headline mb-4 text-center flex items-center justify-center gap-2">
+                              <Users className="h-6 w-6 text-primary" />
+                              우리 반 오늘의 TOP 5
+                            </h3>
+                            <Card className="overflow-hidden bg-muted/30">
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead className="w-[60px] text-center">순위</TableHead>
+                                    <TableHead>닉네임</TableHead>
+                                    <TableHead className="text-right">점수</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {topFive.map((s, rank) => {
+                                    const rounded = Math.round(s.averageScore ?? 0);
+                                    // 내 세션과 처음 일치하는 줄 1개만 강조
+                                    const isMine =
+                                      !myHighlighted &&
+                                      s.nickname === nickname &&
+                                      rounded === myRounded;
+                                    if (isMine) myHighlighted = true;
+                                    return (
+                                      <TableRow key={s.id} className={isMine ? 'bg-primary/10 font-bold' : ''}>
+                                        <TableCell className="text-center text-lg">{rankBadge(rank)}</TableCell>
+                                        <TableCell className="whitespace-nowrap">
+                                          {s.nickname || '이름 없음'}
+                                          {isMine && <span className="ml-2 text-xs text-primary">(나)</span>}
+                                        </TableCell>
+                                        <TableCell className="text-right font-bold text-primary text-lg">{rounded}점</TableCell>
+                                      </TableRow>
+                                    );
+                                  })}
+                                </TableBody>
+                              </Table>
+                            </Card>
+                          </div>
+                        )}
                         <div>
                           <h3 className="text-2xl font-headline mb-4 text-center">상세 결과</h3>
                            <Card className="overflow-hidden bg-muted/30">
