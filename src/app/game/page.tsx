@@ -15,9 +15,11 @@ import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from '@/components/ui/badge';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { useFirestore } from '@/firebase';
 import { buildImagePrompt } from '@/lib/image-prompt';
+import { getAxisBadge } from '@/lib/badges';
 
 const allQuestions = [
   {
@@ -179,10 +181,16 @@ export default function GamePage() {
 
     const averageScore = finalResults.reduce((acc, r) => acc + r.score, 0) / finalResults.length;
 
+    // Firestore는 배열 원소의 undefined 필드도 거부 → strongestAxis는 없으면 null로 정규화
+    const sanitizedResults = finalResults.map((r) => ({
+      ...r,
+      strongestAxis: r.strongestAxis ?? null,
+    }));
+
     addDoc(collection(db, 'classes', classCode, 'submissions'), {
       attendanceNumber,
       nickname,
-      results: finalResults,
+      results: sanitizedResults,
       averageScore,
       mode: 'game',
       createdAt: serverTimestamp()
@@ -280,6 +288,7 @@ export default function GamePage() {
                                   <TableRow>
                                     <TableHead className="w-[50px]">문제</TableHead>
                                     <TableHead>제출한 프롬프트</TableHead>
+                                    <TableHead>칭호</TableHead>
                                     <TableHead className="text-right">점수</TableHead>
                                   </TableRow>
                                 </TableHeader>
@@ -288,6 +297,18 @@ export default function GamePage() {
                                     <TableRow key={index}>
                                       <TableCell className="font-medium">{index + 1}</TableCell>
                                       <TableCell className="font-body text-muted-foreground">{result.studentPrompt}</TableCell>
+                                      <TableCell>
+                                        {(() => {
+                                          const badge = getAxisBadge(result.strongestAxis);
+                                          return badge ? (
+                                            <Badge variant="secondary" className="whitespace-nowrap">
+                                              {badge.emoji} {badge.name}
+                                            </Badge>
+                                          ) : (
+                                            <span className="text-muted-foreground text-xs">-</span>
+                                          );
+                                        })()}
+                                      </TableCell>
                                       <TableCell className="text-right font-bold text-primary text-lg">{result.score}</TableCell>
                                     </TableRow>
                                   ))}

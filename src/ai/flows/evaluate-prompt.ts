@@ -26,6 +26,10 @@ export type EvaluatePromptInput = z.infer<typeof EvaluatePromptInputSchema>;
 const EvaluatePromptOutputSchema = z.object({
   score: z.number().describe('점수 0~100'),
   feedback: z.string().describe('칭찬 1줄 + 개선 1줄'),
+  strongestAxis: z
+    .enum(['대상', '구체성', '맥락'])
+    .optional()
+    .describe('학생이 세 채점 축 중 가장 잘한 축 (대상/명칭, 시각적 구체성, 맥락·분위기)'),
 });
 export type EvaluatePromptOutput = z.infer<typeof EvaluatePromptOutputSchema>;
 
@@ -121,7 +125,8 @@ const evaluatePromptFlow = ai.defineFlow(
         Math.abs(c.score - score) < Math.abs(p.score - score) ? c : p
       );
 
-      return { score, feedback: best.feedback };
+      // strongestAxis는 optional — 모델이 값을 안 주면 undefined로 반환 (스키마상 허용)
+      return { score, feedback: best.feedback, strongestAxis: best.strongestAxis };
     } catch (error: any) {
       const msg = error?.message ?? String(error);
       console.error('[evaluatePromptFlow] 실패:', msg);

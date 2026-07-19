@@ -179,10 +179,16 @@ export default function TimeAttackPage() {
 
     const averageScore = finalResults.reduce((acc, r) => acc + r.score, 0) / finalResults.length;
 
+    // Firestore는 배열 원소의 undefined 필드를 거부 → strongestAxis는 없으면 null로 정규화
+    const sanitizedResults = finalResults.map((r) => ({
+      ...r,
+      strongestAxis: r.strongestAxis ?? null,
+    }));
+
     addDoc(collection(db, 'classes', classCode, 'submissions'), {
       attendanceNumber,
       nickname,
-      results: finalResults,
+      results: sanitizedResults,
       averageScore,
       passScore: PASS_SCORE,
       passed: Math.round(averageScore) >= PASS_SCORE,

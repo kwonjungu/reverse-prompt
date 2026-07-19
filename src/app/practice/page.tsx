@@ -19,6 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { getAxisBadge } from '@/lib/badges';
 
 // 문제 목록은 src/lib/questions.ts가 단일 진실 (admin 감수 페이지와 공유)
 const questions = PRACTICE_QUESTIONS;
@@ -85,6 +86,8 @@ export default function PracticePage() {
             studentPrompt,
             score: result.score,
             feedback: result.feedback,
+            // Firestore는 undefined 필드를 거부하므로 값이 있을 때만 추가
+            ...(result.strongestAxis ? { strongestAxis: result.strongestAxis } : {}),
             createdAt: serverTimestamp(),
           }).catch((err) => console.error('연습 기록 저장 실패:', err));
         }
@@ -225,6 +228,14 @@ export default function PracticePage() {
                   </div>
                   <div className="flex-1">
                     <h4 className="font-semibold text-lg mb-2 flex items-center gap-2"><Star className="text-yellow-400" fill="currentColor" />칭찬 및 개선점</h4>
+                    {(() => {
+                      const badge = getAxisBadge(evaluation.strongestAxis);
+                      return badge ? (
+                        <Badge variant="secondary" className="mb-2 text-sm px-3 py-1">
+                          {badge.emoji} 오늘의 칭호: {badge.name}
+                        </Badge>
+                      ) : null;
+                    })()}
                     <p className="mt-2 text-muted-foreground whitespace-pre-wrap font-body text-base leading-loose">{evaluation.feedback}</p>
                   </div>
                 </CardContent>
