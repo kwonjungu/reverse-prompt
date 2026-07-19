@@ -16,10 +16,11 @@ import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from '@/components/ui/badge';
-import { collection, addDoc, serverTimestamp, query, orderBy, limit, type Timestamp } from 'firebase/firestore';
-import { useFirestore, useCollection } from '@/firebase';
+import { collection, addDoc, doc, serverTimestamp, setDoc, increment, query, orderBy, limit, type Timestamp } from 'firebase/firestore';
+import { useFirestore, useCollection, useDoc } from '@/firebase';
 import { buildImagePrompt } from '@/lib/image-prompt';
 import { getAxisBadge } from '@/lib/badges';
+import { sessionXp, getTitle, getNextLevelInfo } from '@/lib/xp';
 
 const allQuestions = [
   {
@@ -140,8 +141,21 @@ export default function GamePage() {
 
   // 리더보드: results 화면 진입 후 sessionStorage의 classCode로 조회
   const [classCode, setClassCode] = useState<string | null>(null);
+  const [attendanceNumber, setAttendanceNumber] = useState<string | null>(null);
+  // 이번 세션에서 획득한 XP (결과 화면 표시용). saveToFirestore에서 확정.
+  const [earnedXp, setEarnedXp] = useState(0);
 
   const { toast } = useToast();
+
+  // 학생 XP 문서 실시간 구독 (없으면 null → 구독 안 함). 훅은 조기 return 위에서 호출.
+  const studentDocRef = useMemo(() => {
+    if (!db || !classCode || !attendanceNumber) return null;
+    return doc(db, 'classes', classCode, 'students', attendanceNumber);
+  }, [db, classCode, attendanceNumber]);
+  const { data: studentData } = useDoc<{ xp?: number }>(studentDocRef);
+  const currentXp = studentData?.xp ?? 0;
+  const currentTitle = getTitle(currentXp);
+  const nextLevel = getNextLevelInfo(currentXp);
 
   // 복합 인덱스(where+orderBy)를 피하려고 orderBy+limit만 사용하고
   // 클라이언트에서 mode/오늘/정렬을 필터링. 결과 화면에서만 쿼리 활성화.
@@ -176,6 +190,7 @@ export default function GamePage() {
     setFlashQuestionIndex(Math.floor(Math.random() * GAME_QUESTION_COUNT));
     // 리더보드 조회용 classCode (없으면 null → 카드 숨김)
     setClassCode(sessionStorage.getItem('classCode'));
+    setAttendanceNumber(sessionStorage.getItem('attendanceNumber'));
   }, []);
 
   useEffect(() => {
@@ -265,6 +280,17 @@ export default function GamePage() {
     if (!db || !classCode || !attendanceNumber) return;
 
     const averageScore = finalResults.reduce((acc, r) => acc + r.score, 0) / finalResults.length;
+
+    // 세션 총 XP = 문제당 score 합산. 결과 화면 "+N XP" 표시용으로 state에도 기록.
+    const totalXp = sessionXp(finalResults.map((r) => r.score));
+    setEarnedXp(totalXp);
+    if (totalXp > 0) {
+      setDoc(
+        doc(db, 'classes', classCode, 'students', attendanceNumber),
+        { xp: increment(totalXp), updatedAt: serverTimestamp() },
+        { merge: true }
+      ).catch((err) => console.error('XP 저장 실패:', err));
+    }
 
     // Firestore는 배열 원소의 undefined 필드도 거부 → strongestAxis는 없으면 null로 정규화
     const sanitizedResults = finalResults.map((r) => ({
@@ -393,6 +419,26 @@ export default function GamePage() {
                               </p>
                             )}
                         </div>
+                        {studentDocRef && (
+                          <div className="bg-gradient-to-br from-primary/10 to-accent/20 p-6 rounded-xl border-2 border-primary/20 text-center space-y-3">
+                            <p className="text-2xl font-bold text-primary animate-in fade-in zoom-in">
+                              +{earnedXp.toLocaleString()} XP 획득!
+                            </p>
+                            <p className="text-lg font-semibold">
+                              {currentTitle.name} · 총 {currentXp.toLocaleString()} XP
+                            </p>
+                            {nextLevel ? (
+                              <div className="max-w-md mx-auto space-y-1">
+                                <Progress value={nextLevel.progressPercent} className="h-3" />
+                                <p className="text-sm text-muted-foreground">
+                                  다음 칭호 <b>{nextLevel.nextTitle}</b>까지 {nextLevel.remaining.toLocaleString()} XP
+                                </p>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">최고 칭호에 도달했어요! 🎉</p>
+                            )}
+                          </div>
+                        )}
                         {topFive.length > 0 && (
                           <div>
                             <h3 className="text-2xl font-headline mb-4 text-center flex items-center justify-center gap-2">
