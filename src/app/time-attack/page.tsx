@@ -4,7 +4,7 @@ import { useState, useTransition, useMemo, useEffect, useRef, useCallback } from
 import Image from 'next/image';
 import Link from 'next/link';
 import { evaluatePrompt, type EvaluatePromptOutput } from '@/ai/flows/evaluate-prompt';
-import { generateImage } from '@/ai/flows/generate-image';
+import { buildImagePrompt } from '@/lib/image-prompt';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -50,9 +50,31 @@ const allQuestions = [
     dataAiHint: 'a robot cat singing on a stage, colorful spotlights, futuristic audience',
     rubric: '공연 실황 중계를 해봐요!\n\n로봇 고양이 모습, 무대 조명 색깔, 관중석 분위기, 전체 에너지... 생생하게 전달해봐요!',
   },
-];
+  {
+    level: 12,
+    koreanTitle: '새벽 언덕 위의 열기구 축제',
+    dataAiHint: 'a hot air balloon festival over rolling green hills at sunrise, many colorful striped balloons floating in an orange and pink sky',
+    rubric: '축제 홍보 문구를 빠르게 써봐요!\n\n열기구 개수와 색깔, 언덕, 새벽 하늘 색... 시간이 없어요!',
+  },
+  {
+    level: 11,
+    koreanTitle: '따뜻한 빵집 안 풍경',
+    dataAiHint: 'a cozy bakery interior with fresh breads and cakes displayed on wooden shelves, warm yellow lighting, a glass display counter',
+    rubric: '빵집 소개글을 번개처럼 써봐요!\n\n어떤 빵들이 보이는지, 선반과 진열대, 조명 분위기... 침이 고이게!',
+  },
+  {
+    level: 14,
+    koreanTitle: '폭풍우 바다의 해적선',
+    dataAiHint: 'a pirate ship with black sails on stormy ocean waves, dark clouds and lightning in the background, dramatic lighting',
+    rubric: '모험 소설의 클라이맥스를 써봐요!\n\n배와 돛 색깔, 파도, 하늘과 번개, 긴박한 분위기... 빠르고 생생하게!',
+  },
+  // 이미지는 사전 생성된 정적 파일 (scripts/generate-question-images.mjs).
+  // 3번(유니콘)은 게임 모드와 같은 힌트라 game-05 파일 공유.
+].map((q, i) => ({ ...q, imageUrl: `/questions/${['ta-01', 'ta-02', 'game-05', 'ta-04', 'ta-05', 'ta-06', 'ta-07', 'ta-08'][i]}.jpg` }));
 
 const GAME_QUESTION_COUNT = 5;
+// 기준 점수 — 평균이 이 점수 이상이어야 통과
+const PASS_SCORE = 80;
 
 type GameState = 'setup' | 'playing' | 'results';
 type Result = EvaluatePromptOutput & { questionIndex: number; questionLevel: number; koreanTitle: string; studentPrompt: string; originalPrompt: string; };
@@ -66,14 +88,12 @@ export default function TimeAttackPage() {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [studentPrompt, setStudentPrompt] = useState('');
   const [results, setResults] = useState<Result[]>([]);
-  const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
-  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [isEvaluating, startEvaluationTransition] = useTransition();
   const [timeLeft, setTimeLeft] = useState(timeLimit);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   const { toast } = useToast();
-  const isPending = isGeneratingImage || isEvaluating;
+  const isPending = isEvaluating;
   const currentQuestion = useMemo(() => questions[currentQuestionIndex], [questions, currentQuestionIndex]);
 
   useEffect(() => {
@@ -96,9 +116,7 @@ export default function TimeAttackPage() {
   }, [gameState, isPending, timeLimit]);
 
   useEffect(() => {
-    if (gameState === 'playing') {
-      generateNewImage();
-    }
+    if (gameState === 'playing') setStudentPrompt('');
   }, [gameState, currentQuestionIndex]);
 
   useEffect(() => {
@@ -106,20 +124,17 @@ export default function TimeAttackPage() {
     setQuestions(shuffled.slice(0, GAME_QUESTION_COUNT));
   }, []);
 
-  const generateNewImage = async () => {
-    if (!currentQuestion) return;
-    setIsGeneratingImage(true);
-    setGeneratedImageUrl(null);
-    setStudentPrompt('');
-    try {
-      const imageUrl = await generateImage(currentQuestion.dataAiHint);
-      setGeneratedImageUrl(imageUrl);
-    } catch (error) {
-      toast({ variant: "destructive", title: "이미지 생성 실패" });
-      setGameState('setup');
-    } finally {
-      setIsGeneratingImage(false);
-    }
+  const toDataURL = async (url: string): Promise<string> => {
+    if (url.startsWith('data:')) return url;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch image: ${res.statusText}`);
+    const blob = await res.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
   };
 
   const handleManualSubmit = useCallback(async (e?: React.FormEvent) => {
@@ -131,8 +146,8 @@ export default function TimeAttackPage() {
       let result: EvaluatePromptOutput;
 
       try {
-        if (!generatedImageUrl) throw new Error("No image");
-        result = await evaluatePrompt({ studentPrompt: promptToEvaluate, photoDataUri: generatedImageUrl, questionLevel: questions[currentQuestionIndex]?.level });
+        const photoDataUri = await toDataURL(questions[currentQuestionIndex].imageUrl);
+        result = await evaluatePrompt({ studentPrompt: promptToEvaluate, photoDataUri, questionLevel: questions[currentQuestionIndex]?.level });
       } catch (error) {
         result = { score: 0, feedback: 'AI 평가에 실패했습니다.' };
       }
@@ -155,7 +170,7 @@ export default function TimeAttackPage() {
         setGameState('results');
       }
     });
-  }, [currentQuestionIndex, studentPrompt, generatedImageUrl, results]);
+  }, [currentQuestionIndex, studentPrompt, results]);
 
   const saveToFirestore = (finalResults: Result[]) => {
     const classCode = sessionStorage.getItem('classCode');
@@ -169,9 +184,20 @@ export default function TimeAttackPage() {
       nickname,
       results: finalResults,
       averageScore,
+      passScore: PASS_SCORE,
+      passed: Math.round(averageScore) >= PASS_SCORE,
       mode: 'time-attack',
       createdAt: serverTimestamp()
     });
+  };
+
+  const restartChallenge = () => {
+    const shuffled = [...allQuestions].sort(() => 0.5 - Math.random());
+    setQuestions(shuffled.slice(0, GAME_QUESTION_COUNT));
+    setResults([]);
+    setCurrentQuestionIndex(0);
+    setStudentPrompt('');
+    setGameState('playing');
   };
 
   if (gameState === 'setup') {
@@ -181,7 +207,7 @@ export default function TimeAttackPage() {
           <CardHeader>
             <Zap className="h-12 w-12 mx-auto text-primary mb-2" />
             <CardTitle className="text-3xl font-headline text-center">시간 제한 모드</CardTitle>
-            <CardDescription className="text-center">더 빠르게, 더 정확하게 설명해보세요!</CardDescription>
+            <CardDescription className="text-center">평균 {PASS_SCORE}점을 넘어야 통과! 더 빠르게, 더 정확하게 설명해보세요!</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={(e) => { e.preventDefault(); if (nickname.trim()) setGameState('playing'); }} className="space-y-6">
@@ -207,19 +233,35 @@ export default function TimeAttackPage() {
 
   if (gameState === 'results') {
     const averageScore = results.reduce((acc, r) => acc + r.score, 0) / results.length;
+    const passed = Math.round(averageScore) >= PASS_SCORE;
     return (
         <div className="min-h-screen bg-background p-4 flex flex-col items-center justify-center">
-            <Card className="max-w-4xl w-full p-8 text-center space-y-6 shadow-2xl border-2 border-primary/20">
-                <Trophy className="h-20 w-20 mx-auto text-yellow-400" />
-                <h1 className="text-5xl font-bold font-headline">챌린지 완료!</h1>
-                <div className="bg-muted/50 p-10 rounded-2xl border-2 border-primary/10">
-                    <p className="text-muted-foreground text-xl">최종 평균 점수</p>
-                    <p className="text-8xl font-black text-primary mt-2">{Math.round(averageScore)}점</p>
+            <Card className={`max-w-4xl w-full p-8 text-center space-y-6 shadow-2xl border-2 ${passed ? 'border-primary/20' : 'border-destructive/30'}`}>
+                {passed ? (
+                  <Trophy className="h-20 w-20 mx-auto text-yellow-400" />
+                ) : (
+                  <Zap className="h-20 w-20 mx-auto text-destructive" />
+                )}
+                <h1 className="text-5xl font-bold font-headline">{passed ? '기준 통과!' : '아쉬워요!'}</h1>
+                <div className={`p-10 rounded-2xl border-2 ${passed ? 'bg-muted/50 border-primary/10' : 'bg-destructive/5 border-destructive/10'}`}>
+                    <p className="text-muted-foreground text-xl">최종 평균 점수 (기준 {PASS_SCORE}점)</p>
+                    <p className={`text-8xl font-black mt-2 ${passed ? 'text-primary' : 'text-destructive'}`}>{Math.round(averageScore)}점</p>
                 </div>
-                <p className="text-xl">훌륭합니다! 결과가 선생님께 자동으로 전송되었습니다.</p>
-                <Link href="/" passHref className="w-full">
-                    <Button size="lg" className="w-full h-16 text-xl font-bold">홈으로 돌아가기</Button>
-                </Link>
+                <p className="text-xl">
+                  {passed
+                    ? `기준 점수 ${PASS_SCORE}점을 넘었어요! 결과가 선생님께 자동으로 전송되었습니다.`
+                    : `기준 점수 ${PASS_SCORE}점에 조금 못 미쳤어요. 다시 도전해봐요! (결과는 선생님께 전송되었습니다)`}
+                </p>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  {!passed && (
+                    <Button size="lg" className="w-full h-16 text-xl font-bold" onClick={restartChallenge}>
+                      <RefreshCw className="mr-2 h-6 w-6" /> 다시 도전하기
+                    </Button>
+                  )}
+                  <Link href="/" passHref className="w-full">
+                      <Button size="lg" variant={passed ? 'default' : 'outline'} className="w-full h-16 text-xl font-bold">홈으로 돌아가기</Button>
+                  </Link>
+                </div>
             </Card>
         </div>
     );
@@ -232,17 +274,17 @@ export default function TimeAttackPage() {
                 <Timer className="h-8 w-8 text-primary" />
                 <span className={timeLeft <= 5 ? "text-destructive animate-pulse" : "text-primary"}>{timeLeft}초</span>
             </div>
-            <h2 className="font-bold text-lg">{nickname}님 ({currentQuestionIndex + 1}/{GAME_QUESTION_COUNT})</h2>
+            <h2 className="font-bold text-lg">{nickname}님 ({currentQuestionIndex + 1}/{GAME_QUESTION_COUNT}) · 목표 {PASS_SCORE}점</h2>
        </header>
       <main className="container mx-auto p-4 max-w-6xl mt-4">
         <Card className="grid md:grid-cols-2 gap-0 overflow-hidden rounded-2xl border-2 border-primary/20 bg-card/80 backdrop-blur-sm">
             <div className="relative aspect-square md:aspect-auto bg-black/10">
-                {isGeneratingImage || isEvaluating ? (
+                {isEvaluating ? (
                     <div className="absolute inset-0 flex items-center justify-center bg-muted animate-pulse">
                         <RefreshCw className="h-12 w-12 animate-spin text-primary" />
                     </div>
-                ) : generatedImageUrl && (
-                    <Image src={generatedImageUrl} alt="Target" fill className="object-contain" priority />
+                ) : (
+                    <Image src={currentQuestion.imageUrl} alt="평가 이미지" fill className="object-contain" priority />
                 )}
             </div>
             <div className="p-8 space-y-6 flex flex-col">

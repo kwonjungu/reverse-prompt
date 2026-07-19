@@ -4,7 +4,6 @@ import { useState, useTransition, useMemo, useEffect, useRef } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { evaluatePrompt, type EvaluatePromptOutput } from '@/ai/flows/evaluate-prompt';
-import { generateImage } from '@/ai/flows/generate-image';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -51,7 +50,39 @@ const allQuestions = [
     dataAiHint: 'a glowing magical unicorn running through a misty lavender forest at night',
     rubric: '마법 세계를 탐험한 모험가의 일지를 써봐요!\n\n유니콘 색깔과 특징, 뿔의 모습, 숲의 색깔과 안개, 밤하늘, 전체 분위기... 읽는 사람이 그 자리에 있는 것처럼 써봐요.',
   },
-];
+  {
+    level: 10,
+    koreanTitle: '비 오는 창가의 주황 고양이',
+    dataAiHint: 'an orange tabby cat sitting on a wooden windowsill watching rain, raindrops on the window glass, gray sky outside, warm cozy room light inside',
+    rubric: '창가의 고양이를 그림일기로 남겨봐요!\n\n고양이 색깔과 자세, 창밖 날씨, 유리창의 빗방울, 방 안의 분위기... 조용한 순간을 생생하게 담아봐요.',
+  },
+  {
+    level: 11,
+    koreanTitle: '무지개 아래 초원의 오두막',
+    dataAiHint: 'a small wooden cottage with a red roof in a green meadow under a bright rainbow, colorful wildflowers in the foreground, blue sky with fluffy white clouds',
+    rubric: '동화 나라 부동산 광고를 써봐요!\n\n오두막의 색깔과 지붕, 무지개, 꽃밭, 하늘... 누구나 살고 싶어지게 소개해봐요!',
+  },
+  {
+    level: 12,
+    koreanTitle: '우주선 안의 우주복 강아지',
+    dataAiHint: 'a cute brown puppy wearing a small white astronaut helmet floating inside a spaceship cabin, a round window behind showing stars and space',
+    rubric: '우주 뉴스 특보를 전해봐요!\n\n강아지의 모습과 쓰고 있는 것, 떠 있는 자세, 창밖 풍경, 선실 안... 놀라운 장면을 보도해봐요!',
+  },
+  {
+    level: 12,
+    koreanTitle: '케이크로 만든 동화 속 성',
+    dataAiHint: 'a fairy tale castle made of pink and white layered birthday cake, lit candles as towers, a chocolate gate, candy trees around, soft pastel sky',
+    rubric: '과자 왕국 여행 안내서를 써봐요!\n\n성이 무엇으로 만들어졌는지, 탑과 문, 주변 나무들, 하늘 색깔... 달콤하게 묘사해봐요!',
+  },
+  {
+    level: 13,
+    koreanTitle: '얼음 호수에서 스케이트 타는 펭귄',
+    dataAiHint: 'a penguin wearing a red knitted scarf ice skating on a frozen lake, snowy pine trees around the lake, soft winter afternoon sunlight',
+    rubric: '겨울 스포츠 중계를 해봐요!\n\n펭귄이 입은 것, 스케이트 타는 모습, 호수와 주변 나무, 겨울 햇살... 신나게 중계해봐요!',
+  },
+  // 이미지는 사전 생성된 정적 파일 (scripts/generate-question-images.mjs).
+  // dataAiHint 변경 시 스크립트로 재생성할 것.
+].map((q, i) => ({ ...q, imageUrl: `/questions/game-${String(i + 1).padStart(2, '0')}.jpg` }));
 
 const GAME_QUESTION_COUNT = 5;
 
@@ -66,16 +97,13 @@ export default function GamePage() {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [studentPrompt, setStudentPrompt] = useState('');
   const [results, setResults] = useState<Result[]>([]);
-  const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
-  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-  const [imageGenerationError, setImageGenerationError] = useState(false);
   const [isEvaluating, startEvaluationTransition] = useTransition();
   const certificateRef = useRef<HTMLDivElement>(null);
   const [currentDate, setCurrentDate] = useState('');
 
   const { toast } = useToast();
 
-  const isPending = isGeneratingImage || isEvaluating;
+  const isPending = isEvaluating;
   const currentQuestion = useMemo(() => questions[currentQuestionIndex], [questions, currentQuestionIndex]);
 
   useEffect(() => {
@@ -85,31 +113,20 @@ export default function GamePage() {
   }, []);
 
   useEffect(() => {
-    if (gameState === 'playing') {
-      generateNewImage();
-    }
+    if (gameState === 'playing') setStudentPrompt('');
   }, [gameState, currentQuestionIndex]);
 
-  const generateNewImage = async () => {
-    if (!currentQuestion) return;
-    setIsGeneratingImage(true);
-    setImageGenerationError(false);
-    setGeneratedImageUrl(null);
-    setStudentPrompt('');
-    try {
-      const imageUrl = await generateImage(currentQuestion.dataAiHint);
-      setGeneratedImageUrl(imageUrl);
-    } catch (error) {
-      console.error("Image generation failed:", error);
-      setImageGenerationError(true);
-      toast({
-        variant: "destructive",
-        title: "이미지 생성 실패",
-        description: "AI 이미지 생성에 실패했습니다. 다시 시도해주세요.",
-      });
-    } finally {
-      setIsGeneratingImage(false);
-    }
+  const toDataURL = async (url: string): Promise<string> => {
+    if (url.startsWith('data:')) return url;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch image: ${res.statusText}`);
+    const blob = await res.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
   };
 
   const handleNicknameSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -130,8 +147,8 @@ export default function GamePage() {
 
     startEvaluationTransition(async () => {
       try {
-        if (!generatedImageUrl) throw new Error("Image not available.");
-        const result = await evaluatePrompt({ studentPrompt, photoDataUri: generatedImageUrl, questionLevel: currentQuestion.level });
+        const photoDataUri = await toDataURL(currentQuestion.imageUrl);
+        const result = await evaluatePrompt({ studentPrompt, photoDataUri, questionLevel: currentQuestion.level });
         const newResults = [...results, {
           ...result,
           questionIndex: currentQuestionIndex,
@@ -321,15 +338,7 @@ export default function GamePage() {
           <div className="grid md:grid-cols-5 gap-0">
             <div className="md:col-span-3">
                 <div className="relative w-full aspect-[4/3] bg-black/10">
-                  {isGeneratingImage ? (
-                    <div className="w-full h-full bg-muted animate-pulse flex items-center justify-center">
-                       <Wand2 className="h-10 w-10 text-muted-foreground animate-spin" />
-                    </div>
-                  ) : generatedImageUrl ? (
-                    <Image src={generatedImageUrl} alt="AI 이미지" fill className="object-contain" priority />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-muted-foreground">이미지를 준비 중입니다...</div>
-                  )}
+                  <Image src={currentQuestion.imageUrl} alt="평가 이미지" fill className="object-contain" priority />
                 </div>
             </div>
             <div className="md:col-span-2 flex flex-col p-6 space-y-4">

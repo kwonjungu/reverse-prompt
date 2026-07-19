@@ -3,6 +3,9 @@
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { runAuditAgent, type AuditOutput, type AuditInput } from '@/ai/flows/audit-agent';
+import { getEvaluationPromptForAudit } from '@/lib/evaluation-prompt';
+import { buildImagePrompt } from '@/lib/image-prompt';
+import { PRACTICE_QUESTIONS } from '@/lib/questions';
 import { useFirestore, useCollection } from '@/firebase';
 import { collection, query, orderBy, limit } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
@@ -12,30 +15,14 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ArrowLeft, Bot, AlertTriangle, CheckCircle2, Info, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 
-// 현재 시스템 설정 — 감수 에이전트에 전달할 snapshot
-const CURRENT_QUESTIONS = [
-  { level: 1, dataAiHint: 'a small white fluffy puppy sitting, tongue out, plain pure white background, no collar, no accessories, no objects except the puppy', rubric: '이 그림을 한 번도 못 본 친구에게 문자로 보낸다면?\n\n색깔은 어떤지, 어떤 자세인지, 어떤 느낌인지 생각나는 대로 써봐요.\n더 자세히 쓸수록 AI가 똑같은 그림을 만들 수 있어요!' },
-  { level: 2, dataAiHint: 'a shiny red apple with a short green stem and one small green leaf, centered on plain pure white background, no other objects', rubric: '이 물건을 눈 감고 머릿속으로 떠올릴 수 있게 설명해봐요.\n\n색깔, 모양, 크기, 어떤 특징이 있는지... 단어를 많이 쓸수록 좋아요!' },
-  { level: 3, dataAiHint: 'a single bright yellow sunflower facing forward, thick green stem, plain pure white background, no other flowers, no vase', rubric: '꽃집 주인이 되어 이 꽃을 소개하는 설명을 써봐요.' },
-  { level: 4, dataAiHint: 'a gray humanoid robot with a square silver head, two round blue glowing eyes, rectangular body, standing straight with arms at sides, plain pure white background, no weapons', rubric: '로봇 설계 도면을 글로 그려봐요!' },
-  { level: 5, dataAiHint: 'a round brown chocolate chip cookie character with two large round white cartoon eyes and a big smiling mouth, two short stick arms and two short stick legs, standing pose, plain pure white background', rubric: '이 캐릭터의 프로필을 써봐요!' },
-  { level: 6, dataAiHint: 'a white cat standing upright on two legs, holding a round black microphone with one paw, mouth open wide singing, plain pure white background, no stage, no crowd', rubric: '음악 방송 해설자가 되어 이 장면을 중계해봐요!' },
-  { level: 7, dataAiHint: 'a pink cartoon pig with two small round white feathered wings on its back, hovering in midair with a big happy smile, solid light sky-blue background, no clouds, no other objects', rubric: '뉴스 기자가 되어 이 신기한 장면을 보도해봐요!' },
-  { level: 8, dataAiHint: 'a yellow crescent moon shape with two closed eyes and a peaceful sleeping smile, surrounded by five small white stars, solid dark navy blue background, nothing else', rubric: '동화책의 한 페이지를 글로 써봐요!' },
-  { level: 9, dataAiHint: 'a hamburger with two large round white cartoon eyes and a wide open smiling mouth, two small round legs, standing upright on a simple light yellow background, no extra props', rubric: '이 캐릭터를 처음 만난 탐험가처럼 관찰 일지를 써봐요!' },
-  { level: 10, dataAiHint: 'a white horse with a single straight golden horn on its forehead and a long rainbow-colored mane and tail, standing still in a misty light green meadow, soft golden sunlight from above, no riders, no fairies', rubric: '마법의 생물을 목격한 탐험가의 보고서를 써봐요!' },
-  { level: 11, dataAiHint: 'a small orange tabby cat wearing a purple wizard hat and robe, sitting at a wooden desk, holding a wooden wand, a glowing purple open spell book on the desk, simple gray stone wall background behind', rubric: '이 장면을 영화 대본처럼 묘사해봐요!' },
-  { level: 12, dataAiHint: 'an astronaut in a white spacesuit floating in outer space, arms stretched out sideways, blue Earth visible in the upper left, white stars scattered on black background, one ringed planet visible in the far right distance', rubric: '우주에서 찍은 사진을 지구 관제센터에 보고하는 전문가가 되어봐요!' },
-  { level: 13, dataAiHint: 'a futuristic night city viewed from street level, three flying cars with glowing blue headlights in the sky, tall skyscrapers with pink and cyan neon signs on the sides, dark sky, no people, no animals', rubric: '미래 여행 가이드북의 한 페이지를 써봐요!' },
-  { level: 14, dataAiHint: 'an underwater ocean floor scene with round dome-shaped glowing teal buildings, a school of small colorful tropical fish swimming past in the foreground, hazy blue-green water, faint light rays coming from the surface above, no people, no submarines', rubric: '바닷속 세계를 처음 발견한 탐험가의 일기를 써봐요!' },
-  { level: 15, dataAiHint: 'a magical fantasy library interior, tall wooden bookshelves on both walls filled with colorful books, five glowing crystal orbs floating in midair at different heights, warm golden lantern light, stone floor, no people', rubric: '마법 도서관에 처음 들어선 주인공의 눈에 보이는 것을 써봐요!' },
-];
+// 현재 시스템 설정 — 감수 에이전트에 전달할 snapshot (실제 사용 중인 문제 목록 그대로)
+const CURRENT_QUESTIONS = PRACTICE_QUESTIONS.map(({ level, dataAiHint, rubric }) => ({ level, dataAiHint, rubric }));
 
-const EVALUATION_SYSTEM_PROMPT = `초등학교 담임 선생님으로서 학생 글을 3축(대상/시각묘사/맥락)으로 채점.
-점수 0~100: 세 축 모두+형용사 2개=95~100, 세 축=85~94, 두 축=70~84, 한 축=55~69, 짧음=35~54, 거리 멈=15~34, 무관=0~14.
-피드백 2줄: 학생 글 단어 인용 칭찬 + 빠진 축 1개 지적 + 단어 2개 제안. 추상 칭찬 금지.`;
+// 요약 사본이 아니라 실제 채점·이미지 프롬프트를 그대로 감수 대상으로 전달
+// (예전엔 손으로 쓴 요약이 실제 점수 밴드와 어긋나 있었음)
+const EVALUATION_SYSTEM_PROMPT = getEvaluationPromptForAudit();
 
-const IMAGE_PROMPT_TEMPLATE = `Generate a high-quality image of: {subject}. Render ONLY what is explicitly described. Do NOT add clothing, accessories, scarves, collars, hats, or any props not mentioned. Do NOT add text, watermarks, or extra objects. Keep the composition clean and simple.`;
+const IMAGE_PROMPT_TEMPLATE = buildImagePrompt('{subject}');
 
 const severityIcon = {
   '즉시수정': <AlertTriangle className="h-4 w-4 text-destructive" />,

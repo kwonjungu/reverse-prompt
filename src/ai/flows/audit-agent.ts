@@ -125,12 +125,13 @@ findings는 severity 순(즉시수정 → 개선권장 → 양호)으로 정렬�
       return out;
     } catch (error: any) {
       console.error('[auditAgentFlow] 실패:', error?.message);
-      return {
+      const fallback: AuditOutput = {
         overallGrade: 'C',
         overallComment: `감수 에이전트 실행 실패: ${error?.message?.slice(0, 100)}`,
         findings: [],
         topPriority: '에이전트 오류를 확인하세요.',
       };
+      return fallback;
     }
   }
 );

@@ -7,28 +7,15 @@ import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Home, ArrowRight, Pencil, Palette, Sparkles, Lightbulb, Wand2 } from 'lucide-react';
-import { generateImage } from '@/ai/flows/generate-image';
-import { Skeleton } from '@/components/ui/skeleton';
 
 export default function GuidePage() {
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
 
   const examplePrompt = "수수께끼 같은, 고대의 숲, 빛나는 안개, 거대한 버섯, 귀여운 요정이 날아다니는, 영화 같은 조명, 판타지 아트";
 
-  const handleGenerateClick = async () => {
-    setIsGenerating(true);
-    setGeneratedImageUrl(null);
-    try {
-      const imageUrl = await generateImage(examplePrompt);
-      setGeneratedImageUrl(imageUrl);
-    } catch (error) {
-      console.error("Failed to generate example image", error);
-      // Fallback to a placeholder if generation fails
-      setGeneratedImageUrl("https://placehold.co/600x600.png");
-    } finally {
-      setIsGenerating(false);
-    }
+  // 이 프롬프트로 AI가 미리 그려둔 그림 (scripts/generate-question-images.mjs)
+  const handleGenerateClick = () => {
+    setGeneratedImageUrl('/questions/guide-example.jpg');
   };
 
 
@@ -114,26 +101,19 @@ export default function GuidePage() {
                   <blockquote className="border-l-4 border-primary pl-4 italic text-muted-foreground bg-muted/30 p-4 rounded-r-lg">
                     {examplePrompt}
                   </blockquote>
-                  ...오른쪽 그림처럼 멋진 결과가 나온답니다. 직접 한번 그려볼까요?
-                  <Button onClick={handleGenerateClick} disabled={isGenerating} size="lg">
+                  ...오른쪽 그림처럼 멋진 결과가 나온답니다. AI가 그린 그림을 확인해볼까요?
+                  <Button onClick={handleGenerateClick} size="lg">
                     <Wand2 className="mr-2" />
-                    {isGenerating ? 'AI가 그리는 중...' : 'AI로 그림 그려보기!'}
+                    AI가 그린 그림 보기!
                   </Button>
                 </div>
               </div>
               <div className="relative aspect-square rounded-xl overflow-hidden shadow-lg">
-                {isGenerating ? (
-                  <div className="w-full h-full bg-muted animate-pulse flex items-center justify-center">
-                    <div className="flex flex-col items-center gap-2">
-                      <Wand2 className="h-8 w-8 text-muted-foreground animate-pulse" />
-                      <p className="text-muted-foreground">AI 화가가 그림을 그리고 있어요...</p>
-                    </div>
-                  </div>
-                ) : generatedImageUrl ? (
+                {generatedImageUrl ? (
                   <Image src={generatedImageUrl} alt="AI generated art from an example prompt" fill className="object-cover" />
                 ) : (
                   <div className="w-full h-full bg-muted flex items-center justify-center text-center p-4 rounded-xl">
-                    <p className="text-muted-foreground">버튼을 눌러 AI가 그림을 그리게 해보세요!</p>
+                    <p className="text-muted-foreground">버튼을 눌러 AI가 그린 그림을 확인해보세요!</p>
                   </div>
                 )}
               </div>
