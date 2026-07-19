@@ -79,6 +79,23 @@ const PASS_SCORE = 80;
 type GameState = 'setup' | 'playing' | 'results';
 type Result = EvaluatePromptOutput & { questionIndex: number; questionLevel: number; koreanTitle: string; studentPrompt: string; originalPrompt: string; };
 
+// results 배열에서 콤보를 파생 (기준점은 PASS_SCORE 재사용).
+// currentCombo: 배열 끝에서부터 연속으로 PASS_SCORE 이상인 개수
+// maxCombo: 전체 스캔 중 나온 최대 연속 개수
+function deriveCombo(results: Result[]): { currentCombo: number; maxCombo: number } {
+  let maxCombo = 0;
+  let run = 0;
+  for (const r of results) {
+    if (r.score >= PASS_SCORE) {
+      run += 1;
+      if (run > maxCombo) maxCombo = run;
+    } else {
+      run = 0;
+    }
+  }
+  return { currentCombo: run, maxCombo };
+}
+
 export default function TimeAttackPage() {
   const db = useFirestore();
   const [gameState, setGameState] = useState<GameState>('setup');
@@ -95,6 +112,7 @@ export default function TimeAttackPage() {
   const { toast } = useToast();
   const isPending = isEvaluating;
   const currentQuestion = useMemo(() => questions[currentQuestionIndex], [questions, currentQuestionIndex]);
+  const { currentCombo, maxCombo } = useMemo(() => deriveCombo(results), [results]);
 
   useEffect(() => {
     if (gameState === 'playing' && !isPending) {
@@ -185,11 +203,14 @@ export default function TimeAttackPage() {
       strongestAxis: r.strongestAxis ?? null,
     }));
 
+    const { maxCombo } = deriveCombo(finalResults);
+
     addDoc(collection(db, 'classes', classCode, 'submissions'), {
       attendanceNumber,
       nickname,
       results: sanitizedResults,
       averageScore,
+      maxCombo,
       passScore: PASS_SCORE,
       passed: Math.round(averageScore) >= PASS_SCORE,
       mode: 'time-attack',
@@ -252,6 +273,11 @@ export default function TimeAttackPage() {
                 <div className={`p-10 rounded-2xl border-2 ${passed ? 'bg-muted/50 border-primary/10' : 'bg-destructive/5 border-destructive/10'}`}>
                     <p className="text-muted-foreground text-xl">최종 평균 점수 (기준 {PASS_SCORE}점)</p>
                     <p className={`text-8xl font-black mt-2 ${passed ? 'text-primary' : 'text-destructive'}`}>{Math.round(averageScore)}점</p>
+                    {maxCombo >= 2 && (
+                      <p className="text-2xl font-bold text-orange-500 mt-4 animate-in fade-in zoom-in">
+                        🔥 최대 {maxCombo}연속 {PASS_SCORE}점 돌파!
+                      </p>
+                    )}
                 </div>
                 <p className="text-xl">
                   {passed
@@ -279,6 +305,11 @@ export default function TimeAttackPage() {
             <div className="flex items-center gap-4 text-2xl font-black">
                 <Timer className="h-8 w-8 text-primary" />
                 <span className={timeLeft <= 5 ? "text-destructive animate-pulse" : "text-primary"}>{timeLeft}초</span>
+                {currentCombo >= 2 && (
+                  <span key={currentCombo} className="text-orange-500 text-lg animate-in fade-in zoom-in duration-300">
+                    🔥 {currentCombo}연속!
+                  </span>
+                )}
             </div>
             <h2 className="font-bold text-lg">{nickname}님 ({currentQuestionIndex + 1}/{GAME_QUESTION_COUNT}) · 목표 {PASS_SCORE}점</h2>
        </header>

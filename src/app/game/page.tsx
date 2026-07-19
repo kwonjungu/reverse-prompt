@@ -87,9 +87,30 @@ const allQuestions = [
 ].map((q, i) => ({ ...q, imageUrl: `/questions/game-${String(i + 1).padStart(2, '0')}.jpg` }));
 
 const GAME_QUESTION_COUNT = 5;
+// 콤보 기준점 — 이 점수 이상이면 콤보가 이어짐
+const COMBO_SCORE = 80;
 
 type GameState = 'nickname' | 'playing' | 'results';
 type Result = EvaluatePromptOutput & { questionIndex: number; questionLevel: number; koreanTitle: string; studentPrompt: string; originalPrompt: string; };
+
+// results 배열에서 콤보를 파생.
+// currentCombo: 배열 끝에서부터 연속으로 COMBO_SCORE 이상인 개수
+// maxCombo: 전체 스캔 중 나온 최대 연속 개수
+function deriveCombo(results: Result[]): { currentCombo: number; maxCombo: number } {
+  let currentCombo = 0;
+  let maxCombo = 0;
+  let run = 0;
+  for (const r of results) {
+    if (r.score >= COMBO_SCORE) {
+      run += 1;
+      if (run > maxCombo) maxCombo = run;
+    } else {
+      run = 0;
+    }
+  }
+  currentCombo = run;
+  return { currentCombo, maxCombo };
+}
 
 export default function GamePage() {
   const db = useFirestore();
@@ -107,6 +128,7 @@ export default function GamePage() {
 
   const isPending = isEvaluating;
   const currentQuestion = useMemo(() => questions[currentQuestionIndex], [questions, currentQuestionIndex]);
+  const { currentCombo, maxCombo } = useMemo(() => deriveCombo(results), [results]);
 
   useEffect(() => {
     const shuffled = [...allQuestions].sort(() => 0.5 - Math.random());
@@ -187,11 +209,14 @@ export default function GamePage() {
       strongestAxis: r.strongestAxis ?? null,
     }));
 
+    const { maxCombo } = deriveCombo(finalResults);
+
     addDoc(collection(db, 'classes', classCode, 'submissions'), {
       attendanceNumber,
       nickname,
       results: sanitizedResults,
       averageScore,
+      maxCombo,
       mode: 'game',
       createdAt: serverTimestamp()
     });
@@ -279,6 +304,11 @@ export default function GamePage() {
                         <div className="text-center bg-muted/50 p-6 rounded-xl border-2 border-primary/20">
                             <p className="text-xl font-semibold text-muted-foreground">나의 평균 점수</p>
                             <p className="text-7xl font-bold text-primary">{Math.round(averageScore)}점</p>
+                            {maxCombo >= 2 && (
+                              <p className="text-2xl font-bold text-orange-500 mt-4 animate-in fade-in zoom-in">
+                                🔥 최대 {maxCombo}연속 {COMBO_SCORE}점 돌파!
+                              </p>
+                            )}
                         </div>
                         <div>
                           <h3 className="text-2xl font-headline mb-4 text-center">상세 결과</h3>
@@ -325,6 +355,7 @@ export default function GamePage() {
                                     위 어린이는 AI 프롬프트 엔지니어링 챌린지에서<br/>
                                     평균 {Math.round(averageScore)}점이라는 우수한 성적을 거두었기에<br/>
                                     이 상장을 수여하여 실력을 인증합니다.
+                                    {maxCombo >= 2 && (<><br/>(최대 {maxCombo}연속 우수 답안)</>)}
                                 </p>
                                 <p className="date-line">{currentDate}</p>
                                 <p className="stamp">나는 프롬프트 마스터 (인)</p>
@@ -349,7 +380,14 @@ export default function GamePage() {
     <div className="min-h-screen bg-background font-sans">
        <header className="p-4 flex justify-between items-center bg-card/50">
             <Progress value={((currentQuestionIndex) / GAME_QUESTION_COUNT) * 100} className="w-1/4" />
-            <h2 className="text-lg font-bold">{nickname}님 ({currentQuestionIndex + 1}/{GAME_QUESTION_COUNT})</h2>
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-bold">{nickname}님 ({currentQuestionIndex + 1}/{GAME_QUESTION_COUNT})</h2>
+              {currentCombo >= 2 && (
+                <span key={currentCombo} className="text-orange-500 font-bold text-lg animate-in fade-in zoom-in duration-300">
+                  🔥 {currentCombo}연속!
+                </span>
+              )}
+            </div>
             <Link href="/" passHref>
                 <Button variant="ghost"><Home className="mr-2 h-4 w-4" />나가기</Button>
             </Link>
