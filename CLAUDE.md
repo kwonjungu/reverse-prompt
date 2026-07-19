@@ -155,6 +155,19 @@ classes/
 - 효과: 수업 중 AI 비용이 채점만 남음 (차시당 ~₩700, 기존 ~₩9,000). 이미지가 고정이라 학생 간 채점 형평성도 개선.
 - 타임어택 기준 점수: **평균 80점 이상 통과** (`PASS_SCORE`), Firestore에 `passed`/`passScore` 저장.
 
+## 게임 요소 (2026-07-19 추가)
+
+| 요소 | 위치 | 핵심 |
+|---|---|---|
+| 축별 뱃지 | `lib/badges.ts` + 채점 출력 `strongestAxis` | 🔎관찰/🎨디테일/🌟분위기 마스터. enum·프롬프트·매핑 삼중 일치 필수 |
+| 콤보 | game·time-attack의 `deriveCombo()` | 80점 연속, results 배열에서 파생(별도 state 없음) |
+| 플래시 라운드 | game `FLASH_SECONDS` | 세션당 1문제 랜덤, 10초 관찰 후 가림. `isFlash` 저장 |
+| 리더보드 | game 결과 화면 | orderBy createdAt+limit 50 후 클라이언트 필터(복합 인덱스 회피) |
+| XP·칭호 | `lib/xp.ts` + `classes/{code}/students/{번호}` | 연습은 절반, 견습생→마스터 5단계. increment+merge |
+| 보스전 | game `BOSS_QUESTION` (practice-20.jpg 재사용) | 90점 클리어, +50 XP 보너스. 세션 doc은 5문제 완료 시 즉시 저장, 보스 결과는 updateDoc으로 `boss` 필드 갱신 (이탈해도 기록 보존) |
+
+submissions doc 추가 필드: `maxCombo`, `boss: {attempted, score, cleared}`, results[].`strongestAxis`(null 가능)·`isFlash`(game만).
+
 ## ✅ 해결됨: 이미지 모델이 프롬프트에 없는 요소를 자기 마음대로 추가 (빨간 스카프 문제)
 
 **증상이었던 것**: 연습 모드 Q1에서 매번 빨간 스카프를 두른 강아지가 생성됨 → 학생이 프롬프트에 없는 요소를 못 맞춰 부당 감점되는 구조.

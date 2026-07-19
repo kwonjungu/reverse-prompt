@@ -16,7 +16,7 @@ import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from '@/components/ui/badge';
-import { collection, addDoc, doc, serverTimestamp, setDoc, increment, query, orderBy, limit, type Timestamp } from 'firebase/firestore';
+import { collection, addDoc, doc, serverTimestamp, setDoc, increment, updateDoc, query, orderBy, limit, type Timestamp, type DocumentReference } from 'firebase/firestore';
 import { useFirestore, useCollection, useDoc } from '@/firebase';
 import { buildImagePrompt } from '@/lib/image-prompt';
 import { getAxisBadge } from '@/lib/badges';
@@ -93,7 +93,22 @@ const COMBO_SCORE = 80;
 // 플래시 라운드: 그림을 이 시간(초)만 보여준 뒤 가림
 const FLASH_SECONDS = 10;
 
-type GameState = 'nickname' | 'playing' | 'results';
+// 보스전: 5문제 뒤 선택적으로 도전하는 최고 난이도 1문제.
+// 게임 문제 풀과 완전히 별개 — 평균/콤보/리더보드에 섞이지 않음.
+const BOSS_QUESTION = {
+  level: 20,
+  koreanTitle: '로봇들이 장 보는 미래 야시장',
+  dataAiHint: 'a lively futuristic night market street with three round friendly robots browsing food stalls, colorful paper lanterns strung overhead, white steam rising from food carts, glowing neon shop signs, no humans',
+  imageUrl: '/questions/practice-20.jpg',
+  rubric: '👑 보스전! 그림 속 모든 것을 빠짐없이, 분위기까지 담아 묘사해야 합니다.\n\n로봇들의 모습과 행동, 가게와 음식, 등불, 김, 네온사인, 거리 분위기... 90점을 넘기면 보스 클리어!',
+};
+const BOSS_PASS_SCORE = 90;
+// 보스 클리어 시 XP 보너스
+const BOSS_CLEAR_BONUS_XP = 50;
+
+type GameState = 'nickname' | 'playing' | 'boss-offer' | 'boss' | 'results';
+// 보스 결과 (results 배열과 분리 — 평균/콤보/리더보드 오염 방지)
+type BossResult = { score: number; studentPrompt: string; feedback: string; cleared: boolean };
 // 리더보드용 submission 문서 (읽기 전용, 필요한 필드만)
 type Submission = {
   id: string;
@@ -144,6 +159,12 @@ export default function GamePage() {
   const [attendanceNumber, setAttendanceNumber] = useState<string | null>(null);
   // 이번 세션에서 획득한 XP (결과 화면 표시용). saveToFirestore에서 확정.
   const [earnedXp, setEarnedXp] = useState(0);
+
+  // 보스전: 보스 문제의 입력·결과. results 배열에는 넣지 않는다.
+  const [bossPrompt, setBossPrompt] = useState('');
+  const [bossResult, setBossResult] = useState<BossResult | null>(null);
+  // 5문제 완료 시 저장된 세션 doc — 보스 결과를 나중에 updateDoc으로 덧붙이기 위해 보관
+  const sessionDocRef = useRef<DocumentReference | null>(null);
 
   const { toast } = useToast();
 
@@ -264,8 +285,10 @@ export default function GamePage() {
         if (currentQuestionIndex < GAME_QUESTION_COUNT - 1) {
           setCurrentQuestionIndex(prev => prev + 1);
         } else {
+          // 5문제 완료 → 즉시 저장 (보스 화면에서 이탈해도 기록이 남게).
+          // 보스 결과는 이후 applyBossOutcome()이 같은 doc을 updateDoc으로 갱신한다.
           saveToFirestore(newResults);
-          setGameState('results');
+          setGameState('boss-offer');
         }
       } catch (error) {
         console.error("Evaluation failed:", error);
@@ -274,6 +297,8 @@ export default function GamePage() {
     });
   };
 
+  // 세션 저장 — 5문제 완료 즉시 1회 호출 (보스 화면에서 이탈해도 기록이 남게).
+  // 보스 결과는 이후 applyBossOutcome()이 같은 doc을 updateDoc으로 갱신한다.
   const saveToFirestore = (finalResults: Result[]) => {
     const classCode = sessionStorage.getItem('classCode');
     const attendanceNumber = sessionStorage.getItem('attendanceNumber');
@@ -281,7 +306,7 @@ export default function GamePage() {
 
     const averageScore = finalResults.reduce((acc, r) => acc + r.score, 0) / finalResults.length;
 
-    // 세션 총 XP = 문제당 score 합산. 결과 화면 "+N XP" 표시용으로 state에도 기록.
+    // 세션 기본 XP = 문제당 score 합산. 보스 XP는 applyBossOutcome에서 추가 적립.
     const totalXp = sessionXp(finalResults.map((r) => r.score));
     setEarnedXp(totalXp);
     if (totalXp > 0) {
@@ -307,7 +332,72 @@ export default function GamePage() {
       averageScore,
       maxCombo,
       mode: 'game',
+      // 보스 결과는 additive 필드로. 도전하면 applyBossOutcome이 updateDoc으로 덮어씀.
+      boss: { attempted: false, score: null, cleared: false },
       createdAt: serverTimestamp()
+    }).then((ref) => {
+      sessionDocRef.current = ref;
+    }).catch((err) => console.error('세션 저장 실패:', err));
+  };
+
+  // 보스 결과 반영: 세션 doc의 boss 필드 갱신 + 보스 XP 추가 적립 (클리어 시 보너스)
+  const applyBossOutcome = (boss: BossResult) => {
+    const classCode = sessionStorage.getItem('classCode');
+    const attendanceNumber = sessionStorage.getItem('attendanceNumber');
+    if (!db || !classCode || !attendanceNumber) return;
+
+    if (sessionDocRef.current) {
+      updateDoc(sessionDocRef.current, {
+        boss: { attempted: true, score: boss.score, cleared: boss.cleared },
+      }).catch((err) => console.error('보스 결과 저장 실패:', err));
+    }
+
+    const bossXp = boss.score + (boss.cleared ? BOSS_CLEAR_BONUS_XP : 0);
+    if (bossXp > 0) {
+      setEarnedXp((prev) => prev + bossXp);
+      setDoc(
+        doc(db, 'classes', classCode, 'students', attendanceNumber),
+        { xp: increment(bossXp), updatedAt: serverTimestamp() },
+        { merge: true }
+      ).catch((err) => console.error('XP 저장 실패:', err));
+    }
+  };
+
+  // 보스 도전 안 함 → 세션은 이미 저장돼 있으므로 결과 화면으로만 이동.
+  const handleSkipBoss = () => {
+    setGameState('results');
+  };
+
+  // 보스 도전 시작
+  const handleStartBoss = () => {
+    setBossPrompt('');
+    setGameState('boss');
+  };
+
+  // 보스 문제 제출 (콤보·플래시 없음, questionLevel 20 고정). 1회만.
+  const handleBossSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!bossPrompt.trim()) {
+      toast({ variant: "destructive", title: "프롬프트가 비어 있습니다" });
+      return;
+    }
+    startEvaluationTransition(async () => {
+      try {
+        const photoDataUri = await toDataURL(BOSS_QUESTION.imageUrl);
+        const result = await evaluatePrompt({ studentPrompt: bossPrompt, photoDataUri, questionLevel: BOSS_QUESTION.level });
+        const boss: BossResult = {
+          score: result.score,
+          studentPrompt: bossPrompt,
+          feedback: result.feedback,
+          cleared: result.score >= BOSS_PASS_SCORE,
+        };
+        setBossResult(boss);
+        applyBossOutcome(boss);
+        setGameState('results');
+      } catch (error) {
+        console.error("Boss evaluation failed:", error);
+        toast({ variant: "destructive", title: "평가 실패", description: "AI 피드백을 받을 수 없습니다." });
+      }
     });
   };
 
@@ -369,6 +459,107 @@ export default function GamePage() {
             </form>
           </CardContent>
         </Card>
+      </div>
+    );
+  }
+
+  if (gameState === 'boss-offer') {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <Card className="max-w-lg w-full shadow-2xl rounded-2xl bg-card/90 backdrop-blur-sm border-4 border-purple-600/60">
+          <CardHeader className="text-center">
+            <div className="text-6xl mb-2 animate-in fade-in zoom-in duration-500">👑</div>
+            <CardTitle className="text-3xl font-headline text-purple-700">숨겨진 보스가 나타났다!</CardTitle>
+            <CardDescription className="text-lg mt-2">
+              5문제를 모두 마쳤어요, {nickname}님! 이제 최고 난이도 보스에 도전할 수 있어요.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="bg-gradient-to-br from-purple-500/10 to-red-500/10 p-5 rounded-xl border-2 border-purple-500/30 text-center space-y-2">
+              <p className="text-sm font-semibold text-muted-foreground">보스 문제</p>
+              <p className="text-2xl font-bold text-purple-700">{BOSS_QUESTION.koreanTitle}</p>
+              <p className="text-lg font-bold text-red-600">
+                🎯 {BOSS_PASS_SCORE}점 이상이면 보스 클리어!
+              </p>
+              <p className="text-sm text-muted-foreground">
+                딱 한 번의 기회예요. 도전하지 않아도 점수에는 영향이 없어요.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 pt-2">
+              <Button
+                onClick={handleStartBoss}
+                size="lg"
+                className="flex-1 h-14 text-lg font-bold bg-purple-600 hover:bg-purple-700"
+              >
+                👑 도전하기
+              </Button>
+              <Button
+                onClick={handleSkipBoss}
+                size="lg"
+                variant="outline"
+                className="flex-1 h-14 text-lg font-bold"
+              >
+                그냥 결과 보기
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (gameState === 'boss') {
+    return (
+      <div className="min-h-screen bg-background font-sans">
+        <header className="p-4 flex justify-between items-center bg-purple-950/10">
+          <h2 className="text-lg font-bold text-purple-700">👑 보스전</h2>
+          <span className="text-red-600 font-bold text-lg animate-in fade-in zoom-in">
+            {BOSS_PASS_SCORE}점을 넘겨라!
+          </span>
+        </header>
+        <main className="container mx-auto p-4 sm:p-6 lg:p-8">
+          <Card className="max-w-4xl mx-auto shadow-2xl rounded-2xl overflow-hidden border-4 border-purple-600/60 bg-card/80 backdrop-blur-sm">
+            <div className="grid md:grid-cols-5 gap-0">
+              <div className="md:col-span-3">
+                <div className="relative w-full aspect-[4/3] bg-black/10">
+                  <Image src={BOSS_QUESTION.imageUrl} alt="보스 이미지" fill className="object-contain" priority />
+                  <div className="absolute inset-x-0 top-0 p-2 text-center bg-gradient-to-b from-purple-900/70 to-transparent text-white">
+                    <p className="font-bold text-sm sm:text-base drop-shadow">👑 {BOSS_QUESTION.koreanTitle}</p>
+                  </div>
+                </div>
+              </div>
+              <div className="md:col-span-2 flex flex-col p-6 space-y-4">
+                <Alert className="bg-purple-500/5 border-purple-500/30">
+                  <BookOpen className="h-4 w-4 text-purple-600" />
+                  <AlertTitle className="font-bold text-purple-700">보스 미션!</AlertTitle>
+                  <AlertDescription className="whitespace-pre-line text-sm mt-2">{BOSS_QUESTION.rubric}</AlertDescription>
+                </Alert>
+                <form onSubmit={handleBossSubmit} className="flex-grow flex flex-col gap-4">
+                  <div className="flex-grow">
+                    <Label htmlFor="boss-prompt-input" className="font-bold text-lg mb-2 block">나의 설명 프롬프트 👑</Label>
+                    <Textarea
+                      id="boss-prompt-input"
+                      placeholder="그림 속 모든 것을 빠짐없이, 분위기까지 담아 써보세요!"
+                      value={bossPrompt}
+                      onChange={(e) => setBossPrompt(e.target.value)}
+                      className="h-full min-h-[180px] text-lg p-4"
+                      disabled={isPending}
+                    />
+                  </div>
+                  <Button
+                    type="submit"
+                    size="lg"
+                    className="w-full h-14 text-xl font-bold bg-purple-600 hover:bg-purple-700"
+                    disabled={isPending}
+                  >
+                    {isEvaluating ? <RefreshCw className="animate-spin" /> : <Award className="mr-2" />}
+                    보스에게 도전!
+                  </Button>
+                </form>
+              </div>
+            </div>
+          </Card>
+        </main>
       </div>
     );
   }
@@ -438,6 +629,25 @@ export default function GamePage() {
                               <p className="text-sm text-muted-foreground">최고 칭호에 도달했어요! 🎉</p>
                             )}
                           </div>
+                        )}
+                        {bossResult && (
+                          bossResult.cleared ? (
+                            <div className="bg-gradient-to-br from-purple-500/15 to-red-500/15 p-6 rounded-xl border-4 border-purple-600/60 text-center space-y-2 animate-in fade-in zoom-in">
+                              <div className="text-5xl">👑</div>
+                              <p className="text-3xl font-bold text-purple-700">보스 클리어!</p>
+                              <p className="text-lg font-semibold">
+                                {BOSS_QUESTION.koreanTitle} · {bossResult.score}점
+                              </p>
+                              <p className="text-sm text-muted-foreground">최고 난이도 보스를 물리쳤어요! (+{BOSS_CLEAR_BONUS_XP} XP 보너스)</p>
+                            </div>
+                          ) : (
+                            <div className="bg-muted/50 p-6 rounded-xl border-2 border-purple-500/20 text-center space-y-1">
+                              <div className="text-4xl">👑</div>
+                              <p className="text-xl font-bold text-purple-700">보스는 다음 기회에...</p>
+                              <p className="text-lg font-semibold text-muted-foreground">내 점수 {bossResult.score}점</p>
+                              <p className="text-sm text-muted-foreground">감점은 없어요. 다음에 또 도전해봐요!</p>
+                            </div>
+                          )
                         )}
                         {topFive.length > 0 && (
                           <div>
@@ -530,6 +740,7 @@ export default function GamePage() {
                                     평균 {Math.round(averageScore)}점이라는 우수한 성적을 거두었기에<br/>
                                     이 상장을 수여하여 실력을 인증합니다.
                                     {maxCombo >= 2 && (<><br/>(최대 {maxCombo}연속 우수 답안)</>)}
+                                    {bossResult?.cleared && (<><br/>👑 보스 클리어</>)}
                                 </p>
                                 <p className="date-line">{currentDate}</p>
                                 <p className="stamp">나는 프롬프트 마스터 (인)</p>
