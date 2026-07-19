@@ -89,9 +89,11 @@ const allQuestions = [
 const GAME_QUESTION_COUNT = 5;
 // 콤보 기준점 — 이 점수 이상이면 콤보가 이어짐
 const COMBO_SCORE = 80;
+// 플래시 라운드: 그림을 이 시간(초)만 보여준 뒤 가림
+const FLASH_SECONDS = 10;
 
 type GameState = 'nickname' | 'playing' | 'results';
-type Result = EvaluatePromptOutput & { questionIndex: number; questionLevel: number; koreanTitle: string; studentPrompt: string; originalPrompt: string; };
+type Result = EvaluatePromptOutput & { questionIndex: number; questionLevel: number; koreanTitle: string; studentPrompt: string; originalPrompt: string; isFlash: boolean; };
 
 // results 배열에서 콤보를 파생.
 // currentCombo: 배열 끝에서부터 연속으로 COMBO_SCORE 이상인 개수
@@ -123,6 +125,10 @@ export default function GamePage() {
   const [isEvaluating, startEvaluationTransition] = useTransition();
   const certificateRef = useRef<HTMLDivElement>(null);
   const [currentDate, setCurrentDate] = useState('');
+  // 플래시 라운드: 5문제 중 랜덤 1개 인덱스. 세션 시작 시 확정.
+  const [flashQuestionIndex, setFlashQuestionIndex] = useState(-1);
+  // 플래시 문제에서 그림을 보여줄 남은 시간(초). null이면 카운트다운 없음.
+  const [flashRemaining, setFlashRemaining] = useState<number | null>(null);
 
   const { toast } = useToast();
 
@@ -130,15 +136,44 @@ export default function GamePage() {
   const currentQuestion = useMemo(() => questions[currentQuestionIndex], [questions, currentQuestionIndex]);
   const { currentCombo, maxCombo } = useMemo(() => deriveCombo(results), [results]);
 
+  // 현재 문제가 플래시 라운드인지
+  const isFlashRound = currentQuestionIndex === flashQuestionIndex;
+  // 플래시 라운드에서 그림이 아직 보이는 상태인지 (카운트다운 진행 중)
+  const isImageVisible = !isFlashRound || flashRemaining === null || flashRemaining > 0;
+  // 그림이 가려졌는지 (플래시 라운드이고 시간이 다 됨)
+  const isImageHidden = isFlashRound && flashRemaining === 0;
+
   useEffect(() => {
     const shuffled = [...allQuestions].sort(() => 0.5 - Math.random());
     setQuestions(shuffled.slice(0, GAME_QUESTION_COUNT));
     setCurrentDate(new Date().toLocaleDateString('ko-KR'));
+    // 5문제 중 랜덤 1개를 플래시 라운드로 지정
+    setFlashQuestionIndex(Math.floor(Math.random() * GAME_QUESTION_COUNT));
   }, []);
 
   useEffect(() => {
     if (gameState === 'playing') setStudentPrompt('');
   }, [gameState, currentQuestionIndex]);
+
+  // 플래시 카운트다운: 플래시 문제에 도달하면 FLASH_SECONDS부터 0까지 세고 그림을 가림.
+  // 문제 전환/게임 상태 변경 시 cleanup으로 타이머와 상태를 초기화.
+  useEffect(() => {
+    if (gameState !== 'playing' || currentQuestionIndex !== flashQuestionIndex) {
+      setFlashRemaining(null);
+      return;
+    }
+    setFlashRemaining(FLASH_SECONDS);
+    const interval = setInterval(() => {
+      setFlashRemaining((prev) => {
+        if (prev === null || prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [gameState, currentQuestionIndex, flashQuestionIndex]);
 
   const toDataURL = async (url: string): Promise<string> => {
     if (url.startsWith('data:')) return url;
@@ -180,6 +215,7 @@ export default function GamePage() {
           koreanTitle: currentQuestion.koreanTitle,
           studentPrompt,
           originalPrompt: buildImagePrompt(currentQuestion.dataAiHint),
+          isFlash: isFlashRound,
         }];
         setResults(newResults);
 
@@ -325,7 +361,12 @@ export default function GamePage() {
                                 <TableBody>
                                   {results.map((result, index) => (
                                     <TableRow key={index}>
-                                      <TableCell className="font-medium">{index + 1}</TableCell>
+                                      <TableCell className="font-medium whitespace-nowrap">
+                                        {index + 1}
+                                        {result.isFlash && (
+                                          <span title="플래시 라운드" className="ml-1">⚡</span>
+                                        )}
+                                      </TableCell>
                                       <TableCell className="font-body text-muted-foreground">{result.studentPrompt}</TableCell>
                                       <TableCell>
                                         {(() => {
@@ -398,6 +439,22 @@ export default function GamePage() {
             <div className="md:col-span-3">
                 <div className="relative w-full aspect-[4/3] bg-black/10">
                   <Image src={currentQuestion.imageUrl} alt="평가 이미지" fill className="object-contain" priority />
+                  {isFlashRound && isImageVisible && (
+                    <div className="absolute inset-x-0 top-0 p-3 flex flex-col items-center gap-2 bg-gradient-to-b from-black/70 to-transparent text-white text-center">
+                      <p className="font-bold text-sm sm:text-base drop-shadow">
+                        ⚡ 플래시 라운드! 그림을 10초만 보여줄게요. 눈에 담아두세요!
+                      </p>
+                      <span className="text-4xl font-black tabular-nums drop-shadow-lg">
+                        {flashRemaining ?? FLASH_SECONDS}
+                      </span>
+                    </div>
+                  )}
+                  {isImageHidden && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/90 text-white text-center p-4">
+                      <span className="text-5xl">🙈</span>
+                      <p className="text-xl font-bold">기억으로 써보세요!</p>
+                    </div>
+                  )}
                 </div>
             </div>
             <div className="md:col-span-2 flex flex-col p-6 space-y-4">
@@ -411,14 +468,16 @@ export default function GamePage() {
                     <Label htmlFor="prompt-input" className="font-bold text-lg mb-2 block">나의 설명 프롬프트 ✨</Label>
                     <Textarea
                       id="prompt-input"
-                      placeholder="예: 따뜻한 햇살이 비치는 거실에 하얀색 강아지가 앉아서 꼬리를 살랑살랑 흔들고 있어요."
+                      placeholder={isFlashRound && isImageVisible
+                        ? "그림을 눈에 담는 중... 가려지면 기억으로 써요!"
+                        : "예: 따뜻한 햇살이 비치는 거실에 하얀색 강아지가 앉아서 꼬리를 살랑살랑 흔들고 있어요."}
                       value={studentPrompt}
                       onChange={(e) => setStudentPrompt(e.target.value)}
                       className="h-full min-h-[180px] text-lg p-4"
-                      disabled={isPending}
+                      disabled={isPending || (isFlashRound && isImageVisible)}
                     />
                   </div>
-                  <Button type="submit" size="lg" className="w-full h-14 text-xl font-bold" disabled={isPending}>
+                  <Button type="submit" size="lg" className="w-full h-14 text-xl font-bold" disabled={isPending || (isFlashRound && isImageVisible)}>
                     {isEvaluating ? <RefreshCw className="animate-spin" /> : <Award className="mr-2" />}
                     {currentQuestionIndex < GAME_QUESTION_COUNT - 1 ? "제출하고 다음으로" : "최종 결과 보기"}
                   </Button>
