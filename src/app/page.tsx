@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Zap, Gamepad2, ArrowRight, Timer, BookOpen, GraduationCap, User } from 'lucide-react';
+import { Zap, Sword, ArrowRight, Timer, BookOpen, GraduationCap, User } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { SchoolPicker } from '@/components/school-picker';
 import type { SchoolMatch } from '@/lib/school-search';
@@ -223,8 +223,8 @@ export default function Home() {
 
           <Card className="shadow-2xl shadow-primary/10 rounded-2xl overflow-hidden border-2 border-transparent hover:border-primary/40 transition-all duration-300 transform hover:-translate-y-2 bg-card/80 backdrop-blur-sm">
             <CardHeader>
-              <Gamepad2 className="h-10 w-10 mx-auto text-primary" />
-              <CardTitle className="text-3xl font-headline mt-4">게임 모드</CardTitle>
+              <Sword className="h-10 w-10 mx-auto text-primary" />
+              <CardTitle className="text-3xl font-headline mt-4">도전 모드</CardTitle>
               <CardDescription className="text-muted-foreground mt-2 min-h-[6rem]">
                 닉네임을 정하고 5개의 문제에 도전하세요! 점수는 선생님께 자동으로 전송됩니다.
               </CardDescription>

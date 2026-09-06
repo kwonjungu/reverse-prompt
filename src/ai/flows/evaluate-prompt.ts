@@ -1,31 +1,56 @@
 'use server';
 
 /**
- * @fileOverview 학생 프롬프트 평가 — 교육학적 근거 기반 채점
+ * @fileOverview 학생 프롬프트 평가 — 축별 5수준 판정과 운영 채점 결합
  *
- * 이론적 배경:
- *  1. Bloom의 인지 발달 위계(1956, 2001 개정판) — 대상 식별→속성 기술→맥락 종합 단계
- *  2. 한국 초등학교 국어과 교육과정(2022 개정) — 3~4학년 '대상의 특성 파악하여 표현하기'
- *  3. AI Literacy Framework (Long & Magerko, 2020, CHI) — Precision·Completeness·Specificity
- *  4. 6+1 Trait Writing Model (Culham, 2003) — 어휘 선택·구체성 평가
+ * 논문 대응:
+ *  <표 Ⅲ-4> AI·교사 공통 5수준 루브릭과 환산 규칙
+ *  <표 Ⅲ-5> 밴드 전환의 확정 명세
+ *  <표 Ⅲ-7> 운영 채점 1회의 결합 규칙
  *
- * 모델: gemini-2.5-flash (1회 약 ₩2)
- * 레벨별 채점 기준 자동 조정 + 자기검증 루프
+ * 채점자는 수준만 판정하고 점수 환산은 코드가 일괄 수행한다.
+ * 모델: gemini-3.8-flash (단가는 착수 시점에 재확인)
  */
 
 import { ai } from '@/ai/genkit';
 import { z } from 'genkit';
+import {
+  bandOf, toScores, clampLevel, withinOneLevel, combine,
+  type Band, type AxisLevels,
+} from '@/lib/scoring';
 
 const EvaluatePromptInputSchema = z.object({
   photoDataUri: z.string().describe('이미지 데이터 URI'),
   studentPrompt: z.string().describe('학생이 작성한 한국어 프롬프트'),
-  questionLevel: z.number().optional().describe('문제 난이도 레벨 (1~15)'),
+  questionLevel: z.number().optional().describe('문항 레벨 1~36'),
 });
 export type EvaluatePromptInput = z.infer<typeof EvaluatePromptInputSchema>;
 
+/** 축별 수준(1~5). 맥락 축은 A밴드에서 적용하지 않으므로 null이 될 수 있다. */
+const AxisLevelsSchema = z.object({
+  objectLevel: z.number().describe('대상 완전성 수준 1~5'),
+  specificityLevel: z.number().describe('시각적 구체성 수준 1~5'),
+  contextLevel: z.number().nullable().describe('맥락 축 수준 1~5. A밴드에서는 null'),
+});
+
+/** 채점 모형 1회 호출의 산출 */
+const SingleCallSchema = AxisLevelsSchema.extend({
+  feedback: z.string().describe('확인 1줄 + 개선 1줄'),
+});
+
 const EvaluatePromptOutputSchema = z.object({
-  score: z.number().describe('점수 0~100'),
-  feedback: z.string().describe('칭찬 1줄 + 개선 1줄'),
+  score: z.number().describe('환산 총점 0~100'),
+  feedback: z.string().describe('확인 1줄 + 개선 1줄'),
+  band: z.string().describe('적용 밴드 A/B/C'),
+  levels: AxisLevelsSchema.describe('결합된 축별 수준. 반수준을 유지한다'),
+  axisScores: z.object({
+    object: z.number(),
+    specificity: z.number(),
+    context: z.number().nullable(),
+  }).describe('축별 환산 점수'),
+  calls: z.array(AxisLevelsSchema).describe('호출별 원 수준. 연구 자료로 저장한다'),
+  extraCall: z.boolean().describe('세 번째 호출을 추가하였는지'),
+  missing: z.boolean().describe('결측 처리 여부'),
 });
 export type EvaluatePromptOutput = z.infer<typeof EvaluatePromptOutputSchema>;
 
@@ -34,121 +59,101 @@ export async function evaluatePrompt(input: EvaluatePromptInput): Promise<Evalua
 }
 
 // ─────────────────────────────────────────────────────
-// 레벨별 채점 기준 (Bloom 인지 위계 + AI 리터러시 3요소)
+// 축별 5수준 판정 기준 (<표 Ⅲ-4>)
+// AI와 교사는 같은 문언을 사용한다.
 // ─────────────────────────────────────────────────────
-function buildCriteria(level: number): string {
-  // 레벨 1~6: 흰 배경, 단일 오브젝트 → 2축 채점 (배경 없으므로 맥락 축 제외)
-  if (level <= 6) {
-    return `이 그림은 흰 배경에 오브젝트 하나만 있는 단순 그림입니다.
-배경이 없으므로 '맥락/분위기' 축은 이 문제에 적용하지 않습니다.
+const AXIS_OBJECT = `[축 1 대상 완전성] 대상의 명칭, 핵심 대상의 누락, 수량을 본다.
+5 핵심 대상을 모두 정확히 지칭하고 필요한 수량을 밝혀 대상을 구별한다.
+4 핵심 대상을 모두 지칭하나 한 명칭이 포괄적이거나 필수 수량이 불명확하다.
+3 핵심 대상 일부를 정확히 지칭하나 주요 누락 또는 복수의 포괄적 명칭이 있다.
+2 대상을 지칭하였으나 명칭이 부정확하거나 그림과 일치하지 않는다.
+1 무응답이거나 그림과 무관한 내용을 진술하였다.`;
 
-[채점 축 — 2가지]
-① 명칭 정확성 (Bloom 1단계·2단계: 지식·이해)
-   그림 속 대상이 무엇인지 명확한 명사로 표현했는가?
-   - 높음: 종류+특성 모두 (예: "흰색 강아지", "노란 해바라기")
-   - 낮음: 대상 이름만 (예: "강아지", "꽃")
+const AXIS_SPECIFICITY = `[축 2 시각적 구체성] 대상에 귀속되는 색, 형태, 크기, 질감, 정적인 자세를 본다.
+5 속성 진술이 대상별로 이루어져 같은 부류의 다른 사물과 뚜렷이 구별되며, 진술한 속성이 모두 그림에서 확인된다.
+4 속성을 진술하였으나 일부 대상에 국한되거나 같은 부류를 좁히기에는 일반적인 수준이다.
+3 속성 진술이 한 종류에 그치거나 대상을 좁히는 데 기여하지 못한다. 평가어가 구체 진술을 대신한다.
+2 속성 진술이 거의 없이 이름만 나열한다. 수식어가 있어도 그림과 무관하다.
+1 무응답이거나 속성에 관한 어떠한 진술도 없다.`;
 
-② 시각적 구체성 (Bloom 3단계: 적용 / AI 리터러시: Precision·Specificity)
-   색·모양·크기·자세·표정·특징 중 몇 가지를 관찰 가능한 단어로 표현했는가?
-   - 높음: 형용사 2개 이상 + 행동/자세까지 (예: "혀를 내밀고 앉아있는 작고 하얀 강아지")
-   - 중간: 형용사 1개 (예: "하얀 강아지가 앉아있어요")
-   - 낮음: 거의 없음 (예: "앉아있는 강아지")
+const AXIS_CONTEXT_B = `[축 3 배경과 행동] 장소와 동작을 본다. 분위기는 이 밴드에서 요구하지 않는다.
+5 배경의 성격과 대상의 행동을 모두 진술하고 그림과 부합한다.
+4 배경과 행동을 모두 진술하였으나 하나가 일반적이다.
+3 배경 또는 행동 중 하나만 진술한다.
+2 배경의 존재만 언급한다.
+1 배경과 행동을 모두 진술하지 않았다.`;
 
-[점수 산출 — 두 축의 합산]
-- 92~100: ①높음 + ②높음 (형용사 2개 이상, 행동·자세·표정 포함)
-- 80~91:  ①높음 + ②중간 (색깔 1개 + 간단한 묘사)
-- 65~79:  ①낮음 + ②중간 또는 ①높음 + ②낮음
-- 45~64:  대상 이름만 (①만)
-- 20~44:  그림과 다르거나 매우 짧은 문장
-- 0~19:   그림과 무관하거나 빈 칸
+const AXIS_CONTEXT_C = `[축 3 맥락과 분위기] 장소, 시간, 동작, 대상 간 공간 관계, 분위기를 본다.
+5 장소와 시간대, 분위기를 모두 진술하고, 분위기 표현이 그림의 색이나 행동과 근거를 이루며 연결된다.
+4 셋 중 둘을 진술한다. 분위기 표현은 있으나 근거와의 연결이 약하다.
+3 셋 중 하나만 진술한다.
+2 배경의 존재만 언급한다.
+1 배경과 상황에 관한 어떠한 진술도 없다.`;
 
-★ 주의: 정보량이 많은 문장이 적은 문장보다 반드시 높은 점수를 받아야 합니다.
-   "앉아있는 하얀 강아지" < "작고 하얀 강아지가 혀를 내밀고 앉아있어요"`;
-  }
+const COMMON_RULE = `[공통 판정 원칙]
+같은 단서를 두 축에서 중복하여 가점하지 않는다.
+위치 관계는 맥락 축, 대상에 귀속되는 외형은 구체성 축으로 판정한다.
+그림에서 확인되지 않는 요소를 진술하면 해당 축을 한 수준 낮추되 최저 수준은 1이다.
+근거가 부족한 중립적 추가 표현은 가점하지 않는다.
+이 과제의 목표는 묘사의 풍부함이 아니라 제시된 그림의 재현이므로,
+진술이 길어져도 재현할 대상이 특정되지 않으면 상위 수준으로 판정하지 않는다.`;
 
-  // 레벨 7~8: 단색 배경 등장 → 3축이지만 배경(C축)은 완화
-  if (level <= 8) {
-    return `이 그림은 단색 배경에 캐릭터가 있는 그림입니다.
+const FEEDBACK_GUIDE = `[피드백 — 정확히 2줄, 평문 한국어, 기호 없이]
+1줄: 학생이 쓴 글에서 실제 낱말 하나를 따옴표로 인용하며 현재 상태를 확인한다.
+   장점이 없으면 억지 칭찬 대신 중립적으로 관찰 내용을 확인한다.
+2줄: 빠뜨린 것 하나만, 그림에서 실제로 보이는 단서를 들어 안내하고 써 볼 낱말 두 개를 제안한다.
 
-[채점 축 — 3가지]
-① 명칭 정확성: 그림 속 캐릭터/사물을 명확한 명사로 표현했는가?
-② 시각적 구체성: 색·모양·표정·특징을 관찰 가능한 단어로 표현했는가?
-③ 배경·행동 (간단해도 OK): 배경 색깔 또는 캐릭터가 하는 행동을 적었는가?
+금지: 내용 없는 칭찬, 부족한 점을 둘 이상 지적하는 것, 별표나 샵 같은 기호.`;
 
-[점수 산출]
-- 90~100: ①+②+③ 모두, ②에서 형용사 2개 이상
-- 75~89:  ①+②+③ 모두 짧게라도 있음
-- 55~74:  두 축만
-- 35~54:  한 축만
-- 0~34:   그림과 거리가 멀거나 비어 있음`;
-  }
-
-  // 레벨 9~15: 풀 씬 → 3축 모두 완전히 적용
-  return `이 그림은 배경과 여러 요소가 있는 복잡한 장면입니다.
-
-[채점 축 — 3가지 (Bloom 4·5단계: 분석·종합)]
-① 대상 완전성 (AI 리터러시: Completeness)
-   그림 속 주요 인물·사물·공간을 빠짐없이 언급했는가?
-② 시각적 구체성 (AI 리터러시: Specificity)
-   색·모양·크기·자세·표정·특징을 구체적으로 묘사했는가?
-③ 맥락·분위기 (Bloom 5단계: 종합)
-   배경·장소·시간대·느낌·빛·분위기를 파악해서 표현했는가?
-
-[점수 산출]
-- 90~100: 세 축 모두, 형용사 2개 이상, 그림 속 복수의 요소 언급
-- 75~89:  세 축 모두 간략하게라도 다룸
-- 55~74:  두 축만
-- 35~54:  한 축만 또는 매우 단순
-- 0~34:   그림과 거리가 멀거나 비어 있음`;
+function buildCriteria(band: Band): string {
+  const axes =
+    band === 'A'
+      ? [AXIS_OBJECT, AXIS_SPECIFICITY]
+      : [AXIS_OBJECT, AXIS_SPECIFICITY, band === 'B' ? AXIS_CONTEXT_B : AXIS_CONTEXT_C];
+  const note =
+    band === 'A'
+      ? '이 문항은 흰 배경 또는 사물이 없는 단색 배경이므로 맥락 축을 적용하지 않는다. contextLevel은 null로 반환한다.'
+      : '세 축을 모두 판정한다.';
+  return `${axes.join('\n\n')}\n\n${COMMON_RULE}\n\n${note}`;
 }
 
-const FEEDBACK_GUIDE = `
-[피드백 — 정확히 2줄, 평문 한국어, 마크다운 기호 없이]
-1줄: 학생이 쓴 글에서 실제 단어 1개를 꼭 따옴표로 인용하면서 칭찬
-   좋은 예: "'하얀색'이라는 색깔 표현이 그림과 딱 맞아요!"
-   나쁜 예: "정말 잘 썼어요!" (인용 없고 추상적)
-2줄: 이 학생이 빠뜨린 부분 하나만, 그림에서 실제로 보이는 단서를 들어 안내하고 써볼 단어 2개 제안
-   좋은 예: "강아지가 혀를 내밀고 있는데 표정도 같이 써볼까요? '방긋 웃는', '눈이 반짝이는' 같은 표현이 좋아요."
-   나쁜 예: "더 자세히 써봐요." (구체적이지 않음)
+type SingleCall = AxisLevels & { feedback: string };
 
-금지: "대단해요·감동적이에요·최고예요" 같은 내용 없는 칭찬 / 부족한 점 2개 이상 지적 / 별표·샵·하이픈 등 기호`;
-
-async function runEvaluation(input: EvaluatePromptInput): Promise<EvaluatePromptOutput> {
-  const level = input.questionLevel ?? 9;
+async function runEvaluation(input: EvaluatePromptInput, band: Band): Promise<SingleCall> {
   const contentType = input.photoDataUri.split(';')[0].split(':')[1] || 'image/jpeg';
+  const prompt = `너는 초등학교 5~6학년 담임 선생님이야. 학생이 그림을 보고 쓴 한국어 프롬프트를 축별로 판정한다.
 
-  const prompt = `너는 초등학교 3~6학년 담임 선생님이야. 학생이 AI 그림을 보고 쓴 한국어 묘사를 평가한다.
-
-${buildCriteria(level)}
+${buildCriteria(band)}
 
 ${FEEDBACK_GUIDE}
 
 학생이 쓴 글: "${input.studentPrompt}"
 
-위 기준에 따라 score(정수 0~100)와 feedback(2줄 평문)을 JSON으로 반환해.`;
+각 축의 수준(1에서 5 사이의 정수)과 feedback(2줄 평문)을 JSON으로 반환해. 점수는 계산하지 마라.`;
 
   const response = await ai.generate({
-    model: 'googleai/gemini-2.5-flash',
-    output: { schema: EvaluatePromptOutputSchema },
-    prompt: [
-      { media: { url: input.photoDataUri, contentType } },
-      { text: prompt },
-    ],
+    model: 'googleai/gemini-3.8-flash',
+    output: { schema: SingleCallSchema },
+    prompt: [{ media: { url: input.photoDataUri, contentType } }, { text: prompt }],
     config: { temperature: 0.2 },
   });
 
   const out = response.output;
-  if (!out || typeof out.score !== 'number' || !out.feedback) {
+  if (!out || !out.feedback) {
     throw new Error(`AI 응답 형식 오류: ${JSON.stringify(out)?.slice(0, 200)}`);
   }
-  out.score = Math.max(0, Math.min(100, Math.round(out.score)));
-  return out;
+  return {
+    objectLevel: clampLevel(out.objectLevel),
+    specificityLevel: clampLevel(out.specificityLevel),
+    contextLevel: band === 'A' ? null : clampLevel(out.contextLevel),
+    feedback: out.feedback,
+  };
 }
 
-// 피드백에 학생 글 인용이 있는지 확인 (자기검증용)
+/** 피드백에 학생 글의 실제 표현이 인용되었는지 확인한다(자기검증). */
 function hasConcreteCitation(feedback: string, studentPrompt: string): boolean {
   const matches = [...feedback.matchAll(/['"]([^'"]{2,})['"]/g)];
-  return matches.some(m => studentPrompt.includes(m[1]));
+  return matches.some((m) => studentPrompt.includes(m[1]));
 }
 
 const evaluatePromptFlow = ai.defineFlow(
@@ -157,28 +162,75 @@ const evaluatePromptFlow = ai.defineFlow(
     inputSchema: EvaluatePromptInputSchema,
     outputSchema: EvaluatePromptOutputSchema,
   },
-  async (input) => {
+  async (input): Promise<EvaluatePromptOutput> => {
+    const band = bandOf(input.questionLevel ?? 1);
+    const missingResult = (msg: string): EvaluatePromptOutput => ({
+      score: 0,
+      feedback: msg,
+      band,
+      levels: { objectLevel: 1, specificityLevel: 1, contextLevel: null },
+      axisScores: { object: 0, specificity: 0, context: null },
+      calls: [],
+      extraCall: false,
+      missing: true,
+    });
+
+    // 실패한 호출에 한하여 1회 재시도한다.
+    const callOnce = async (): Promise<SingleCall> => {
+      try {
+        return await runEvaluation(input, band);
+      } catch {
+        return await runEvaluation(input, band);
+      }
+    };
+
     try {
-      const first = await runEvaluation(input);
+      // 운영 채점 1회 = 독립 2회 병렬 호출
+      const settled = await Promise.allSettled([callOnce(), callOnce()]);
+      const ok = settled
+        .filter((s): s is PromiseFulfilledResult<SingleCall> => s.status === 'fulfilled')
+        .map((s) => s.value);
+      if (ok.length < 2) {
+        return missingResult('(채점 실패: 필수 호출이 완료되지 않았습니다)');
+      }
 
-      // 자기검증 루프: 피드백이 인용 없이 추상적이면 1회 재평가
-      const ok = hasConcreteCitation(first.feedback, input.studentPrompt)
-               || input.studentPrompt.trim().length < 8;
+      const calls: AxisLevels[] = ok.map(({ feedback, ...lv }) => lv);
+      let extraCall = false;
 
-      if (!ok) {
+      if (!withinOneLevel(calls[0], calls[1])) {
+        // 한 축이라도 1수준을 넘게 벌어지면 세 번째 호출 후 축별 중앙값
         try {
-          const retry = await runEvaluation(input);
-          if (hasConcreteCitation(retry.feedback, input.studentPrompt)) return retry;
+          const third = await callOnce();
+          const { feedback: _unused, ...lv } = third;
+          calls.push(lv);
+          ok.push(third);
+          extraCall = true;
         } catch {
-          // 재시도 실패 → 첫 결과 반환
+          return missingResult('(채점 실패: 추가 호출이 완료되지 않았습니다)');
         }
       }
 
-      return first;
+      const levels = combine(calls, extraCall);
+      const s = toScores(levels, band);
+
+      // 피드백은 학생 글을 실제로 인용한 호출을 우선 채택한다.
+      const cited = ok.find((c) => hasConcreteCitation(c.feedback, input.studentPrompt));
+      const feedback = (cited ?? ok[0]).feedback;
+
+      return {
+        score: s.total,
+        feedback,
+        band,
+        levels,
+        axisScores: { object: s.object, specificity: s.specificity, context: s.context },
+        calls,
+        extraCall,
+        missing: false,
+      };
     } catch (error: any) {
       const msg = error?.message ?? String(error);
       console.error('[evaluatePromptFlow] 실패:', msg);
-      return { score: 0, feedback: `(⚠️ AI 평가 실패: ${msg.slice(0, 120)})` };
+      return missingResult(`(AI 평가 실패: ${msg.slice(0, 120)})`);
     }
   }
 );

@@ -6,7 +6,7 @@
  * 교육학적 적절성 / 채점 공정성 / 피드백 품질 / 문제 난이도 / 이미지 프롬프트 편향을
  * 자동으로 검토하고 개선안을 제시합니다.
  *
- * 모델: gemini-2.5-flash (비용 절감)
+ * 모델: gemini-3.8-flash (비용 절감)
  * 실제 데이터(학생 제출물)가 있으면 패턴 분석까지 수행합니다.
  */
 
@@ -114,7 +114,7 @@ findings는 severity 순(즉시수정 → 개선권장 → 양호)으로 정렬�
 
     try {
       const response = await ai.generate({
-        model: 'googleai/gemini-2.5-flash',
+        model: 'googleai/gemini-3.8-flash',
         output: { schema: AuditOutputSchema },
         prompt,
         config: { temperature: 0.3 },
@@ -126,7 +126,7 @@ findings는 severity 순(즉시수정 → 개선권장 → 양호)으로 정렬�
     } catch (error: any) {
       console.error('[auditAgentFlow] 실패:', error?.message);
       return {
-        overallGrade: 'C',
+        overallGrade: 'C' as const,
         overallComment: `감수 에이전트 실행 실패: ${error?.message?.slice(0, 100)}`,
         findings: [],
         topPriority: '에이전트 오류를 확인하세요.',

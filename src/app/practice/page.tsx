@@ -5,10 +5,8 @@ import { useState, useTransition, useMemo, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { evaluatePrompt, type EvaluatePromptOutput } from '@/ai/flows/evaluate-prompt';
-import { generateImage } from '@/ai/flows/generate-image';
 import { useFirestore } from '@/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { buildImagePrompt } from '@/lib/image-prompt';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -26,22 +24,189 @@ import { Progress } from '@/components/ui/progress';
 //   7~8단계  — 배경 첫 등장 (단색)
 //   9~11단계 — 배경 + 2~3가지 요소
 //   12~15단계— 복합 씬 (여러 요소 + 분위기)
+// 문항 이미지는 사전에 제작·검수한 정적 파일이다. sourcePrompt는 그 이미지를 생성할 때
+// 사용한 원 프롬프트로, 연구 자료로만 기록하며 학습자에게는 노출하지 않는다.
 const questions = [
-  { level: 1,  koreanTitle: '혀 내민 하얀 강아지',          dataAiHint: 'a small white fluffy puppy sitting, tongue out, plain pure white background, no collar, no accessories, no objects except the puppy', rubric: '이 그림을 한 번도 못 본 친구에게 문자로 보낸다면?\n\n색깔은 어떤지, 어떤 자세인지, 어떤 느낌인지 생각나는 대로 써봐요.\n더 자세히 쓸수록 AI가 똑같은 그림을 만들 수 있어요!' },
-  { level: 2,  koreanTitle: '초록 꼭지 달린 빨간 사과',      dataAiHint: 'a shiny red apple with a short green stem and one small green leaf, centered on plain pure white background, no other objects', rubric: '이 물건을 눈 감고 머릿속으로 떠올릴 수 있게 설명해봐요.\n\n색깔, 모양, 크기, 어떤 특징이 있는지... 단어를 많이 쓸수록 좋아요!' },
-  { level: 3,  koreanTitle: '정면을 바라보는 해바라기',       dataAiHint: 'a single bright yellow sunflower facing forward, thick green stem, plain pure white background, no other flowers, no vase', rubric: '꽃집 주인이 되어 이 꽃을 소개하는 설명을 써봐요.\n\n꽃 색깔, 잎 색깔, 크기, 어떤 방향을 향하는지, 어떤 느낌인지... 꽃을 처음 보는 손님도 바로 알 수 있게!' },
-  { level: 4,  koreanTitle: '파란 눈의 은빛 로봇',           dataAiHint: 'a gray humanoid robot with a square silver head, two round blue glowing eyes, rectangular body, standing straight with arms at sides, plain pure white background, no weapons', rubric: '로봇 설계 도면을 글로 그려봐요!\n\n머리 모양, 몸 색깔, 눈 색깔, 팔과 다리 모양, 자세... 부품 하나하나를 써줄수록 정확한 로봇이 만들어져요.' },
-  { level: 5,  koreanTitle: '살아 움직이는 초코칩 쿠키',     dataAiHint: 'a round brown chocolate chip cookie character with two large round white cartoon eyes and a big smiling mouth, two short stick arms and two short stick legs, standing pose, plain pure white background', rubric: '이 캐릭터의 프로필을 써봐요!\n\n어떤 음식이 살아났는지, 색깔·모양, 표정, 팔다리는 어떻게 생겼는지... 더 많이 써줄수록 생생한 캐릭터가 나와요.' },
-  { level: 6,  koreanTitle: '마이크 잡고 노래하는 흰 고양이', dataAiHint: 'a white cat standing upright on two legs, holding a round black microphone with one paw, mouth open wide singing, plain pure white background, no stage, no crowd', rubric: '음악 방송 해설자가 되어 이 장면을 중계해봐요!\n\n어떤 동물인지, 색깔, 어떤 자세로 서 있는지, 손에 뭘 들고 있는지, 어떤 행동을 하는지... 생생하게 전달해봐요.' },
-  { level: 7,  koreanTitle: '하늘색 배경에 날개 달린 분홍 돼지', dataAiHint: 'a pink cartoon pig with two small round white feathered wings on its back, hovering in midair with a big happy smile, solid light sky-blue background, no clouds, no other objects', rubric: '뉴스 기자가 되어 이 신기한 장면을 보도해봐요!\n\n어떤 동물인지, 특별한 신체 부위, 무엇을 하고 있는지, 배경 색깔과 분위기... 시청자가 그림 없이도 상상할 수 있게 써봐요.' },
-  { level: 8,  koreanTitle: '별이 가득한 밤하늘의 잠든 달',  dataAiHint: 'a yellow crescent moon shape with two closed eyes and a peaceful sleeping smile, surrounded by five small white stars, solid dark navy blue background, nothing else', rubric: '동화책의 한 페이지를 글로 써봐요!\n\n달의 모양·색깔·표정, 주변에 무엇이 있는지, 하늘 색깔, 어떤 느낌인지... 독자가 삽화 없이도 그릴 수 있게 묘사해봐요.' },
-  { level: 9,  koreanTitle: '살아 움직이는 햄버거 캐릭터',   dataAiHint: 'a hamburger with two large round white cartoon eyes and a wide open smiling mouth, two small round legs, standing upright on a simple light yellow background, no extra props', rubric: '이 캐릭터를 처음 만난 탐험가처럼 관찰 일지를 써봐요!\n\n어떤 생물인지, 눈과 표정, 몸의 모양, 어떤 자세인지, 배경은 어떤 색인지... 발견한 것 모두 기록해봐요.' },
-  { level: 10, koreanTitle: '안개 낀 초원의 황금뿔 유니콘',  dataAiHint: 'a white horse with a single straight golden horn on its forehead and a long rainbow-colored mane and tail, standing still in a misty light green meadow, soft golden sunlight from above, no riders, no fairies', rubric: '마법의 생물을 목격한 탐험가의 보고서를 써봐요!\n\n어떤 동물인지, 특별한 부위, 털과 갈기 색깔, 어디에 있는지, 어떤 빛·분위기인지... 믿기 어려운 목격담을 자세히 써봐요.' },
-  { level: 11, koreanTitle: '마법사 고양이와 빛나는 마법 책', dataAiHint: 'a small orange tabby cat wearing a purple wizard hat and robe, sitting at a wooden desk, holding a wooden wand, a glowing purple open spell book on the desk, simple gray stone wall background behind', rubric: '이 장면을 영화 대본처럼 묘사해봐요!\n\n등장인물이 무엇인지, 입은 옷, 하는 행동, 책상 위 소품들, 배경... 영화 감독이 그림 없이도 촬영할 수 있게 써봐요.' },
-  { level: 12, koreanTitle: '우주를 떠다니는 우주비행사',    dataAiHint: 'an astronaut in a white spacesuit floating in outer space, arms stretched out sideways, blue Earth visible in the upper left, white stars scattered on black background, one ringed planet visible in the far right distance', rubric: '우주에서 찍은 사진을 지구 관제센터에 보고하는 전문가가 되어봐요!\n\n우주비행사 복장, 자세, 배경에 보이는 천체들, 위치, 어떤 느낌인지... 빠짐없이 보고해봐요.' },
-  { level: 13, koreanTitle: '네온 빛 미래 도시의 밤거리',    dataAiHint: 'a futuristic night city viewed from street level, three flying cars with glowing blue headlights in the sky, tall skyscrapers with pink and cyan neon signs on the sides, dark sky, no people, no animals', rubric: '미래 여행 가이드북의 한 페이지를 써봐요!\n\n어떤 도시인지, 하늘에 무엇이 있는지, 건물 모양과 빛 색깔, 시간대, 전체적인 분위기... 여행자가 가고 싶어지도록 생생하게 써봐요.' },
-  { level: 14, koreanTitle: '빛나는 건물과 물고기 떼의 바닷속 도시', dataAiHint: 'an underwater ocean floor scene with round dome-shaped glowing teal buildings, a school of small colorful tropical fish swimming past in the foreground, hazy blue-green water, faint light rays coming from the surface above, no people, no submarines', rubric: '바닷속 세계를 처음 발견한 탐험가의 일기를 써봐요!\n\n어떤 건물들이 있는지, 건물 모양과 색깔, 어떤 생물들이 지나가는지, 물빛, 빛의 방향과 색... 발견한 모든 것을 기록해봐요.' },
-  { level: 15, koreanTitle: '수정 구슬이 떠 있는 마법 도서관', dataAiHint: 'a magical fantasy library interior, tall wooden bookshelves on both walls filled with colorful books, five glowing crystal orbs floating in midair at different heights, warm golden lantern light, stone floor, no people', rubric: '마법 도서관에 처음 들어선 주인공의 눈에 보이는 것을 써봐요!\n\n책장 모양과 크기, 떠 있는 빛의 색깔과 개수, 바닥 재질, 전체 공기의 느낌... 그림 속에 있는 것을 빠짐없이 묘사해봐요.' },
+  { level:  1, chasi: 1, koreanTitle: "빨간 사과 한 개", imageUrl: '/questions/L01.jpg',
+    sourcePrompt: "A single glossy red apple, stem visible. Pure flat white background. No shadow, no floor line, no background texture whatsoever. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "이 그림을 한 번도 못 본 친구에게 문자로 보낸다면?\
+\
+무엇이 있는지 이름을 정확하게 써 봐요. 그림 하나로 딱 정해지는 이름일수록 좋아요!" },
+  { level:  2, chasi: 1, koreanTitle: "접힌 노란 우산", imageUrl: '/questions/L02.jpg',
+    sourcePrompt: "A folded yellow umbrella lying flat. Pure flat white background. No shadow, no floor line, no background texture whatsoever. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "이 그림을 한 번도 못 본 친구에게 문자로 보낸다면?\
+\
+무엇이 있는지 이름을 정확하게 써 봐요. 그림 하나로 딱 정해지는 이름일수록 좋아요!" },
+  { level:  3, chasi: 1, koreanTitle: "갈색 가죽 축구공", imageUrl: '/questions/L03.jpg',
+    sourcePrompt: "A brown leather ball with visible stitched seams. Pure flat white background. No shadow, no floor line, no background texture whatsoever. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "이 그림을 한 번도 못 본 친구에게 문자로 보낸다면?\
+\
+무엇이 있는지 이름을 정확하게 써 봐요. 그림 하나로 딱 정해지는 이름일수록 좋아요!" },
+  { level:  4, chasi: 1, koreanTitle: "파란 물뿌리개", imageUrl: '/questions/L04.jpg',
+    sourcePrompt: "A blue metal watering can. Pure flat white background. No shadow, no floor line, no background texture whatsoever. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "이 그림을 한 번도 못 본 친구에게 문자로 보낸다면?\
+\
+무엇이 있는지 이름을 정확하게 써 봐요. 그림 하나로 딱 정해지는 이름일수록 좋아요!" },
+  { level:  5, chasi: 1, koreanTitle: "초록 선인장 화분", imageUrl: '/questions/L05.jpg',
+    sourcePrompt: "A small round green cactus in a terracotta pot. Pure flat white background. No shadow, no floor line, no background texture whatsoever. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "이 그림을 한 번도 못 본 친구에게 문자로 보낸다면?\
+\
+무엇이 있는지 이름을 정확하게 써 봐요. 그림 하나로 딱 정해지는 이름일수록 좋아요!" },
+  { level:  6, chasi: 1, koreanTitle: "은색 열쇠 하나", imageUrl: '/questions/L06.jpg',
+    sourcePrompt: "A single silver key. Pure flat white background. No shadow, no floor line, no background texture whatsoever. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "이 그림을 한 번도 못 본 친구에게 문자로 보낸다면?\
+\
+무엇이 있는지 이름을 정확하게 써 봐요. 그림 하나로 딱 정해지는 이름일수록 좋아요!" },
+  { level:  7, chasi: 2, koreanTitle: "크기가 다른 주황색 공 세 개", imageUrl: '/questions/L07.jpg',
+    sourcePrompt: "Three orange balls of clearly different sizes in a row. Flat single-colour pastel background with no objects in it. Only the colour suggests nothing but space. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "눈을 감고도 떠올릴 수 있게 설명해 봐요.\
+\
+색깔, 모양, 크기, 개수까지 써 주면 AI가 똑같은 그림을 만들 수 있어요!" },
+  { level:  8, chasi: 2, koreanTitle: "줄무늬 머그컵 하나", imageUrl: '/questions/L08.jpg',
+    sourcePrompt: "One mug with bold horizontal stripes. Flat single-colour pastel background with no objects in it. Only the colour suggests nothing but space. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "눈을 감고도 떠올릴 수 있게 설명해 봐요.\
+\
+색깔, 모양, 크기, 개수까지 써 주면 AI가 똑같은 그림을 만들 수 있어요!" },
+  { level:  9, chasi: 2, koreanTitle: "길쭉한 초록 병과 짧은 갈색 병", imageUrl: '/questions/L09.jpg',
+    sourcePrompt: "One tall slim green glass bottle beside one short wide brown bottle. Flat single-colour pastel background with no objects in it. Only the colour suggests nothing but space. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "눈을 감고도 떠올릴 수 있게 설명해 봐요.\
+\
+색깔, 모양, 크기, 개수까지 써 주면 AI가 똑같은 그림을 만들 수 있어요!" },
+  { level: 10, chasi: 2, koreanTitle: "별 모양 쿠키 다섯 개", imageUrl: '/questions/L10.jpg',
+    sourcePrompt: "Five yellow star-shaped cookies arranged apart from each other. Flat single-colour pastel background with no objects in it. Only the colour suggests nothing but space. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "눈을 감고도 떠올릴 수 있게 설명해 봐요.\
+\
+색깔, 모양, 크기, 개수까지 써 주면 AI가 똑같은 그림을 만들 수 있어요!" },
+  { level: 11, chasi: 2, koreanTitle: "커다란 보라색 나비 한 마리", imageUrl: '/questions/L11.jpg',
+    sourcePrompt: "One large purple butterfly with wings fully open. Flat single-colour pastel background with no objects in it. Only the colour suggests nothing but space. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "눈을 감고도 떠올릴 수 있게 설명해 봐요.\
+\
+색깔, 모양, 크기, 개수까지 써 주면 AI가 똑같은 그림을 만들 수 있어요!" },
+  { level: 12, chasi: 2, koreanTitle: "크고 작은 회색 돌 네 개", imageUrl: '/questions/L12.jpg',
+    sourcePrompt: "Four grey stones of clearly different sizes. Flat single-colour pastel background with no objects in it. Only the colour suggests nothing but space. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "눈을 감고도 떠올릴 수 있게 설명해 봐요.\
+\
+색깔, 모양, 크기, 개수까지 써 주면 AI가 똑같은 그림을 만들 수 있어요!" },
+  { level: 13, chasi: 3, koreanTitle: "잔디밭에서 뛰는 갈색 강아지", imageUrl: '/questions/L13.jpg',
+    sourcePrompt: "A small brown puppy running on grass, legs mid-stride. Very simple background suggesting one place, with at most two plain background shapes. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "어디에서 무엇을 하고 있는지까지 써 봐요.\
+\
+대상의 이름과 색·모양에 더해, 배경과 행동을 함께 알려 주세요." },
+  { level: 14, chasi: 3, koreanTitle: "나뭇가지에 앉은 파란 새", imageUrl: '/questions/L14.jpg',
+    sourcePrompt: "A blue bird perched on a bare branch. Very simple background suggesting one place, with at most two plain background shapes. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "어디에서 무엇을 하고 있는지까지 써 봐요.\
+\
+대상의 이름과 색·모양에 더해, 배경과 행동을 함께 알려 주세요." },
+  { level: 15, chasi: 3, koreanTitle: "헤엄치는 주황색 물고기", imageUrl: '/questions/L15.jpg',
+    sourcePrompt: "An orange fish swimming underwater, fins spread. Very simple background suggesting one place, with at most two plain background shapes. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "어디에서 무엇을 하고 있는지까지 써 봐요.\
+\
+대상의 이름과 색·모양에 더해, 배경과 행동을 함께 알려 주세요." },
+  { level: 16, chasi: 3, koreanTitle: "책상에 앉아 책을 읽는 아이", imageUrl: '/questions/L16.jpg',
+    sourcePrompt: "A child sitting at a desk reading an open book. Very simple background suggesting one place, with at most two plain background shapes. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "어디에서 무엇을 하고 있는지까지 써 봐요.\
+\
+대상의 이름과 색·모양에 더해, 배경과 행동을 함께 알려 주세요." },
+  { level: 17, chasi: 3, koreanTitle: "공중으로 뛰어오르는 회색 고양이", imageUrl: '/questions/L17.jpg',
+    sourcePrompt: "A grey cat leaping upward with front paws stretched. Very simple background suggesting one place, with at most two plain background shapes. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "어디에서 무엇을 하고 있는지까지 써 봐요.\
+\
+대상의 이름과 색·모양에 더해, 배경과 행동을 함께 알려 주세요." },
+  { level: 18, chasi: 3, koreanTitle: "우산을 쓰고 걷는 아이", imageUrl: '/questions/L18.jpg',
+    sourcePrompt: "A child walking while holding an open umbrella. Very simple background suggesting one place, with at most two plain background shapes. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "어디에서 무엇을 하고 있는지까지 써 봐요.\
+\
+대상의 이름과 색·모양에 더해, 배경과 행동을 함께 알려 주세요." },
+  { level: 19, chasi: 4, koreanTitle: "웅크리고 자는 흰 고양이", imageUrl: '/questions/L19.jpg',
+    sourcePrompt: "A fluffy white cat curled up asleep, individual fur strands visible. A simple background that clearly indicates one place with at most two plain background shapes, muted so that it does not compete with the subject's texture. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "만져 본 느낌과 자세까지 말해 봐요.\
+\
+반질반질한지 거친지, 어떤 자세인지, 배경은 어떤 곳인지 함께 써 주세요." },
+  { level: 20, chasi: 4, koreanTitle: "반질반질한 금속 주전자", imageUrl: '/questions/L20.jpg',
+    sourcePrompt: "A polished metal kettle with bright specular highlights. A simple background that clearly indicates one place with at most two plain background shapes, muted so that it does not compete with the subject's texture. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "만져 본 느낌과 자세까지 말해 봐요.\
+\
+반질반질한지 거친지, 어떤 자세인지, 배경은 어떤 곳인지 함께 써 주세요." },
+  { level: 21, chasi: 4, koreanTitle: "무릎을 굽히고 앉은 아이", imageUrl: '/questions/L21.jpg',
+    sourcePrompt: "A child crouching with knees bent and arms around the knees. A simple background that clearly indicates one place with at most two plain background shapes, muted so that it does not compete with the subject's texture. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "만져 본 느낌과 자세까지 말해 봐요.\
+\
+반질반질한지 거친지, 어떤 자세인지, 배경은 어떤 곳인지 함께 써 주세요." },
+  { level: 22, chasi: 4, koreanTitle: "거친 나무껍질의 나무 밑동", imageUrl: '/questions/L22.jpg',
+    sourcePrompt: "The base of a thick tree trunk with deeply rough bark. A simple background that clearly indicates one place with at most two plain background shapes, muted so that it does not compete with the subject's texture. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "만져 본 느낌과 자세까지 말해 봐요.\
+\
+반질반질한지 거친지, 어떤 자세인지, 배경은 어떤 곳인지 함께 써 주세요." },
+  { level: 23, chasi: 4, koreanTitle: "구겨진 종이비행기", imageUrl: '/questions/L23.jpg',
+    sourcePrompt: "A crumpled paper plane with sharp creases and folds. A simple background that clearly indicates one place with at most two plain background shapes, muted so that it does not compete with the subject's texture. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "만져 본 느낌과 자세까지 말해 봐요.\
+\
+반질반질한지 거친지, 어떤 자세인지, 배경은 어떤 곳인지 함께 써 주세요." },
+  { level: 24, chasi: 4, koreanTitle: "젖어서 축 늘어진 수건", imageUrl: '/questions/L24.jpg',
+    sourcePrompt: "A soaked towel hanging limp and heavy, dripping. A simple background that clearly indicates one place with at most two plain background shapes, muted so that it does not compete with the subject's texture. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "만져 본 느낌과 자세까지 말해 봐요.\
+\
+반질반질한지 거친지, 어떤 자세인지, 배경은 어떤 곳인지 함께 써 주세요." },
+  { level: 25, chasi: 5, koreanTitle: "노을 지는 저녁 바닷가", imageUrl: '/questions/L25.jpg',
+    sourcePrompt: "An empty seashore at sunset, warm orange sky, long shadows. Full scene background in which the time of day and the mood are unmistakable. Besides the setting itself the scene contains at most three clearly separable objects. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "언제인지, 어떤 느낌인지 담아 써 봐요.\
+\
+분위기를 쓸 때는 그림 속 무엇 때문에 그렇게 느꼈는지 근거도 함께 써 주세요." },
+  { level: 26, chasi: 5, koreanTitle: "비 오는 날 창가", imageUrl: '/questions/L26.jpg',
+    sourcePrompt: "A window with rain streaks, grey daylight outside, calm quiet mood. Full scene background in which the time of day and the mood are unmistakable. Besides the setting itself the scene contains at most three clearly separable objects. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "언제인지, 어떤 느낌인지 담아 써 봐요.\
+\
+분위기를 쓸 때는 그림 속 무엇 때문에 그렇게 느꼈는지 근거도 함께 써 주세요." },
+  { level: 27, chasi: 5, koreanTitle: "눈 내리는 밤 가로등 아래", imageUrl: '/questions/L27.jpg',
+    sourcePrompt: "A street lamp at night with snow falling through its light. Full scene background in which the time of day and the mood are unmistakable. Besides the setting itself the scene contains at most three clearly separable objects. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "언제인지, 어떤 느낌인지 담아 써 봐요.\
+\
+분위기를 쓸 때는 그림 속 무엇 때문에 그렇게 느꼈는지 근거도 함께 써 주세요." },
+  { level: 28, chasi: 5, koreanTitle: "아침 햇살이 드는 교실", imageUrl: '/questions/L28.jpg',
+    sourcePrompt: "An empty classroom with bright morning sunlight across the desks. Full scene background in which the time of day and the mood are unmistakable. Besides the setting itself the scene contains at most three clearly separable objects. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "언제인지, 어떤 느낌인지 담아 써 봐요.\
+\
+분위기를 쓸 때는 그림 속 무엇 때문에 그렇게 느꼈는지 근거도 함께 써 주세요." },
+  { level: 29, chasi: 5, koreanTitle: "안개 낀 이른 아침 숲길", imageUrl: '/questions/L29.jpg',
+    sourcePrompt: "A forest path in early morning fog, soft pale light. Full scene background in which the time of day and the mood are unmistakable. Besides the setting itself the scene contains at most three clearly separable objects. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "언제인지, 어떤 느낌인지 담아 써 봐요.\
+\
+분위기를 쓸 때는 그림 속 무엇 때문에 그렇게 느꼈는지 근거도 함께 써 주세요." },
+  { level: 30, chasi: 5, koreanTitle: "해 질 무렵 텅 빈 놀이터", imageUrl: '/questions/L30.jpg',
+    sourcePrompt: "An empty playground at dusk, swings still, lonely mood. Full scene background in which the time of day and the mood are unmistakable. Besides the setting itself the scene contains at most three clearly separable objects. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "언제인지, 어떤 느낌인지 담아 써 봐요.\
+\
+분위기를 쓸 때는 그림 속 무엇 때문에 그렇게 느꼈는지 근거도 함께 써 주세요." },
+  { level: 31, chasi: 6, koreanTitle: "저녁 공원 벤치의 아이와 강아지", imageUrl: '/questions/L31.jpg',
+    sourcePrompt: "One child sitting on a park bench reading, a dog beside, at dusk. Full scene background with a clear time of day. Around the figure there are exactly three everyday objects and nothing else; keep the scene uncluttered. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "지금까지 배운 것을 모두 넣어 써 봐요.\
+\
+무엇이 있는지, 어떻게 생겼는지, 어디에서 언제 어떤 느낌인지 — 세 가지를 빠짐없이!" },
+  { level: 32, chasi: 6, koreanTitle: "비 오는 날 우산을 나눠 쓴 두 아이", imageUrl: '/questions/L32.jpg',
+    sourcePrompt: "Two children sharing one umbrella in the rain, puddles around. Full scene background with a clear time of day. Around the figure there are exactly three everyday objects and nothing else; keep the scene uncluttered. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "지금까지 배운 것을 모두 넣어 써 봐요.\
+\
+무엇이 있는지, 어떻게 생겼는지, 어디에서 언제 어떤 느낌인지 — 세 가지를 빠짐없이!" },
+  { level: 33, chasi: 6, koreanTitle: "아침 부엌의 아이", imageUrl: '/questions/L33.jpg',
+    sourcePrompt: "One child at a kitchen table in morning light, bread and a glass of milk. Full scene background with a clear time of day. Around the figure there are exactly three everyday objects and nothing else; keep the scene uncluttered. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "지금까지 배운 것을 모두 넣어 써 봐요.\
+\
+무엇이 있는지, 어떻게 생겼는지, 어디에서 언제 어떤 느낌인지 — 세 가지를 빠짐없이!" },
+  { level: 34, chasi: 6, koreanTitle: "눈사람을 만드는 두 아이", imageUrl: '/questions/L34.jpg',
+    sourcePrompt: "Two children building a snowman on a snowy afternoon. Full scene background with a clear time of day. Around the figure there are exactly three everyday objects and nothing else; keep the scene uncluttered. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "지금까지 배운 것을 모두 넣어 써 봐요.\
+\
+무엇이 있는지, 어떻게 생겼는지, 어디에서 언제 어떤 느낌인지 — 세 가지를 빠짐없이!" },
+  { level: 35, chasi: 6, koreanTitle: "오후 도서관의 아이", imageUrl: '/questions/L35.jpg',
+    sourcePrompt: "One child choosing a book from a shelf in an afternoon library. Full scene background with a clear time of day. Around the figure there are exactly three everyday objects and nothing else; keep the scene uncluttered. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "지금까지 배운 것을 모두 넣어 써 봐요.\
+\
+무엇이 있는지, 어떻게 생겼는지, 어디에서 언제 어떤 느낌인지 — 세 가지를 빠짐없이!" },
+  { level: 36, chasi: 6, koreanTitle: "노을 지는 운동장의 아이", imageUrl: '/questions/L36.jpg',
+    sourcePrompt: "One child holding a ball on a schoolyard at sunset. Full scene background with a clear time of day. Around the figure there are exactly three everyday objects and nothing else; keep the scene uncluttered. Children's educational illustration, soft digital painting with clearly visible surface texture, even neutral lighting, simple and unambiguous composition, no text, no letters, no numbers, no logos, no brand marks, no signage, not a real identifiable person, no violence, the illustration fills the entire canvas edge to edge, no picture frame, no border, no mat, no wall behind it, not a photo of a framed painting, high detail on the main subject.",
+    rubric: "지금까지 배운 것을 모두 넣어 써 봐요.\
+\
+무엇이 있는지, 어떻게 생겼는지, 어디에서 언제 어떤 느낌인지 — 세 가지를 빠짐없이!" },
 ];
 
 export default function PracticePage() {
@@ -67,21 +232,13 @@ export default function PracticePage() {
   }, [currentQuestionIndex]);
 
   const generateNewImage = async () => {
-    setIsGeneratingImage(true);
+    // 문항 이미지는 사전에 제작·검수한 정적 파일을 사용한다.
+    // 실행 중 생성하지 않으므로 학습자에게는 검수된 이미지만 제시된다.
     setImageGenerationError(false);
-    setGeneratedImageUrl(null);
     setEvaluation(null);
     setStudentPrompt('');
-    try {
-      const imageUrl = await generateImage(currentQuestion.dataAiHint);
-      setGeneratedImageUrl(imageUrl);
-    } catch (error) {
-      console.error('Image generation failed:', error);
-      setImageGenerationError(true);
-      toast({ variant: 'destructive', title: '이미지 생성 실패', description: '잠시 후 다시 시도해주세요.' });
-    } finally {
-      setIsGeneratingImage(false);
-    }
+    setGeneratedImageUrl(currentQuestion.imageUrl);
+    setIsGeneratingImage(false);
   };
 
   const toDataURL = async (url: string): Promise<string> => {
@@ -124,10 +281,18 @@ export default function PracticePage() {
             questionIndex: currentQuestionIndex,
             questionLevel: currentQuestion.level,
             questionTitle: currentQuestion.koreanTitle,
-            originalPrompt: buildImagePrompt(currentQuestion.dataAiHint),
+            originalPrompt: currentQuestion.sourcePrompt,
             studentPrompt,
             score: result.score,
             feedback: result.feedback,
+            // 축별 자료 (논문 <표 Ⅲ-4>·<표 Ⅲ-7>) — 결합 전후를 모두 남긴다
+            band: result.band,
+            levels: result.levels,
+            axisScores: result.axisScores,
+            rawCalls: result.calls,
+            extraCall: result.extraCall,
+            missing: result.missing,
+            chasi: currentQuestion.chasi,
             createdAt: serverTimestamp(),
           }).catch((err) => console.error('연습 기록 저장 실패:', err));
         }

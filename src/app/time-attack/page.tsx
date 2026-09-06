@@ -5,6 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { evaluatePrompt, type EvaluatePromptOutput } from '@/ai/flows/evaluate-prompt';
 import { generateImage } from '@/ai/flows/generate-image';
+import { buildImagePrompt } from '@/lib/image-prompt';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -134,7 +135,12 @@ export default function TimeAttackPage() {
         if (!generatedImageUrl) throw new Error("No image");
         result = await evaluatePrompt({ studentPrompt: promptToEvaluate, photoDataUri: generatedImageUrl, questionLevel: questions[currentQuestionIndex]?.level });
       } catch (error) {
-        result = { score: 0, feedback: 'AI 평가에 실패했습니다.' };
+        result = {
+          score: 0, feedback: 'AI 평가에 실패했습니다.', band: 'A',
+          levels: { objectLevel: 1, specificityLevel: 1, contextLevel: null },
+          axisScores: { object: 0, specificity: 0, context: null },
+          calls: [], extraCall: false, missing: true,
+        };
       }
       
       const q = questions[currentQuestionIndex];

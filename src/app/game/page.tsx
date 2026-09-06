@@ -214,7 +214,7 @@ export default function GamePage() {
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
         <Card className="max-w-md w-full shadow-2xl rounded-2xl bg-card/80 backdrop-blur-sm">
           <CardHeader>
-            <CardTitle className="text-3xl font-headline text-center">게임 모드</CardTitle>
+            <CardTitle className="text-3xl font-headline text-center">도전 모드</CardTitle>
             <CardDescription className="text-center">5개의 프롬프트 챌린지에 도전하세요!</CardDescription>
           </CardHeader>
           <CardContent>

@@ -50,15 +50,16 @@ src/
     teacher/page.tsx      # 학급 코드로 결과 조회 (탭: 연습/시험)
     guide/page.tsx        # 설명 모드 (정적 콘텐츠)
   ai/
-    genkit.ts             # Genkit 초기화 (기본 모델: gemini-2.5-flash)
+    genkit.ts             # Genkit 초기화 (기본 모델: gemini-3.8-flash)
     flows/
-      evaluate-prompt.ts  # 학생 프롬프트 채점 (gemini-2.5-flash, temp 0.5)
+      evaluate-prompt.ts  # 학생 프롬프트 채점 (gemini-3.8-flash, temp 0.2, 축별 5수준)
       generate-image.ts   # 이미지 생성 (gemini-2.5-flash-image)
       suggest-prompt-improvements.ts
     tools/translate.ts
   firebase/               # 클라이언트 Firestore 훅 (useFirestore, useCollection, useDoc)
   lib/
-    image-prompt.ts       # buildImagePrompt() — 이미지 생성 풀 프롬프트 단일 진실
+    image-prompt.ts       # buildImagePrompt() — 게임·시간제한 모드 전용
+    scoring.ts            # 밴드·배점·수준 환산·결합 규칙 (논문 <표 Ⅲ-4>·<표 Ⅲ-5>·<표 Ⅲ-7>)
     school-search.ts      # NEIS Open API (서버 액션)
     utils.ts              # cn() 등
   components/
@@ -104,13 +105,23 @@ classes/
 ### 1) "원본 프롬프트"는 wrapper 포함한 풀 텍스트
 `questions[].dataAiHint`는 주제(`"a cute puppy, white background"`)일 뿐, 실제로 Gemini에 전송되는 건 `buildImagePrompt()`가 만드는 `"Generate a high-quality, detailed image of: ${subject}"`. Firestore `originalPrompt`에는 후자 저장 — 교사 대시보드에 진짜 프롬프트가 보이게.
 
-### 2) 평가 프롬프트 (evaluate-prompt.ts)
-- 모델: `gemini-2.5-flash` (1회 ~₩2). pro로 올리지 말 것 (학교 예산).
-- 점수 범위 0~100, 100점 금지 규칙 **없음** (사용자 요구로 제거됨).
-- 채점 기준 3축: **대상 / 시각 묘사 / 맥락**.
-- 피드백 강제 2줄: 단어 인용 칭찬 1줄 + 부족한 축 1개 지적 + 단어 제안 2개.
-- "대단해요/감동/최고" 같은 추상 칭찬은 금지로 명시.
-- 실패 시 catch가 점수 0 + 에러 메시지 반환 (예전 fallback 85+하드코딩 문구는 제거).
+### 2) 평가 프롬프트 (evaluate-prompt.ts) — 축별 5수준 판정
+
+논문 개정(수정본 v6)에 맞추어 **0~100 직접 채점에서 축별 5수준 판정으로 바뀌었다.**
+
+- 모델 `gemini-3.8-flash`, `temperature 0.2`.
+- 채점자(AI)는 **수준만 판정**하고 점수 환산은 `src/lib/scoring.ts`가 일괄 수행한다.
+- 밴드별 적용 축과 배점 (<표 Ⅲ-5>)
+  - **A** Lv.1~12 (1·2차시) — 대상 50 / 구체성 50, 맥락 축 미적용(`contextLevel: null`)
+  - **B** Lv.13~24 (3·4차시) — 대상 35 / 구체성 35 / 배경·행동 30
+  - **C** Lv.25~36 (5·6차시) — 대상 35 / 구체성 35 / 맥락·분위기 30
+- 축 점수 = `(수준 − 1) / 4 × 축 배점`. **중간 계산은 반올림하지 않는다.**
+- 운영 채점 1회 = **독립 2회 병렬 호출** (<표 Ⅲ-7>)
+  - 모든 적용 축 차이가 1수준 이하 → 축별 산술평균(반수준 유지)
+  - 한 축이라도 1수준 초과 → 3차 호출 후 축별 중앙값
+  - 실패 호출은 1회 재시도, 그래도 실패하면 `missing: true`로 **결측 처리**(0점 아님)
+- 피드백은 2줄 고정. 학생 글을 실제로 인용한 호출을 우선 채택한다.
+- Firestore에 `band`, `levels`, `axisScores`, `rawCalls`, `extraCall`, `missing`, `chasi`를 함께 남긴다.
 
 ### 3) 학교 검색은 NEIS Open API
 - `https://open.neis.go.kr/hub/schoolInfo` (`SCHUL_KND_SC_NM=초등학교` 필터)
@@ -137,40 +148,35 @@ classes/
 - 게임/시간제한 모드는 평가 실패해도 0점으로 결과 저장됨 (Firestore에 들어감).
 - `package-lock.json` 커밋됨 — npm 사용 가정. yarn/pnpm 쓰면 lockfile 충돌.
 
-## ⚠️ 미해결: 이미지 모델이 프롬프트에 없는 요소를 자기 마음대로 추가
+## 해결됨: 이미지 모델이 프롬프트에 없는 요소를 추가하던 문제
 
-**증상**: 연습 모드 Q1 (`dataAiHint: 'a cute puppy, white background'`)에서 매번 **빨간 스카프**를 두른 강아지가 생성됨. 프롬프트엔 스카프 언급 없음.
+**증상이었던 것**: 연습 모드에서 프롬프트에 없는 빨간 스카프를 두른 강아지가 매번 생성되었다.
+학생이 정확히 묘사해도 평가 모델이 "스카프를 빠뜨렸다"고 감점할 수 있어 교육적으로 부당했다.
 
-**진단 (코드 전체 확인 완료)**:
-- 코드 어디에도 "scarf/clothing/accessory" 단어 없음 (grep 0건)
-- system prompt 없음, negative prompt 없음, Genkit 추가 instruction 없음
-- `buildImagePrompt()` 결과가 Gemini에 보내는 유일한 텍스트
-- → 원인은 **gemini-2.5-flash-image의 stylistic bias** ("cute puppy" 입력 시 학습 데이터 분포상 액세서리 자동 추가)
+**해결**: 연습 모드를 **사전 제작·검수한 정적 이미지 36장**으로 전환하였다
+(`public/questions/L01.jpg ~ L36.jpg`). 실행 중 생성을 하지 않으므로 예측 불가능한 요소가
+끼어들 여지가 없다. 이는 논문과 IRB 제출자료가 "학생에게 제시되는 그림은 사전에 검토·선별한
+고정 이미지이며 인공지능이 그 자리에서 새로 만들지 아니한다"고 진술한 내용과도 일치한다.
 
-**왜 큰 문제냐**: 학생이 "하얀 강아지"라고 정확히 묘사해도, 평가 모델은 이미지를 보면서 "빨간 스카프 빠뜨림" 식으로 감점 가능. **프롬프트에 없는 걸 못 맞춰서 학생이 점수를 잃는 구조** → 교육적으로 부당.
+각 문항의 `sourcePrompt`에 그 이미지를 생성할 때 쓴 원 프롬프트를 남겨 두었다. 연구 자료로만
+쓰며 학습자에게 노출하지 않는다. 다만 **원 프롬프트는 정답 문장이 아니다.** 이미지에 실제로
+구현되지 않은 요구는 채점 기준에서 제외한다.
 
-**해결 옵션 (사용자 결정 대기 중)**:
-1. `src/lib/image-prompt.ts` `buildImagePrompt()`에 일괄 negative constraint 추가
-   ```ts
-   return `Generate a high-quality, detailed image of: ${subject}. ` +
-          `Strictly only include what is described above. ` +
-          `No clothing, no accessories, no extra props, no added text, ` +
-          `no items not explicitly mentioned. Plain composition.`;
-   ```
-2. `src/app/practice/page.tsx` (그리고 game/time-attack도) `dataAiHint`를 더 구체화 — 게임 모드처럼 형용사·색·자세 등을 명시
-3. 둘 다 (추천)
-
-**작업 시 주의**: rubric도 같이 일치시켜야 함. 이미지가 단순해지면 rubric도 그에 맞게 단순화 (현재 rubric에 "분위기/표정" 항목이 있는데 단순 이미지면 채점 어려움).
+**남은 것**: 게임 모드와 시간제한 모드는 아직 `dataAiHint` 기반 실행 중 생성을 쓴다.
+처치 기간에는 두 모드의 접근을 차단하므로 학습자 노출은 없으나, 두 모드를 유지한다면
+같은 방식으로 정적 전환해야 문서와 일치한다.
 
 ## 자주 손볼 만한 곳
 
 | 원하는 변경 | 건드릴 파일 |
 |---|---|
 | 평가 기준·말투 조정 | `src/ai/flows/evaluate-prompt.ts` 안 프롬프트 텍스트 |
-| 연습 문제 추가/수정 | `src/app/practice/page.tsx` 상단 `questions` 배열 |
+| 연습 문항 추가/수정 | `src/app/practice/page.tsx` 상단 `questions` 배열 + `public/questions/` 이미지 |
+| 밴드·배점·환산 규칙 | `src/lib/scoring.ts` |
 | 게임 문제 변경 | `src/app/game/page.tsx` 상단 `questions` 배열 |
 | 이미지 생성 프롬프트 wrapper | `src/lib/image-prompt.ts` |
 | 모델 교체 | `src/ai/genkit.ts` + `src/ai/flows/*.ts` 각 `model:` |
+| 축별 판정 문언 | `src/ai/flows/evaluate-prompt.ts` 의 `AXIS_*` 상수 |
 | 교사 대시보드 컬럼 | `src/app/teacher/page.tsx` 의 `<Table>` |
 
 ## 복구 기록

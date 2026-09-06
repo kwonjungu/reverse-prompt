@@ -18,6 +18,34 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { SchoolPicker } from '@/components/school-picker';
 import type { SchoolMatch } from '@/lib/school-search';
 
+// ── 어휘 다양성 분석 ──────────────────────────────────────
+const DESCRIPTIVE_WORDS = new Set([
+  // 색
+  '하얀','흰','빨간','붉은','파란','푸른','노란','초록','녹색','검은','까만',
+  '분홍','보라','주황','갈색','회색','금색','은색','투명한','빛나는','반짝이는',
+  // 크기·형태
+  '작은','작고','큰','크고','높은','낮은','넓은','좁은','긴','짧은','둥근',
+  '뾰족한','납작한','평평한','가는','두꺼운','얇은','거대한','조그마한',
+  // 수량·개수
+  '많은','적은','여러','다양한',
+  // 감각·상태
+  '귀여운','예쁜','멋진','신나는','행복한','슬픈','무서운','조용한','시끄러운',
+  '밝은','어두운','화려한','단순한','복잡한','깔끔한','부드러운','딱딱한',
+  '따뜻한','차가운','빠른','느린','가벼운','무거운','날카로운','부드러운',
+  // 동작 상태 (분사형)
+  '날고있는','날아가는','뛰어가는','달리는','앉아있는','서있는','누워있는',
+  '떠있는','잠든','웃는','우는','날개달린','빛나는',
+]);
+
+function calcLexicalStats(text: string) {
+  if (!text || text.trim() === '') return { tokens: 0, types: 0, ttr: 0, descriptive: 0 };
+  const tokens = text.trim().split(/\s+/);
+  const types = new Set(tokens).size;
+  const ttr = Math.round((types / tokens.length) * 100) / 100;
+  const descriptive = tokens.filter(t => DESCRIPTIVE_WORDS.has(t)).length;
+  return { tokens: tokens.length, types, ttr, descriptive };
+}
+
 type PracticeAttempt = {
   id: string;
   attendanceNumber: string;
@@ -293,32 +321,60 @@ export default function TeacherPage() {
                             <Table>
                               <TableHeader>
                                 <TableRow>
-                                  <TableHead className="w-[80px] font-bold">차수</TableHead>
+                                  <TableHead className="w-[60px] font-bold">차수</TableHead>
                                   <TableHead className="font-bold">학생 프롬프트</TableHead>
-                                  <TableHead className="w-[80px] text-right font-bold">점수</TableHead>
+                                  <TableHead className="w-[60px] text-right font-bold">점수</TableHead>
+                                  <TableHead className="w-[52px] text-right font-bold text-xs">어절</TableHead>
+                                  <TableHead className="w-[52px] text-right font-bold text-xs">고유</TableHead>
+                                  <TableHead className="w-[52px] text-right font-bold text-xs">TTR</TableHead>
+                                  <TableHead className="w-[52px] text-right font-bold text-xs">묘사어</TableHead>
                                   <TableHead className="w-[40px] no-print"></TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {attempts.map((att, i) => (
-                                  <TableRow key={att.id}>
-                                    <TableCell className="font-bold">{i + 1}차</TableCell>
-                                    <TableCell className="whitespace-pre-wrap py-3 leading-relaxed">{att.studentPrompt}</TableCell>
-                                    <TableCell className="text-right font-black text-primary text-lg">{att.score}</TableCell>
-                                    <TableCell className="no-print">
-                                      <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        onClick={() => handleDeletePracticeAttempt(att.id)}
-                                        className="text-destructive/60 hover:bg-destructive/10 h-8 w-8"
-                                      >
-                                        <Trash2 className="h-4 w-4" />
-                                      </Button>
-                                    </TableCell>
-                                  </TableRow>
-                                ))}
+                                {attempts.map((att, i) => {
+                                  const lex = calcLexicalStats(att.studentPrompt);
+                                  return (
+                                    <TableRow key={att.id}>
+                                      <TableCell className="font-bold">{i + 1}차</TableCell>
+                                      <TableCell className="whitespace-pre-wrap py-3 leading-relaxed">{att.studentPrompt}</TableCell>
+                                      <TableCell className="text-right font-black text-primary text-lg">{att.score}</TableCell>
+                                      <TableCell className="text-right tabular-nums text-sm">{lex.tokens}</TableCell>
+                                      <TableCell className="text-right tabular-nums text-sm">{lex.types}</TableCell>
+                                      <TableCell className="text-right tabular-nums text-sm">{lex.ttr.toFixed(2)}</TableCell>
+                                      <TableCell className="text-right tabular-nums text-sm font-bold text-blue-600">{lex.descriptive}</TableCell>
+                                      <TableCell className="no-print">
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          onClick={() => handleDeletePracticeAttempt(att.id)}
+                                          className="text-destructive/60 hover:bg-destructive/10 h-8 w-8"
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </Button>
+                                      </TableCell>
+                                    </TableRow>
+                                  );
+                                })}
                               </TableBody>
                             </Table>
+                            {attempts.length > 1 && (() => {
+                              const first = calcLexicalStats(attempts[0].studentPrompt);
+                              const last = calcLexicalStats(attempts[attempts.length - 1].studentPrompt);
+                              const dTokens = last.tokens - first.tokens;
+                              const dDesc = last.descriptive - first.descriptive;
+                              const dTtr = Math.round((last.ttr - first.ttr) * 100) / 100;
+                              return (
+                                <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground border-t pt-3">
+                                  <span className="font-bold text-foreground">어휘 성장 (1차→{attempts.length}차):</span>
+                                  <span className={dTokens > 0 ? 'text-green-600 font-bold' : ''}>어절 {dTokens >= 0 ? '+' : ''}{dTokens}</span>
+                                  <span className="text-muted-foreground/40">|</span>
+                                  <span className={dDesc > 0 ? 'text-blue-600 font-bold' : ''}>묘사어 {dDesc >= 0 ? '+' : ''}{dDesc}</span>
+                                  <span className="text-muted-foreground/40">|</span>
+                                  <span className={dTtr < 0 ? 'text-orange-500' : ''}>TTR {dTtr >= 0 ? '+' : ''}{dTtr.toFixed(2)}</span>
+                                </div>
+                              );
+                            })()}
                           </div>
                         );
                       })}
@@ -355,7 +411,7 @@ export default function TeacherPage() {
                       </div>
                       <div className="flex items-center gap-6">
                         <div className="text-right">
-                          <p className="text-xs text-muted-foreground uppercase font-bold">{sub.mode === 'game' ? '게임 모드' : '시간 제한'}</p>
+                          <p className="text-xs text-muted-foreground uppercase font-bold">{sub.mode === 'game' ? '도전 모드' : '시간 제한'}</p>
                           <p className="text-3xl font-black text-primary">{Math.round(sub.averageScore)}점</p>
                         </div>
                         <Button

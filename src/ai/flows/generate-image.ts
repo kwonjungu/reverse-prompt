@@ -27,7 +27,6 @@ const generateImageFlow = ai.defineFlow(
     name: 'generateImageFlow',
     inputSchema: GenerateImageInputSchema,
     outputSchema: GenerateImageOutputSchema,
-    retries: 3,
   },
   async (promptText) => {
     try {
