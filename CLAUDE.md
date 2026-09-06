@@ -50,17 +50,16 @@ src/
     teacher/page.tsx      # 학급 코드로 결과 조회 (탭: 연습/시험)
     guide/page.tsx        # 설명 모드 (정적 콘텐츠)
   ai/
-    genkit.ts             # Genkit 초기화 (기본 모델: gemini-2.5-flash)
+    genkit.ts             # Genkit 초기화 (기본 모델: gemini-3.8-flash)
     flows/
-      evaluate-prompt.ts  # 학생 프롬프트 채점 (gemini-2.5-flash, temp 0.2, 2회 병렬 앙상블)
-      audit-agent.ts      # 감수 에이전트 (/admin에서 실행)
+      evaluate-prompt.ts  # 학생 프롬프트 채점 (gemini-3.8-flash, temp 0.2, 축별 5수준)
+      generate-image.ts   # 이미지 생성 (gemini-2.5-flash-image)
       suggest-prompt-improvements.ts
     tools/translate.ts
   firebase/               # 클라이언트 Firestore 훅 (useFirestore, useCollection, useDoc)
   lib/
-    evaluation-prompt.ts  # 채점 기준·프롬프트 단일 진실 (evaluate-prompt + admin 감수가 공유)
-    questions.ts          # 연습 문제 20개 단일 진실 (practice + admin 감수가 공유)
-    image-prompt.ts       # buildImagePrompt() — 이미지 생성 당시 프롬프트 기록용 (originalPrompt 저장에 사용)
+    image-prompt.ts       # buildImagePrompt() — 게임·시간제한 모드 전용
+    scoring.ts            # 밴드·배점·수준 환산·결합 규칙 (논문 <표 Ⅲ-4>·<표 Ⅲ-5>·<표 Ⅲ-7>)
     school-search.ts      # NEIS Open API (서버 액션)
     utils.ts              # cn() 등
   components/
@@ -106,16 +105,26 @@ classes/
 ### 1) "원본 프롬프트"는 wrapper 포함한 풀 텍스트
 `questions[].dataAiHint`는 주제(`"a cute puppy, white background"`)일 뿐, 실제로 Gemini에 전송되는 건 `buildImagePrompt()`가 만드는 `"Generate a high-quality, detailed image of: ${subject}"`. Firestore `originalPrompt`에는 후자 저장 — 교사 대시보드에 진짜 프롬프트가 보이게.
 
-### 2) 평가 프롬프트 (evaluate-prompt.ts + lib/evaluation-prompt.ts)
-- 채점 기준·프롬프트 텍스트는 **`src/lib/evaluation-prompt.ts`가 단일 진실** — evaluate-prompt.ts와 admin 감수 페이지가 같은 텍스트를 import. admin에 요약 사본 다시 만들지 말 것 (점수 밴드 불일치 사고 이력 있음).
-- 모델: `gemini-2.5-flash`, temperature 0.2. pro로 올리지 말 것 (학교 예산).
-- **앙상블 채점**: 독립 2회 병렬 호출 → 점수차 ≤12면 평균, 초과면 3차 후 중앙값. 1제출당 ~₩4 (2~3회 호출). 병렬이라 지연 시간은 1회와 동일.
-- 레벨별 기준 자동 전환: 1~6은 2축(맥락 제외), 7~8은 3축(배경 완화), 9~15는 3축 전체.
-- 점수 범위 0~100, 100점 금지 규칙 **없음** (사용자 요구로 제거됨).
-- 피드백 강제 2줄: 단어 인용 칭찬 1줄 + 부족한 축 1개 지적 + 단어 제안 2개.
-- 인용 자기검증: `hasConcreteCitation()`이 코드로 확인 (조사 붙은 인용 허용 — 끝 1글자 깎아 재대조). 실패 시 1회 재평가.
-- "대단해요/감동/최고" 같은 추상 칭찬은 금지로 명시.
-- 실패 시 catch가 점수 0 + 에러 메시지 반환 (예전 fallback 85+하드코딩 문구는 제거).
+### 2) 평가 프롬프트 (evaluate-prompt.ts) — 축별 5수준 판정
+
+논문 개정(수정본 v6)에 맞추어 **0~100 직접 채점에서 축별 5수준 판정으로 바뀌었다.**
+
+- 모델 `gemini-3.8-flash`, `temperature 0.2`.
+- 채점자(AI)는 **수준만 판정**하고 점수 환산은 `src/lib/scoring.ts`가 일괄 수행한다.
+- 밴드별 적용 축과 배점 (<표 Ⅲ-5>)
+  - **A** Lv.1~12 (1·2차시) — 대상 50 / 구체성 50, 맥락 축 미적용(`contextLevel: null`)
+  - **B** Lv.13~24 (3·4차시) — 대상 35 / 구체성 35 / 배경·행동 30
+  - **C** Lv.25~36 (5·6차시) — 대상 35 / 구체성 35 / 맥락·분위기 30
+- 축 점수 = `(수준 − 1) / 4 × 축 배점`. **중간 계산은 반올림하지 않는다.**
+- 운영 채점 1회 = **독립 2회 병렬 호출** (<표 Ⅲ-7>)
+  - 모든 적용 축 차이가 1수준 이하 → 축별 산술평균(반수준 유지)
+  - 한 축이라도 1수준 초과 → 3차 호출 후 축별 중앙값
+  - 실패 호출은 1회 재시도, 그래도 실패하면 `missing: true`로 **결측 처리**(0점 아님)
+- 피드백은 2줄 고정. 학생 글을 실제로 인용한 호출을 우선 채택한다.
+- Firestore에 `band`, `levels`, `axisScores`, `rawCalls`, `extraCall`, `missing`, `chasi`를 함께 남긴다.
+- 게임화 요소(리더보드·경험치·칭호·콤보·보스전·플래시 라운드·뱃지)는 **제거하였다.**
+  IRB 제출자료가 리더보드를 처치 오염 요인으로 명시하고 있고, 뱃지와 경험치가 처치 모드인
+  연습 모드에까지 들어가 있었기 때문이다. 후속 연구에서 별도 설계로 검증할 대상이다.
 
 ### 3) 학교 검색은 NEIS Open API
 - `https://open.neis.go.kr/hub/schoolInfo` (`SCHUL_KND_SC_NM=초등학교` 필터)
@@ -142,52 +151,35 @@ classes/
 - 게임/시간제한 모드는 평가 실패해도 0점으로 결과 저장됨 (Firestore에 들어감).
 - `package-lock.json` 커밋됨 — npm 사용 가정. yarn/pnpm 쓰면 lockfile 충돌.
 
-## 이미지 사전 생성 정책 (런타임 생성 제거됨)
+## 해결됨: 이미지 모델이 프롬프트에 없는 요소를 추가하던 문제
 
-- **모든 문제 이미지는 정적 파일** `public/questions/*.jpg` (연습 practice-01~20, 게임 game-01~10, 타임어택 ta-01~08 중 ta-03은 game-05 공유, 가이드 guide-example). 런타임 이미지 생성 코드(`generate-image.ts`)는 삭제됨.
-- 생성: `GEMINI_API_KEY=... node scripts/generate-question-images.mjs` — **Batch API**($0.0195/장, 실시간의 반값)로 일괄 생성, 이미 존재하는 파일은 자동 건너뜀. 25장 기준 약 2~3분 소요.
-- 생성 직후 PNG(장당 ~1.5MB)를 JPEG q85(~140KB)로 압축해서 커밋:
-  ```powershell
-  # PowerShell (System.Drawing) — png → jpg 변환 후 png 삭제
-  Add-Type -AssemblyName System.Drawing; <# CLAUDE 세션 로그 2026-07-19 참고 #>
-  ```
-- 문제 추가/수정 절차: ① `src/lib/questions.ts`(연습) 또는 game/time-attack page.tsx의 배열 수정 → ② `scripts/generate-question-images.mjs`의 ITEMS에 같은 힌트 추가 → ③ 스크립트 실행 → ④ jpg 압축 → ⑤ 페이지의 imageUrl 매핑 확인.
-- 효과: 수업 중 AI 비용이 채점만 남음 (차시당 ~₩700, 기존 ~₩9,000). 이미지가 고정이라 학생 간 채점 형평성도 개선.
-- 타임어택 기준 점수: **평균 80점 이상 통과** (`PASS_SCORE`), Firestore에 `passed`/`passScore` 저장.
+**증상이었던 것**: 연습 모드에서 프롬프트에 없는 빨간 스카프를 두른 강아지가 매번 생성되었다.
+학생이 정확히 묘사해도 평가 모델이 "스카프를 빠뜨렸다"고 감점할 수 있어 교육적으로 부당했다.
 
-## 게임 요소 (2026-07-19 추가)
+**해결**: 연습 모드를 **사전 제작·검수한 정적 이미지 36장**으로 전환하였다
+(`public/questions/L01.jpg ~ L36.jpg`, 문항 정의는 `src/lib/questions.ts`). 실행 중 생성을 하지 않으므로 예측 불가능한 요소가
+끼어들 여지가 없다. 이는 논문과 IRB 제출자료가 "학생에게 제시되는 그림은 사전에 검토·선별한
+고정 이미지이며 인공지능이 그 자리에서 새로 만들지 아니한다"고 진술한 내용과도 일치한다.
 
-| 요소 | 위치 | 핵심 |
-|---|---|---|
-| 축별 뱃지 | `lib/badges.ts` + 채점 출력 `strongestAxis` | 🔎관찰/🎨디테일/🌟분위기 마스터. enum·프롬프트·매핑 삼중 일치 필수 |
-| 콤보 | game·time-attack의 `deriveCombo()` | 80점 연속, results 배열에서 파생(별도 state 없음) |
-| 플래시 라운드 | game `FLASH_SECONDS` | 세션당 1문제 랜덤, 10초 관찰 후 가림. `isFlash` 저장 |
-| 리더보드 | game 결과 화면 | orderBy createdAt+limit 50 후 클라이언트 필터(복합 인덱스 회피) |
-| XP·칭호 | `lib/xp.ts` + `classes/{code}/students/{번호}` | 연습은 절반, 견습생→마스터 5단계. increment+merge |
-| 보스전 | game `BOSS_QUESTION` (practice-20.jpg 재사용) | 90점 클리어, +50 XP 보너스. 세션 doc은 5문제 완료 시 즉시 저장, 보스 결과는 updateDoc으로 `boss` 필드 갱신 (이탈해도 기록 보존) |
+각 문항의 `sourcePrompt`에 그 이미지를 생성할 때 쓴 원 프롬프트를 남겨 두었다. 연구 자료로만
+쓰며 학습자에게 노출하지 않는다. 다만 **원 프롬프트는 정답 문장이 아니다.** 이미지에 실제로
+구현되지 않은 요구는 채점 기준에서 제외한다.
 
-submissions doc 추가 필드: `maxCombo`, `boss: {attempted, score, cleared}`, results[].`strongestAxis`(null 가능)·`isFlash`(game만).
-
-## ✅ 해결됨: 이미지 모델이 프롬프트에 없는 요소를 자기 마음대로 추가 (빨간 스카프 문제)
-
-**증상이었던 것**: 연습 모드 Q1에서 매번 빨간 스카프를 두른 강아지가 생성됨 → 학생이 프롬프트에 없는 요소를 못 맞춰 부당 감점되는 구조.
-
-**적용된 해결 (옵션 3 = 둘 다)**:
-1. `buildImagePrompt()`에 negative constraint 일괄 추가 ("Do NOT add clothing, accessories, scarves..." — `src/lib/image-prompt.ts`)
-2. `dataAiHint` 전면 구체화 — "no collar, no accessories" 수준까지 명시 (practice/game/time-attack)
-
-재발 시: 해당 문제의 `dataAiHint`에 개별 negative 항목 추가가 1차 조치.
+**남은 것**: 게임 모드와 시간제한 모드는 아직 `dataAiHint` 기반 실행 중 생성을 쓴다.
+처치 기간에는 두 모드의 접근을 차단하므로 학습자 노출은 없으나, 두 모드를 유지한다면
+같은 방식으로 정적 전환해야 문서와 일치한다.
 
 ## 자주 손볼 만한 곳
 
 | 원하는 변경 | 건드릴 파일 |
 |---|---|
-| 평가 기준·말투 조정 | `src/lib/evaluation-prompt.ts` (admin 감수에도 자동 반영) |
-| 연습 문제 추가/수정 | `src/lib/questions.ts` + 이미지 재생성 (위 절차) |
-| 게임/타임어택 문제 변경 | `src/app/game/page.tsx`·`time-attack/page.tsx` 상단 배열 + 이미지 재생성 |
-| 문제 이미지 재생성 | `scripts/generate-question-images.mjs` |
-| 타임어택 기준 점수 | `src/app/time-attack/page.tsx`의 `PASS_SCORE` |
+| 채점 문언 조정 | `src/lib/evaluation-prompt.ts` (채점·감수가 공유하는 단일 진실) |
+| 연습 문항 추가/수정 | `src/lib/questions.ts` + `public/questions/L01~L36.jpg` |
+| 밴드·배점·환산 규칙 | `src/lib/scoring.ts` |
+| 게임 문제 변경 | `src/app/game/page.tsx` 상단 `questions` 배열 |
+| 이미지 생성 프롬프트 wrapper | `src/lib/image-prompt.ts` |
 | 모델 교체 | `src/ai/genkit.ts` + `src/ai/flows/*.ts` 각 `model:` |
+| 축별 판정 문언 | `src/lib/evaluation-prompt.ts` 의 `AXIS_*` 상수 |
 | 교사 대시보드 컬럼 | `src/app/teacher/page.tsx` 의 `<Table>` |
 
 ## 복구 기록

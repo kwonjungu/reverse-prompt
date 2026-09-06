@@ -16,9 +16,8 @@ import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Slider } from '@/components/ui/slider';
-import { collection, addDoc, doc, serverTimestamp, setDoc, increment } from 'firebase/firestore';
-import { useFirestore, useDoc } from '@/firebase';
-import { sessionXp, getTitle, getNextLevelInfo } from '@/lib/xp';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { useFirestore } from '@/firebase';
 
 const allQuestions = [
   {
@@ -80,23 +79,6 @@ const PASS_SCORE = 80;
 type GameState = 'setup' | 'playing' | 'results';
 type Result = EvaluatePromptOutput & { questionIndex: number; questionLevel: number; koreanTitle: string; studentPrompt: string; originalPrompt: string; };
 
-// results 배열에서 콤보를 파생 (기준점은 PASS_SCORE 재사용).
-// currentCombo: 배열 끝에서부터 연속으로 PASS_SCORE 이상인 개수
-// maxCombo: 전체 스캔 중 나온 최대 연속 개수
-function deriveCombo(results: Result[]): { currentCombo: number; maxCombo: number } {
-  let maxCombo = 0;
-  let run = 0;
-  for (const r of results) {
-    if (r.score >= PASS_SCORE) {
-      run += 1;
-      if (run > maxCombo) maxCombo = run;
-    } else {
-      run = 0;
-    }
-  }
-  return { currentCombo: run, maxCombo };
-}
-
 export default function TimeAttackPage() {
   const db = useFirestore();
   const [gameState, setGameState] = useState<GameState>('setup');
@@ -110,26 +92,9 @@ export default function TimeAttackPage() {
   const [timeLeft, setTimeLeft] = useState(timeLimit);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 학생 식별자 (없으면 XP 저장·표시 스킵)
-  const [classCode, setClassCode] = useState<string | null>(null);
-  const [attendanceNumber, setAttendanceNumber] = useState<string | null>(null);
-  // 이번 세션 획득 XP (결과 화면 표시용)
-  const [earnedXp, setEarnedXp] = useState(0);
-
   const { toast } = useToast();
   const isPending = isEvaluating;
   const currentQuestion = useMemo(() => questions[currentQuestionIndex], [questions, currentQuestionIndex]);
-  const { currentCombo, maxCombo } = useMemo(() => deriveCombo(results), [results]);
-
-  // 학생 XP 문서 실시간 구독 (없으면 null). 훅은 조기 return 위에서 호출.
-  const studentDocRef = useMemo(() => {
-    if (!db || !classCode || !attendanceNumber) return null;
-    return doc(db, 'classes', classCode, 'students', attendanceNumber);
-  }, [db, classCode, attendanceNumber]);
-  const { data: studentData } = useDoc<{ xp?: number }>(studentDocRef);
-  const currentXp = studentData?.xp ?? 0;
-  const currentTitle = getTitle(currentXp);
-  const nextLevel = getNextLevelInfo(currentXp);
 
   useEffect(() => {
     if (gameState === 'playing' && !isPending) {
@@ -157,8 +122,6 @@ export default function TimeAttackPage() {
   useEffect(() => {
     const shuffled = [...allQuestions].sort(() => 0.5 - Math.random());
     setQuestions(shuffled.slice(0, GAME_QUESTION_COUNT));
-    setClassCode(sessionStorage.getItem('classCode'));
-    setAttendanceNumber(sessionStorage.getItem('attendanceNumber'));
   }, []);
 
   const toDataURL = async (url: string): Promise<string> => {
@@ -186,7 +149,12 @@ export default function TimeAttackPage() {
         const photoDataUri = await toDataURL(questions[currentQuestionIndex].imageUrl);
         result = await evaluatePrompt({ studentPrompt: promptToEvaluate, photoDataUri, questionLevel: questions[currentQuestionIndex]?.level });
       } catch (error) {
-        result = { score: 0, feedback: 'AI 평가에 실패했습니다.' };
+        result = {
+          score: 0, feedback: 'AI 평가에 실패했습니다.', band: 'A',
+          levels: { objectLevel: 1, specificityLevel: 1, contextLevel: null },
+          axisScores: { object: 0, specificity: 0, context: null },
+          calls: [], extraCall: false, missing: true,
+        };
       }
       
       const q = questions[currentQuestionIndex];
@@ -216,31 +184,11 @@ export default function TimeAttackPage() {
 
     const averageScore = finalResults.reduce((acc, r) => acc + r.score, 0) / finalResults.length;
 
-    // 세션 총 XP = 문제당 score 합산. 결과 화면 표시용으로 state에도 기록.
-    const totalXp = sessionXp(finalResults.map((r) => r.score));
-    setEarnedXp(totalXp);
-    if (totalXp > 0) {
-      setDoc(
-        doc(db, 'classes', classCode, 'students', attendanceNumber),
-        { xp: increment(totalXp), updatedAt: serverTimestamp() },
-        { merge: true }
-      ).catch((err) => console.error('XP 저장 실패:', err));
-    }
-
-    // Firestore는 배열 원소의 undefined 필드를 거부 → strongestAxis는 없으면 null로 정규화
-    const sanitizedResults = finalResults.map((r) => ({
-      ...r,
-      strongestAxis: r.strongestAxis ?? null,
-    }));
-
-    const { maxCombo } = deriveCombo(finalResults);
-
     addDoc(collection(db, 'classes', classCode, 'submissions'), {
       attendanceNumber,
       nickname,
-      results: sanitizedResults,
+      results: finalResults,
       averageScore,
-      maxCombo,
       passScore: PASS_SCORE,
       passed: Math.round(averageScore) >= PASS_SCORE,
       mode: 'time-attack',
@@ -303,32 +251,7 @@ export default function TimeAttackPage() {
                 <div className={`p-10 rounded-2xl border-2 ${passed ? 'bg-muted/50 border-primary/10' : 'bg-destructive/5 border-destructive/10'}`}>
                     <p className="text-muted-foreground text-xl">최종 평균 점수 (기준 {PASS_SCORE}점)</p>
                     <p className={`text-8xl font-black mt-2 ${passed ? 'text-primary' : 'text-destructive'}`}>{Math.round(averageScore)}점</p>
-                    {maxCombo >= 2 && (
-                      <p className="text-2xl font-bold text-orange-500 mt-4 animate-in fade-in zoom-in">
-                        🔥 최대 {maxCombo}연속 {PASS_SCORE}점 돌파!
-                      </p>
-                    )}
                 </div>
-                {studentDocRef && (
-                  <div className="bg-gradient-to-br from-primary/10 to-accent/20 p-6 rounded-xl border-2 border-primary/20 space-y-3">
-                    <p className="text-2xl font-bold text-primary animate-in fade-in zoom-in">
-                      +{earnedXp.toLocaleString()} XP 획득!
-                    </p>
-                    <p className="text-lg font-semibold">
-                      {currentTitle.name} · 총 {currentXp.toLocaleString()} XP
-                    </p>
-                    {nextLevel ? (
-                      <div className="max-w-md mx-auto space-y-1">
-                        <Progress value={nextLevel.progressPercent} className="h-3" />
-                        <p className="text-sm text-muted-foreground">
-                          다음 칭호 <b>{nextLevel.nextTitle}</b>까지 {nextLevel.remaining.toLocaleString()} XP
-                        </p>
-                      </div>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">최고 칭호에 도달했어요! 🎉</p>
-                    )}
-                  </div>
-                )}
                 <p className="text-xl">
                   {passed
                     ? `기준 점수 ${PASS_SCORE}점을 넘었어요! 결과가 선생님께 자동으로 전송되었습니다.`
@@ -355,11 +278,6 @@ export default function TimeAttackPage() {
             <div className="flex items-center gap-4 text-2xl font-black">
                 <Timer className="h-8 w-8 text-primary" />
                 <span className={timeLeft <= 5 ? "text-destructive animate-pulse" : "text-primary"}>{timeLeft}초</span>
-                {currentCombo >= 2 && (
-                  <span key={currentCombo} className="text-orange-500 text-lg animate-in fade-in zoom-in duration-300">
-                    🔥 {currentCombo}연속!
-                  </span>
-                )}
             </div>
             <h2 className="font-bold text-lg">{nickname}님 ({currentQuestionIndex + 1}/{GAME_QUESTION_COUNT}) · 목표 {PASS_SCORE}점</h2>
        </header>

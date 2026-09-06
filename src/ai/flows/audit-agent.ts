@@ -16,7 +16,9 @@ import { z } from 'genkit';
 // ── 입력 스키마 ──────────────────────────────────────────
 const QuestionSchema = z.object({
   level: z.number(),
-  dataAiHint: z.string(),
+  chasi: z.number(),
+  koreanTitle: z.string(),
+  sourcePrompt: z.string(),
   rubric: z.string(),
 });
 
@@ -85,12 +87,12 @@ const auditFlow = ai.defineFlow(
 너는 초등교육 전문가이자 AI 시스템 품질 감수관이야.
 아래 promptgrader 프로젝트의 구성 요소를 교육학적 관점에서 꼼꼼히 감수하고 JSON으로 보고해.
 
-대상: 초등학교 3~6학년 / AI 프롬프트 엔지니어링 학습 앱
+대상: 초등학교 5~6학년 / 역프롬프트 학습 시스템
 
 ──────────────────────────────────────────
-[1] 연습 문제 ${input.questions.length}개 (level / dataAiHint / rubric)
+[1] 연습 문항 ${input.questions.length}개 (level / 차시 / 제목 / 이미지 원 프롬프트 / 안내문)
 ${input.questions.map(q =>
-  `  Lv.${q.level}: hint="${q.dataAiHint.slice(0, 80)}..." | rubric="${q.rubric.slice(0, 60)}..."`
+  `  Lv.${q.level}(${q.chasi}차시) ${q.koreanTitle}: src="${q.sourcePrompt.slice(0, 80)}..." | 안내="${q.rubric.slice(0, 60)}..."`
 ).join('\n')}
 
 [2] 채점 AI 시스템 프롬프트
@@ -114,7 +116,7 @@ findings는 severity 순(즉시수정 → 개선권장 → 양호)으로 정렬�
 
     try {
       const response = await ai.generate({
-        model: 'googleai/gemini-2.5-flash',
+        model: 'googleai/gemini-3.8-flash',
         output: { schema: AuditOutputSchema },
         prompt,
         config: { temperature: 0.3 },

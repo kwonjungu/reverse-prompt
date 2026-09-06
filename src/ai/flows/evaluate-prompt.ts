@@ -1,35 +1,57 @@
 'use server';
 
 /**
- * @fileOverview 학생 프롬프트 평가 — 교육학적 근거 기반 채점
+ * @fileOverview 학생 프롬프트 평가 — 축별 5수준 판정과 운영 채점 결합
  *
- * 채점 기준·프롬프트 텍스트는 src/lib/evaluation-prompt.ts (단일 진실 공급원 —
- * admin 감수 페이지와 공유. 이론적 배경 주석도 그쪽에).
+ * 논문 대응:
+ *  <표 Ⅲ-4> AI·교사 공통 5수준 루브릭과 환산 규칙
+ *  <표 Ⅲ-5> 밴드 전환의 확정 명세
+ *  <표 Ⅲ-7> 운영 채점 1회의 결합 규칙
  *
- * 모델: gemini-2.5-flash (기본 2회 병렬 채점, 1제출당 약 ₩4)
- * 객관성 장치:
- *  - 독립 2회 병렬 채점 → 점수차 12점 이하면 평균, 초과면 3차 채점 후 중앙값
- *  - 피드백 인용 자기검증 (학생 글 실제 단어 인용 여부를 코드로 확인, 조사 허용)
+ * 채점자는 수준만 판정하고 점수 환산은 코드가 일괄 수행한다.
+ * 모델: gemini-3.8-flash (단가는 착수 시점에 재확인)
  */
 
 import { ai } from '@/ai/genkit';
 import { z } from 'genkit';
+import {
+  bandOf, toScores, clampLevel, withinOneLevel, combine,
+  type Band, type AxisLevels,
+} from '@/lib/scoring';
 import { buildEvaluationPrompt } from '@/lib/evaluation-prompt';
 
 const EvaluatePromptInputSchema = z.object({
   photoDataUri: z.string().describe('이미지 데이터 URI'),
   studentPrompt: z.string().describe('학생이 작성한 한국어 프롬프트'),
-  questionLevel: z.number().optional().describe('문제 난이도 레벨 (1~15)'),
+  questionLevel: z.number().optional().describe('문항 레벨 1~36'),
 });
 export type EvaluatePromptInput = z.infer<typeof EvaluatePromptInputSchema>;
 
+/** 축별 수준(1~5). 맥락 축은 A밴드에서 적용하지 않으므로 null이 될 수 있다. */
+const AxisLevelsSchema = z.object({
+  objectLevel: z.number().describe('대상 완전성 수준 1~5'),
+  specificityLevel: z.number().describe('시각적 구체성 수준 1~5'),
+  contextLevel: z.number().nullable().describe('맥락 축 수준 1~5. A밴드에서는 null'),
+});
+
+/** 채점 모형 1회 호출의 산출 */
+const SingleCallSchema = AxisLevelsSchema.extend({
+  feedback: z.string().describe('확인 1줄 + 개선 1줄'),
+});
+
 const EvaluatePromptOutputSchema = z.object({
-  score: z.number().describe('점수 0~100'),
-  feedback: z.string().describe('칭찬 1줄 + 개선 1줄'),
-  strongestAxis: z
-    .enum(['대상', '구체성', '맥락'])
-    .optional()
-    .describe('학생이 세 채점 축 중 가장 잘한 축 (대상/명칭, 시각적 구체성, 맥락·분위기)'),
+  score: z.number().describe('환산 총점 0~100'),
+  feedback: z.string().describe('확인 1줄 + 개선 1줄'),
+  band: z.string().describe('적용 밴드 A/B/C'),
+  levels: AxisLevelsSchema.describe('결합된 축별 수준. 반수준을 유지한다'),
+  axisScores: z.object({
+    object: z.number(),
+    specificity: z.number(),
+    context: z.number().nullable(),
+  }).describe('축별 환산 점수'),
+  calls: z.array(AxisLevelsSchema).describe('호출별 원 수준. 연구 자료로 저장한다'),
+  extraCall: z.boolean().describe('세 번째 호출을 추가하였는지'),
+  missing: z.boolean().describe('결측 처리 여부'),
 });
 export type EvaluatePromptOutput = z.infer<typeof EvaluatePromptOutputSchema>;
 
@@ -37,41 +59,35 @@ export async function evaluatePrompt(input: EvaluatePromptInput): Promise<Evalua
   return evaluatePromptFlow(input);
 }
 
-// 두 채점 결과의 점수차가 이 값 이하면 "합의"로 보고 평균 사용
-const AGREEMENT_THRESHOLD = 12;
+type SingleCall = AxisLevels & { feedback: string };
 
-async function runEvaluation(input: EvaluatePromptInput): Promise<EvaluatePromptOutput> {
-  const level = input.questionLevel ?? 9;
+async function runEvaluation(input: EvaluatePromptInput, band: Band): Promise<SingleCall> {
   const contentType = input.photoDataUri.split(';')[0].split(':')[1] || 'image/jpeg';
+  const prompt = buildEvaluationPrompt(band, input.studentPrompt);
 
   const response = await ai.generate({
-    model: 'googleai/gemini-2.5-flash',
-    output: { schema: EvaluatePromptOutputSchema },
-    prompt: [
-      { media: { url: input.photoDataUri, contentType } },
-      { text: buildEvaluationPrompt(level, input.studentPrompt) },
-    ],
+    model: 'googleai/gemini-3.8-flash',
+    output: { schema: SingleCallSchema },
+    prompt: [{ media: { url: input.photoDataUri, contentType } }, { text: prompt }],
     config: { temperature: 0.2 },
   });
 
   const out = response.output;
-  if (!out || typeof out.score !== 'number' || !out.feedback) {
+  if (!out || !out.feedback) {
     throw new Error(`AI 응답 형식 오류: ${JSON.stringify(out)?.slice(0, 200)}`);
   }
-  out.score = Math.max(0, Math.min(100, Math.round(out.score)));
-  return out;
+  return {
+    objectLevel: clampLevel(out.objectLevel),
+    specificityLevel: clampLevel(out.specificityLevel),
+    contextLevel: band === 'A' ? null : clampLevel(out.contextLevel),
+    feedback: out.feedback,
+  };
 }
 
-// 피드백에 학생 글 인용이 있는지 확인 (자기검증용)
-// 조사·어미가 붙어 인용된 경우("하얀색이"처럼)를 위해 끝 1글자를 깎은 재대조까지 허용
+/** 피드백에 학생 글의 실제 표현이 인용되었는지 확인한다(자기검증). */
 function hasConcreteCitation(feedback: string, studentPrompt: string): boolean {
-  const normalized = studentPrompt.replace(/\s+/g, '');
-  const matches = [...feedback.matchAll(/['"‘’“”]([^'"‘’“”]{2,})['"‘’“”]/g)];
-  return matches.some(m => {
-    const quote = m[1].replace(/\s+/g, '');
-    if (normalized.includes(quote)) return true;
-    return quote.length >= 3 && normalized.includes(quote.slice(0, -1));
-  });
+  const matches = [...feedback.matchAll(/['"]([^'"]{2,})['"]/g)];
+  return matches.some((m) => studentPrompt.includes(m[1]));
 }
 
 const evaluatePromptFlow = ai.defineFlow(
@@ -80,57 +96,75 @@ const evaluatePromptFlow = ai.defineFlow(
     inputSchema: EvaluatePromptInputSchema,
     outputSchema: EvaluatePromptOutputSchema,
   },
-  async (input) => {
+  async (input): Promise<EvaluatePromptOutput> => {
+    const band = bandOf(input.questionLevel ?? 1);
+    const missingResult = (msg: string): EvaluatePromptOutput => ({
+      score: 0,
+      feedback: msg,
+      band,
+      levels: { objectLevel: 1, specificityLevel: 1, contextLevel: null },
+      axisScores: { object: 0, specificity: 0, context: null },
+      calls: [],
+      extraCall: false,
+      missing: true,
+    });
+
+    // 실패한 호출에 한하여 1회 재시도한다.
+    const callOnce = async (): Promise<SingleCall> => {
+      try {
+        return await runEvaluation(input, band);
+      } catch {
+        return await runEvaluation(input, band);
+      }
+    };
+
     try {
-      // 객관성: 독립 2회 병렬 채점 (병렬이라 지연 시간은 1회와 동일)
-      const settled = await Promise.allSettled([runEvaluation(input), runEvaluation(input)]);
-      const candidates = settled
-        .filter((s): s is PromiseFulfilledResult<EvaluatePromptOutput> => s.status === 'fulfilled')
-        .map(s => s.value);
-      if (candidates.length === 0) {
-        throw (settled[0] as PromiseRejectedResult).reason;
+      // 운영 채점 1회 = 독립 2회 병렬 호출
+      const settled = await Promise.allSettled([callOnce(), callOnce()]);
+      const ok = settled
+        .filter((s): s is PromiseFulfilledResult<SingleCall> => s.status === 'fulfilled')
+        .map((s) => s.value);
+      if (ok.length < 2) {
+        return missingResult('(채점 실패: 필수 호출이 완료되지 않았습니다)');
       }
 
-      let score: number;
-      if (candidates.length === 1) {
-        score = candidates[0].score;
-      } else if (Math.abs(candidates[0].score - candidates[1].score) <= AGREEMENT_THRESHOLD) {
-        score = Math.round((candidates[0].score + candidates[1].score) / 2);
-      } else {
-        // 두 채점이 크게 불일치 → 3차 채점 후 중앙값 (이상치 1개를 자동 배제)
+      const calls: AxisLevels[] = ok.map(({ feedback, ...lv }) => lv);
+      let extraCall = false;
+
+      if (!withinOneLevel(calls[0], calls[1])) {
+        // 한 축이라도 1수준을 넘게 벌어지면 세 번째 호출 후 축별 중앙값
         try {
-          candidates.push(await runEvaluation(input));
-          score = candidates.map(c => c.score).sort((a, b) => a - b)[1];
+          const third = await callOnce();
+          const { feedback: _unused, ...lv } = third;
+          calls.push(lv);
+          ok.push(third);
+          extraCall = true;
         } catch {
-          score = Math.round((candidates[0].score + candidates[1].score) / 2);
+          return missingResult('(채점 실패: 추가 호출이 완료되지 않았습니다)');
         }
       }
 
-      // 피드백 선택: 학생 글을 실제 인용한 후보 우선, 그중 최종 점수에 가장 가까운 것
-      const tooShort = input.studentPrompt.trim().length < 8;
-      let pool = candidates.filter(c => hasConcreteCitation(c.feedback, input.studentPrompt));
-      if (pool.length === 0) {
-        if (!tooShort) {
-          // 전 후보가 추상적 피드백 → 1회 재시도
-          try {
-            const retry = await runEvaluation(input);
-            if (hasConcreteCitation(retry.feedback, input.studentPrompt)) pool = [retry];
-          } catch {
-            // 재시도 실패 → 기존 후보로 진행
-          }
-        }
-        if (pool.length === 0) pool = candidates;
-      }
-      const best = pool.reduce((p, c) =>
-        Math.abs(c.score - score) < Math.abs(p.score - score) ? c : p
-      );
+      const levels = combine(calls, extraCall);
+      const s = toScores(levels, band);
 
-      // strongestAxis는 optional — 모델이 값을 안 주면 undefined로 반환 (스키마상 허용)
-      return { score, feedback: best.feedback, strongestAxis: best.strongestAxis };
+      // 피드백은 학생 글을 실제로 인용한 호출을 우선 채택한다.
+      const cited = ok.find((c) => hasConcreteCitation(c.feedback, input.studentPrompt));
+      const feedback = (cited ?? ok[0]).feedback;
+
+      return {
+        score: s.total,
+        feedback,
+        band,
+        levels,
+        axisScores: { object: s.object, specificity: s.specificity, context: s.context },
+        calls,
+        extraCall,
+        missing: false,
+      };
     } catch (error: any) {
       const msg = error?.message ?? String(error);
       console.error('[evaluatePromptFlow] 실패:', msg);
-      return { score: 0, feedback: `(⚠️ AI 평가 실패: ${msg.slice(0, 120)})` };
+      return missingResult(`(AI 평가 실패: ${msg.slice(0, 120)})`);
     }
   }
 );

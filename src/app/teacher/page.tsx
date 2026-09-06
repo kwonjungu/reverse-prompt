@@ -17,7 +17,6 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SchoolPicker } from '@/components/school-picker';
 import type { SchoolMatch } from '@/lib/school-search';
-import { getAxisBadge } from '@/lib/badges';
 
 type PracticeAttempt = {
   id: string;
@@ -29,7 +28,6 @@ type PracticeAttempt = {
   studentPrompt: string;
   score: number;
   feedback: string;
-  strongestAxis?: string | null;
   createdAt: any;
 };
 
@@ -305,17 +303,7 @@ export default function TeacherPage() {
                                 {attempts.map((att, i) => (
                                   <TableRow key={att.id}>
                                     <TableCell className="font-bold">{i + 1}차</TableCell>
-                                    <TableCell className="whitespace-pre-wrap py-3 leading-relaxed">
-                                      {att.studentPrompt}
-                                      {(() => {
-                                        const badge = getAxisBadge(att.strongestAxis);
-                                        return badge ? (
-                                          <Badge variant="secondary" className="ml-2 align-middle text-[10px] px-1.5 py-0">
-                                            {badge.emoji} {badge.name}
-                                          </Badge>
-                                        ) : null;
-                                      })()}
-                                    </TableCell>
+                                    <TableCell className="whitespace-pre-wrap py-3 leading-relaxed">{att.studentPrompt}</TableCell>
                                     <TableCell className="text-right font-black text-primary text-lg">{att.score}</TableCell>
                                     <TableCell className="no-print">
                                       <Button

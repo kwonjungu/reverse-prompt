@@ -16,7 +16,9 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ArrowLeft, Bot, AlertTriangle, CheckCircle2, Info, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 
 // 현재 시스템 설정 — 감수 에이전트에 전달할 snapshot (실제 사용 중인 문제 목록 그대로)
-const CURRENT_QUESTIONS = PRACTICE_QUESTIONS.map(({ level, dataAiHint, rubric }) => ({ level, dataAiHint, rubric }));
+const CURRENT_QUESTIONS = PRACTICE_QUESTIONS.map(({ level, chasi, koreanTitle, sourcePrompt, rubric }) => ({
+  level, chasi, koreanTitle, sourcePrompt, rubric,
+}));
 
 // 요약 사본이 아니라 실제 채점·이미지 프롬프트를 그대로 감수 대상으로 전달
 // (예전엔 손으로 쓴 요약이 실제 점수 밴드와 어긋나 있었음)

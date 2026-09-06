@@ -5,10 +5,8 @@ import { useState, useTransition, useMemo, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { evaluatePrompt, type EvaluatePromptOutput } from '@/ai/flows/evaluate-prompt';
-import { useFirestore, useDoc } from '@/firebase';
-import { collection, addDoc, doc, serverTimestamp, setDoc, increment } from 'firebase/firestore';
-import { buildImagePrompt } from '@/lib/image-prompt';
-import { practiceXp, getTitle } from '@/lib/xp';
+import { useFirestore } from '@/firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { PRACTICE_QUESTIONS } from '@/lib/questions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -20,7 +18,6 @@ import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { getAxisBadge } from '@/lib/badges';
 
 // 문제 목록은 src/lib/questions.ts가 단일 진실 (admin 감수 페이지와 공유)
 const questions = PRACTICE_QUESTIONS;
@@ -32,27 +29,8 @@ export default function PracticePage() {
   const [isEvaluating, startEvaluationTransition] = useTransition();
   // attemptCounts: questionIndex → 시도 횟수 (현재 세션 기준)
   const [attemptCounts, setAttemptCounts] = useState<Record<number, number>>({});
-  // 방금 채점으로 획득한 XP (피드백 카드에 "+N XP" 표시용). null이면 표시 안 함.
-  const [lastEarnedXp, setLastEarnedXp] = useState<number | null>(null);
   const { toast } = useToast();
   const db = useFirestore();
-
-  // 학생 식별자 (없으면 XP 저장·표시 스킵). sessionStorage는 클라이언트에서만 접근 가능.
-  const [classCode, setClassCode] = useState<string | null>(null);
-  const [attendanceNumber, setAttendanceNumber] = useState<string | null>(null);
-  useEffect(() => {
-    setClassCode(sessionStorage.getItem('classCode'));
-    setAttendanceNumber(sessionStorage.getItem('attendanceNumber'));
-  }, []);
-
-  // 학생 XP 문서 실시간 구독 (classCode/attendanceNumber 없으면 null → 구독 안 함)
-  const studentDocRef = useMemo(() => {
-    if (!db || !classCode || !attendanceNumber) return null;
-    return doc(db, 'classes', classCode, 'students', attendanceNumber);
-  }, [db, classCode, attendanceNumber]);
-  const { data: studentData } = useDoc<{ xp?: number }>(studentDocRef);
-  const currentXp = studentData?.xp ?? 0;
-  const currentTitle = getTitle(currentXp);
 
   const isPending = isEvaluating;
   const currentQuestion = questions[currentQuestionIndex];
@@ -61,7 +39,6 @@ export default function PracticePage() {
   useEffect(() => {
     setEvaluation(null);
     setStudentPrompt('');
-    setLastEarnedXp(null);
   }, [currentQuestionIndex]);
 
   const toDataURL = async (url: string): Promise<string> => {
@@ -94,33 +71,27 @@ export default function PracticePage() {
         // 시도 횟수 증가
         setAttemptCounts(prev => ({ ...prev, [currentQuestionIndex]: (prev[currentQuestionIndex] ?? 0) + 1 }));
 
-        // 획득 XP 계산 (연습은 절반). 피드백 카드에 "+N XP" 표시.
-        const earnedXp = practiceXp(result.score);
-        setLastEarnedXp(earnedXp);
-
         // Firestore 저장
-        const sc = sessionStorage.getItem('classCode');
-        const an = sessionStorage.getItem('attendanceNumber');
-        if (db && sc && an) {
-          // 누적 XP increment (score 0이면 스킵). 실패해도 학생 흐름 방해 금지.
-          if (earnedXp > 0) {
-            setDoc(
-              doc(db, 'classes', sc, 'students', an),
-              { xp: increment(earnedXp), updatedAt: serverTimestamp() },
-              { merge: true }
-            ).catch((err) => console.error('XP 저장 실패:', err));
-          }
-          addDoc(collection(db, 'classes', sc, 'practice_attempts'), {
-            attendanceNumber: an,
+        const classCode = sessionStorage.getItem('classCode');
+        const attendanceNumber = sessionStorage.getItem('attendanceNumber');
+        if (db && classCode && attendanceNumber) {
+          addDoc(collection(db, 'classes', classCode, 'practice_attempts'), {
+            attendanceNumber,
             questionIndex: currentQuestionIndex,
             questionLevel: currentQuestion.level,
             questionTitle: currentQuestion.koreanTitle,
-            originalPrompt: buildImagePrompt(currentQuestion.dataAiHint),
+            originalPrompt: currentQuestion.sourcePrompt,
             studentPrompt,
             score: result.score,
             feedback: result.feedback,
-            // Firestore는 undefined 필드를 거부하므로 값이 있을 때만 추가
-            ...(result.strongestAxis ? { strongestAxis: result.strongestAxis } : {}),
+            // 축별 자료 (논문 <표 Ⅲ-4>·<표 Ⅲ-7>) — 결합 전후를 모두 남긴다
+            chasi: currentQuestion.chasi,
+            band: result.band,
+            levels: result.levels,
+            axisScores: result.axisScores,
+            rawCalls: result.calls,
+            extraCall: result.extraCall,
+            missing: result.missing,
             createdAt: serverTimestamp(),
           }).catch((err) => console.error('연습 기록 저장 실패:', err));
         }
@@ -164,16 +135,9 @@ export default function PracticePage() {
             </Badge>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          {studentDocRef && (
-            <span className="text-xs sm:text-sm text-muted-foreground whitespace-nowrap">
-              {currentTitle.name} · {currentXp.toLocaleString()} XP
-            </span>
-          )}
-          <Link href="/" passHref>
-            <Button variant="outline" size="sm"><Home className="mr-2 h-4 w-4" />홈</Button>
-          </Link>
-        </div>
+        <Link href="/" passHref>
+          <Button variant="outline" size="sm"><Home className="mr-2 h-4 w-4" />홈</Button>
+        </Link>
       </header>
 
       <div className="px-4 pb-2">
@@ -265,22 +229,9 @@ export default function PracticePage() {
                       <p className="text-5xl font-bold text-primary">{evaluation.score}</p>
                     </div>
                     <p className="text-muted-foreground mt-2 font-semibold">/ 100점</p>
-                    {studentDocRef && lastEarnedXp !== null && (
-                      <Badge className="mt-2 bg-green-100 text-green-800 border-green-200 border text-sm px-3 py-1 hover:bg-green-100">
-                        +{lastEarnedXp} XP
-                      </Badge>
-                    )}
                   </div>
                   <div className="flex-1">
                     <h4 className="font-semibold text-lg mb-2 flex items-center gap-2"><Star className="text-yellow-400" fill="currentColor" />칭찬 및 개선점</h4>
-                    {(() => {
-                      const badge = getAxisBadge(evaluation.strongestAxis);
-                      return badge ? (
-                        <Badge variant="secondary" className="mb-2 text-sm px-3 py-1">
-                          {badge.emoji} 오늘의 칭호: {badge.name}
-                        </Badge>
-                      ) : null;
-                    })()}
                     <p className="mt-2 text-muted-foreground whitespace-pre-wrap font-body text-base leading-loose">{evaluation.feedback}</p>
                   </div>
                 </CardContent>
