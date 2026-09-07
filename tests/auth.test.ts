@@ -8,9 +8,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import {
   evaluateAccess,
   evaluateResearchCollection,
+  resolveClassAccessAction,
   routeForNonConsented,
   type ServerPrincipal,
 } from '@/server/auth/access';
@@ -292,7 +296,7 @@ const rawRecord = {
   nickname: '별명',
   phase: 'pre',
   aiScore: 56.25,
-  text: '초록 물뿌리개가 있다.',
+  text: '노란 세모 블록이 있다.',
   questionId: 'T1',
 };
 
@@ -308,12 +312,12 @@ test('교사 블라인드 자료에 시점과 AI 점수가 없다', () => {
   const view = toTeacherBlindRecord(rawRecord);
   assert.equal('phase' in view, false);
   assert.equal('aiScore' in view, false);
-  assert.equal(view.text, '초록 물뿌리개가 있다.');
+  assert.equal(view.text, '노란 세모 블록이 있다.');
 });
 
 test('모델 payload에 신원 ID가 없다', () => {
   const payload = buildModelPayload({
-    text: '초록 물뿌리개가 있다.',
+    text: '노란 세모 블록이 있다.',
     questionId: 'T1',
     band: 'A',
     cueVersion: 'v7-candidate',
@@ -326,4 +330,57 @@ test('모델 payload에 신원 ID가 없다', () => {
     'rubricVersion',
     'text',
   ]);
+});
+
+// ── 행위별 학급 접근 판정 (감사 A-4) ─────────────────────────
+
+test('행위를 밝히지 않은 학급 접근은 write로 판정한다', () => {
+  // 예전에는 requireClassAccess가 무조건 read로 판정해 연구자의 write·delete 금지
+  // 분기를 아무도 타지 않았다. 기본값을 가장 안전한 쪽으로 둔다.
+  assert.equal(resolveClassAccessAction(['teacher']), 'write');
+  assert.equal(resolveClassAccessAction([]), 'write');
+  assert.equal(resolveClassAccessAction([{ action: 'read' }, 'researcher']), 'read');
+  assert.equal(resolveClassAccessAction(['teacher', { action: 'delete' }]), 'delete');
+});
+
+test('연구자는 행위를 밝히지 않은 학급 접근에서 거부된다', () => {
+  const action = resolveClassAccessAction(['researcher']);
+  const decision = evaluateAccess(
+    researcher,
+    { scope: 'research', classResearchId: 'CLS-AAA' },
+    action
+  );
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.allowed === false && decision.reason, 'role_forbidden');
+
+  // 읽기를 명시하면 비식별 읽기는 그대로 열린다.
+  const read = evaluateAccess(
+    researcher,
+    { scope: 'research', classResearchId: 'CLS-AAA' },
+    resolveClassAccessAction([{ action: 'read' }, 'researcher'])
+  );
+  assert.deepEqual(read, { allowed: true });
+});
+
+test('교사는 행위를 밝히지 않아도 배정 학급의 쓰기가 열린다', () => {
+  const decision = evaluateAccess(
+    teacher,
+    { scope: 'research', classResearchId: 'CLS-AAA' },
+    resolveClassAccessAction(['teacher'])
+  );
+  assert.deepEqual(decision, { allowed: true });
+});
+
+test('requireClassAccess가 행위를 판정에 넘긴다', () => {
+  const source = readFileSync(path.join(process.cwd(), 'src/server/auth/index.ts'), 'utf8');
+  const from = source.indexOf('async function requireClassAccess');
+  assert.ok(from > 0);
+  const body = source.slice(from, source.indexOf('async function getConsent'));
+  assert.ok(body.includes('resolveClassAccessAction'), '행위를 해석하지 않고 있다');
+  assert.equal(
+    /\{ scope: 'research', classResearchId \},\s*'read'/.test(body),
+    false,
+    '행위를 read로 고정하고 있다'
+  );
+  assert.ok(/\{ scope: 'research', classResearchId \},\s*action/.test(body));
 });

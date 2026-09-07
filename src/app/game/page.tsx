@@ -15,8 +15,6 @@ import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { useFirestore } from '@/firebase';
 import { buildImagePrompt } from '@/lib/image-prompt';
 import { ModeGuard } from '@/components/mode-guard';
 
@@ -93,6 +91,57 @@ const allQuestions = [
 
 const GAME_QUESTION_COUNT = 5;
 
+/**
+ * 일반 체험의 진행 이력 — 이 기기에만 남는 캐시다.
+ *
+ * 새로 고쳐도 무엇을 했는지 알 수 있도록 화면 안에서 이어 주기만 한다.
+ * 권한·완료·점수의 근거로 쓰지 않는다. 서버 기록이 아니므로 지워도 그만이다.
+ */
+const PROGRESS_KEY = 'experience:game:v1';
+/** 오래된 기록으로 엉뚱하게 이어지지 않도록 반나절만 둔다. */
+const PROGRESS_TTL_MS = 12 * 60 * 60 * 1000;
+
+type GameProgress = {
+  savedAt: number;
+  nickname: string;
+  questionIds: string[];
+  currentQuestionIndex: number;
+  results: Result[];
+};
+
+function readProgress(): GameProgress | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(PROGRESS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as GameProgress;
+    if (!parsed || typeof parsed.savedAt !== 'number') return null;
+    if (Date.now() - parsed.savedAt > PROGRESS_TTL_MS) return null;
+    if (!Array.isArray(parsed.questionIds) || !Array.isArray(parsed.results)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeProgress(p: Omit<GameProgress, 'savedAt'>) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(PROGRESS_KEY, JSON.stringify({ ...p, savedAt: Date.now() }));
+  } catch {
+    // 저장 공간이 없으면 그냥 두고 화면 안에서만 이어 간다.
+  }
+}
+
+function clearProgress() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(PROGRESS_KEY);
+  } catch {
+    // 지우지 못해도 화면 동작에는 영향이 없다.
+  }
+}
+
 type GameState = 'nickname' | 'playing' | 'results';
 /**
  * 채점 결과를 화면이 쓰는 모양으로 줄인 것.
@@ -122,7 +171,6 @@ export default function GamePage() {
 }
 
 function GameModeScreen() {
-  const db = useFirestore();
   const [gameState, setGameState] = useState<GameState>('nickname');
   const [nickname, setNickname] = useState('');
   const [questions, setQuestions] = useState(allQuestions.slice(0, GAME_QUESTION_COUNT));
@@ -132,6 +180,8 @@ function GameModeScreen() {
   const [isEvaluating, startEvaluationTransition] = useTransition();
   const certificateRef = useRef<HTMLDivElement>(null);
   const [currentDate, setCurrentDate] = useState('');
+  /** 이 기기에 남아 있던 진행 이력에서 이어 왔는지. 안내 문구에만 쓴다. */
+  const [restored, setRestored] = useState(false);
 
   const { toast } = useToast();
 
@@ -139,9 +189,27 @@ function GameModeScreen() {
   const currentQuestion = useMemo(() => questions[currentQuestionIndex], [questions, currentQuestionIndex]);
 
   useEffect(() => {
+    setCurrentDate(new Date().toLocaleDateString('ko-KR'));
+
+    // 새로 고쳐도 하던 곳에서 이어지도록 이 기기의 캐시를 읽는다. 서버 기록이 아니다.
+    const saved = readProgress();
+    const restoredQuestions = saved
+      ? saved.questionIds
+          .map((id) => allQuestions.find((q) => q.questionId === id))
+          .filter((q): q is (typeof allQuestions)[number] => Boolean(q))
+      : [];
+    if (saved && restoredQuestions.length === GAME_QUESTION_COUNT && saved.nickname) {
+      setQuestions(restoredQuestions);
+      setNickname(saved.nickname);
+      setResults(saved.results);
+      setCurrentQuestionIndex(Math.min(saved.currentQuestionIndex, GAME_QUESTION_COUNT - 1));
+      setGameState(saved.results.length >= GAME_QUESTION_COUNT ? 'results' : 'playing');
+      setRestored(true);
+      return;
+    }
+
     const shuffled = [...allQuestions].sort(() => 0.5 - Math.random());
     setQuestions(shuffled.slice(0, GAME_QUESTION_COUNT));
-    setCurrentDate(new Date().toLocaleDateString('ko-KR'));
   }, []);
 
   useEffect(() => {
@@ -167,6 +235,10 @@ function GameModeScreen() {
       toast({ variant: "destructive", title: "닉네임을 입력해주세요!" });
       return;
     }
+    clearProgress();
+    setResults([]);
+    setCurrentQuestionIndex(0);
+    setRestored(false);
     setGameState('playing');
   };
 
@@ -192,10 +264,18 @@ function GameModeScreen() {
         }];
         setResults(newResults);
 
-        if (currentQuestionIndex < GAME_QUESTION_COUNT - 1) {
-          setCurrentQuestionIndex(prev => prev + 1);
+        const nextIndex = currentQuestionIndex + 1;
+        const finished = currentQuestionIndex >= GAME_QUESTION_COUNT - 1;
+        // 이 기기에서 이어 볼 수 있게만 남긴다. 서버에 보내지 않는다.
+        writeProgress({
+          nickname,
+          questionIds: questions.map((q) => q.questionId),
+          currentQuestionIndex: finished ? currentQuestionIndex : nextIndex,
+          results: newResults,
+        });
+        if (!finished) {
+          setCurrentQuestionIndex(nextIndex);
         } else {
-          saveToFirestore(newResults);
           setGameState('results');
         }
       } catch (error) {
@@ -205,25 +285,18 @@ function GameModeScreen() {
     });
   };
 
-  const saveToFirestore = (finalResults: Result[]) => {
-    const classCode = sessionStorage.getItem('classCode');
-    const attendanceNumber = sessionStorage.getItem('attendanceNumber');
-    if (!db || !classCode || !attendanceNumber) return;
-
-    // 결측은 0점이 아니므로 평균에서 제외한다. 유효한 점수가 없으면 평균도 없다.
-    const scored = finalResults.filter((r): r is Result & { score: number } => r.score !== null);
-    const averageScore = scored.length
-      ? scored.reduce((acc, r) => acc + r.score, 0) / scored.length
-      : null;
-
-    addDoc(collection(db, 'classes', classCode, 'submissions'), {
-      attendanceNumber,
-      nickname,
-      results: finalResults,
-      averageScore,
-      mode: 'game',
-      createdAt: serverTimestamp()
-    });
+  /**
+   * 처음부터 다시 — 이 기기에 남은 진행 이력을 지우고 닉네임 화면으로 돌아간다.
+   */
+  const restartFromScratch = () => {
+    clearProgress();
+    setResults([]);
+    setCurrentQuestionIndex(0);
+    setStudentPrompt('');
+    setRestored(false);
+    const shuffled = [...allQuestions].sort(() => 0.5 - Math.random());
+    setQuestions(shuffled.slice(0, GAME_QUESTION_COUNT));
+    setGameState('nickname');
   };
 
   const handlePrint = () => {
@@ -308,6 +381,15 @@ function GameModeScreen() {
                         <CardDescription className="text-lg">훌륭한 실력을 보여주셨네요, {nickname}님!</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-8">
+                        {/* 결과는 선생님께 전송되지 않는다. 저장되지 않은 것을 저장된 것처럼 쓰지 않는다. */}
+                        <Alert className="border-primary/30 bg-primary/5 text-left">
+                          <MessageSquare className="h-4 w-4" />
+                          <AlertTitle>이 결과는 이 기기에만 남아요</AlertTitle>
+                          <AlertDescription>
+                            게임 모드 결과는 선생님께 전송되지 않아요. 보여 주고 싶으면 이 화면을
+                            직접 보여 주거나 인증서를 출력해 주세요.
+                          </AlertDescription>
+                        </Alert>
                         <div className="text-center bg-muted/50 p-6 rounded-xl border-2 border-primary/20">
                             <p className="text-xl font-semibold text-muted-foreground">나의 평균 점수</p>
                             <p className="text-7xl font-bold text-primary">{averageScore === null ? '채점 못함' : `${Math.round(averageScore)}점`}</p>
@@ -353,8 +435,11 @@ function GameModeScreen() {
                              </Button>
                         </div>
                     </CardContent>
-                    <CardFooter>
-                        <Link href="/" className="w-full">
+                    <CardFooter className="flex flex-col gap-3 sm:flex-row">
+                        <Button variant="outline" size="lg" className="w-full sm:w-auto" onClick={restartFromScratch}>
+                          <RefreshCw className="mr-2 h-4 w-4" /> 처음부터 다시
+                        </Button>
+                        <Link href="/" className="w-full sm:ml-auto sm:w-auto">
                            <Button className="w-full" size="lg">홈으로 돌아가기</Button>
                         </Link>
                     </CardFooter>
@@ -368,10 +453,20 @@ function GameModeScreen() {
     <div className="min-h-screen bg-background font-sans">
        <header className="p-4 flex justify-between items-center bg-card/50">
             <Progress value={((currentQuestionIndex) / GAME_QUESTION_COUNT) * 100} className="w-1/4" />
-            <h2 className="text-lg font-bold">{nickname}님 ({currentQuestionIndex + 1}/{GAME_QUESTION_COUNT})</h2>
-            <Link href="/" passHref>
-                <Button variant="ghost"><Home className="mr-2 h-4 w-4" />나가기</Button>
-            </Link>
+            <h2 className="text-lg font-bold">
+              {nickname}님 ({currentQuestionIndex + 1}/{GAME_QUESTION_COUNT})
+              {restored && (
+                <span className="ml-2 text-xs font-normal text-muted-foreground">
+                  하던 곳에서 이어 왔어요
+                </span>
+              )}
+            </h2>
+            <div className="flex items-center gap-1">
+                <Button variant="ghost" size="sm" onClick={restartFromScratch}>처음부터</Button>
+                <Link href="/" passHref>
+                    <Button variant="ghost"><Home className="mr-2 h-4 w-4" />나가기</Button>
+                </Link>
+            </div>
        </header>
       <main className="container mx-auto p-4 sm:p-6 lg:p-8">
         <Card className="max-w-4xl mx-auto shadow-2xl rounded-2xl overflow-hidden border-2 border-primary/20 bg-card/80 backdrop-blur-sm">

@@ -7,12 +7,17 @@ import 'server-only';
  * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §3
  */
 
-import type { Band } from '@/lib/scoring';
 import type { ScoringRun, SessionType } from '@/lib/research/types';
 
+/**
+ * 채점 요청.
+ *
+ * band는 넣지 않는다. 밴드는 서버 레지스트리가 questionId로 확정하며, 예전에 있던
+ * band 필드는 호출자가 채워도 채점에서 한 번도 읽히지 않는 값이었다. 클라이언트가
+ * 바꿔 보낸 밴드가 채점에 쓰인다는 오해를 남기지 않도록 필드 자체를 없앤다.
+ */
 export interface GradingRequest {
   questionId: string;
-  band: Band;
   /** 정제된 학생 응답. 채점 지시가 아니라 평가 대상 데이터로 다룬다. */
   studentText: string;
   /** 신원 ID를 넣지 않는다. 채점 payload에는 학생·학급·시점이 없어야 한다. */

@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 
 import {
   FEEDBACK_FALLBACK_TEXT,
+  FEEDBACK_LINE_COUNT,
   produceFeedback,
   quoteAppearsInText,
   validateFeedback,
@@ -153,4 +154,53 @@ test('네 줄 가운데 빈 줄이 있으면 형식 오류다', () => {
   );
   assert.equal(v.ok, false);
   if (!v.ok) assert.equal(v.reason, 'empty_line');
+});
+
+test('한 필드에 여러 줄을 몰아넣으면 네 줄을 넘기므로 형식 오류다', () => {
+  const v = validateFeedback(
+    {
+      line1: '이번 문제는 그림에 있는 것을 그대로 설명하는 것이에요',
+      line2: '좋아요\n그리고 색도 잘 썼어요',
+      line3: '옆면의 홈도 적어 보세요',
+      line4: '홈이라는 낱말을 써 볼 수 있어요',
+      quote: null,
+    },
+    STUDENT,
+  );
+  assert.equal(v.ok, false);
+  if (!v.ok) assert.equal(v.reason, 'line_count');
+});
+
+test('검증을 통과한 문구는 언제나 정확히 네 줄이다', () => {
+  const v = validateFeedback(
+    {
+      line1: '- 이번 문제는 그림에 있는 것을 그대로 설명하는 것이에요',
+      line2: '* 노란 세모 블록을 정확히 적었어요',
+      line3: '   옆면의 홈도  한 가지 적어 보세요  ',
+      line4: '# 홈이라는 낱말을 써 볼 수 있어요',
+      quote: '밑면',
+    },
+    STUDENT,
+  );
+  assert.equal(v.ok, true);
+  if (!v.ok) return;
+  assert.equal(v.text.split('\n').length, FEEDBACK_LINE_COUNT);
+  // 줄머리 기호와 여분 공백만 걷어내고 내용은 바꾸지 않는다.
+  assert.ok(!v.text.includes('- 이번'));
+  assert.ok(v.text.includes('옆면의 홈도 한 가지 적어 보세요'));
+});
+
+test('형식 통과가 그림 부합이나 내용 정확성을 뜻하지 않는다', () => {
+  // 그림과 아무 관계 없는 네 줄도 형식 검사는 통과한다. 이 검사는 형식만 본다.
+  const v = validateFeedback(
+    {
+      line1: '이번 문제는 그림에 있는 것을 그대로 설명하는 것이에요',
+      line2: '노란 세모 블록이라고 적었어요',
+      line3: '하늘의 색도 적어 보세요',
+      line4: '파랗다는 낱말을 써 볼 수 있어요',
+      quote: '노란 세모 블록',
+    },
+    STUDENT,
+  );
+  assert.equal(v.ok, true, '형식만 보는 검사이므로 통과한다(부합 보장 아님)');
 });

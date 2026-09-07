@@ -30,14 +30,23 @@ export const SCHEDULE_CONTROLLED_SESSION_TYPES: SessionType[] = [
 
 /**
  * 서버가 기록한 차시 개방 상태 가운데 판정에 쓰는 부분.
- * LessonSession(@/lib/research/types)에서 그대로 추려 낸다.
+ *
+ * sessionType은 **학생의 서버 세션**이 정한다. 학급 기록에 남은 sessionType은
+ * 참고 값일 뿐이며 학생 세션을 덮어쓰지 않는다(감사 A-5).
+ * sessionVerified는 서버가 이 요청의 학생 세션을 확정했는지를 뜻한다. 확정하지
+ * 못한 요청을 일반 체험으로 강등해 열어 주지 않는다(감사 A-3).
  */
-export type LessonOpenState = Pick<
-  LessonSession,
-  'sessionType' | 'currentLesson' | 'allowedLessons' | 'closedAt'
->;
+export interface LessonOpenState
+  extends Pick<LessonSession, 'sessionType' | 'currentLesson' | 'allowedLessons' | 'closedAt'> {
+  /** 서버가 학생 세션을 검증했는가. false면 어떤 차시도 열지 않는다. */
+  sessionVerified: boolean;
+}
 
-export type LessonDenyReason = 'unknown_lesson' | 'not_opened' | 'session_closed';
+export type LessonDenyReason =
+  | 'unknown_lesson'
+  | 'not_opened'
+  | 'session_closed'
+  | 'session_unverified';
 
 export type LessonAccessDecision =
   | { allowed: true }
@@ -48,6 +57,7 @@ export const LESSON_DENY_MESSAGE: Record<LessonDenyReason, string> = {
   unknown_lesson: '없는 단계예요. 선생님이 연 단계에서 시작해 보세요.',
   not_opened: '아직 선생님이 열지 않은 단계예요.',
   session_closed: '지금은 수업이 닫혀 있어요. 선생님께 여쭤보세요.',
+  session_unverified: '먼저 선생님이 알려 준 수업 번호로 들어와 주세요.',
 };
 
 export function isValidLessonNumber(lesson: unknown): lesson is number {
@@ -77,6 +87,17 @@ export function decideLessonAccess(
   state: LessonOpenState,
   requestedLesson: unknown
 ): LessonAccessDecision {
+  // 세션을 확정하지 못한 요청은 어떤 차시도 열지 않는다.
+  // 예전에는 여기서 곧바로 '일반 체험이면 무조건 허용'으로 내려갔기 때문에,
+  // 쿠키를 지워 세션을 없앤 요청이 체험으로 강등되어 통과하였다(감사 A-3).
+  if (!state.sessionVerified) {
+    return {
+      allowed: false,
+      reason: 'session_unverified',
+      message: LESSON_DENY_MESSAGE.session_unverified,
+    };
+  }
+
   if (!isValidLessonNumber(requestedLesson)) {
     return {
       allowed: false,
@@ -86,6 +107,8 @@ export function decideLessonAccess(
   }
 
   // 일반 체험은 자율 진행이다. 기존 의도를 그대로 둔다.
+  // 다만 위에서 sessionVerified를 먼저 확인하므로, '명시적으로 체험으로 들어온'
+  // 세션에만 해당한다. 세션 없는 요청은 여기에 오지 못한다.
   if (!isScheduleControlled(state.sessionType)) {
     return { allowed: true };
   }
@@ -111,6 +134,7 @@ export function decideLessonAccess(
 
 /** 화면의 단계 선택에 표시할 차시. 자율 진행이면 전부, 연구 세션이면 서버가 연 것만. */
 export function visibleLessons(state: LessonOpenState): number[] {
+  if (!state.sessionVerified) return [];
   if (!isScheduleControlled(state.sessionType)) {
     return [...LESSON_NUMBERS];
   }

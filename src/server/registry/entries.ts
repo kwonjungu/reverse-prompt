@@ -230,6 +230,12 @@ export interface ReadinessInput {
   modelAccessVerified: boolean;
   /** 비공개 단서 팩 파일을 읽어 해석하는 데 성공했는가 */
   cuePackLoaded: boolean;
+  /**
+   * 적재한 팩이 스스로 cueVersion을 밝혔는가.
+   * 밝히지 않으면 채점 기록의 단서 버전이 코드 상수로 남아 어떤 단서로 채점했는지
+   * 뒤에 확인할 수 없다. 값을 지어내지 않고 미확정 사유로 남긴다.
+   */
+  cuePackVersion?: string | null;
   /** 단서가 없거나 필수 항목이 빈 검사 문항 ID */
   assessmentCuesMissing: string[];
   /** 자산 디렉터리에서 파일을 찾지 못한 검사 문항 ID */
@@ -259,6 +265,10 @@ export function collectBlockers(input: ReadinessInput): string[] {
   }
   if (!input.cuePackLoaded) {
     blockers.push('비공개 단서 팩(cue-pack.json)을 적재하지 못했습니다.');
+  } else if (input.cuePackVersion !== undefined && !input.cuePackVersion) {
+    blockers.push(
+      '단서 팩이 cueVersion을 밝히지 않았습니다. 어떤 단서로 채점했는지 기록할 수 없습니다.',
+    );
   }
   if (input.assessmentCuesMissing.length) {
     blockers.push(`검사 문항 단서가 비어 있습니다: ${input.assessmentCuesMissing.join(', ')}`);

@@ -10,11 +10,12 @@ rules_version = '2';
 // (배포 명령 예: firebase deploy --only firestore:rules — 실행하지 않았다.)
 //
 // 설계 전제
-//  1. 연구 자료(researchSubmissions, scoringRuns, consents, lessonSessions,
-//     researchClasses, auditRuns)는 클라이언트가 직접 읽거나 쓰지 않는다.
+//  1. 연구 자료(research/{schemaVersion}/* 와 consents, consent_events,
+//     research_classes, student_sessions, audit_approvals)는 클라이언트가
+//     직접 읽거나 쓰지 않는다.
 //     서버 Admin SDK만 접근하며 Admin SDK는 이 규칙을 우회하므로,
 //     서버 코드(src/server/auth)의 requireClassAccess가 별도 관문이다.
-//  2. 수업 기록(classes/*)은 인증된 교사가 자기 소속 학급만 읽는다.
+//  2. 비연구 수업 기록(classes/*)은 인증된 교사가 자기 소속 학급만 읽는다.
 //     학생 클라이언트는 쓰기도 서버 API를 거친다. 학생이 점수를 직접 쓰지 못한다.
 //  3. 명시적으로 허용하지 않은 모든 경로는 거부한다.
 
@@ -59,7 +60,7 @@ service cloud.firestore {
 
     // ── 수업(비연구) 기록 ────────────────────────────────────
     // 별도 적법한 수업 도구 이용 근거로 남기는 기록이다.
-    // 연구 저장소(researchSubmissions 등)와 접근자·보존기간이 분리된다.
+    // 연구 저장소(research/{schemaVersion}/*)와 접근자·보존기간이 분리된다.
     match /classes/{classCode} {
       allow read: if isTeacherOfClass(classCode);
       allow write: if false;
@@ -83,9 +84,26 @@ service cloud.firestore {
     }
 
     // ── 연구 자료 ────────────────────────────────────────────
-    // 어떤 클라이언트도 직접 접근하지 않는다. 서버 API만 사용한다.
+    // 어떤 클라이언트도 직접 접근하지 않는다. 서버 API(Admin SDK)만 사용한다.
     // 연구자에게 주는 비식별 읽기도 서버가 필드를 걸러 내보낸다.
-    match /researchClasses/{classResearchId} {
+    //
+    // 경로 이름은 src/server/firebase-admin.ts의 COLLECTIONS·RESEARCH_COLLECTIONS와
+    // 같아야 한다. 아래 목록에서 빠진 경로도 맨 아래 기본 거부가 잡지만,
+    // 이름이 어긋나면 규칙을 읽는 사람이 실제 구조를 오해한다.
+
+    // 연구 자료 전체: research/{schemaVersion}/<컬렉션>/{문서}
+    //   assessment_sessions, assessment_windows, assessment_submissions,
+    //   assessment_rejections, practice_submissions, lesson_sessions,
+    //   scoring_runs, scoring_batches, teacher_blind_scores
+    match /research/{schemaVersion} {
+      allow read, write: if false;
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    // 계정·동의 계열(최상위)
+    match /research_classes/{classResearchId} {
       allow read, write: if false;
       match /{document=**} { allow read, write: if false; }
     }
@@ -94,35 +112,16 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    match /lessonSessions/{sessionId} {
+    match /consent_events/{eventId} {
       allow read, write: if false;
     }
 
-    match /assessmentSessions/{sessionId} {
+    match /student_sessions/{tokenId} {
       allow read, write: if false;
     }
 
-    match /researchSubmissions/{submissionId} {
-      allow read, write: if false;
-    }
-
-    match /scoringRuns/{runId} {
-      allow read, write: if false;
-    }
-
-    match /teacherBlindScores/{scoreId} {
-      allow read, write: if false;
-    }
-
-    match /auditRuns/{auditId} {
-      allow read, write: if false;
-    }
-
-    match /studentSessions/{tokenId} {
-      allow read, write: if false;
-    }
-
-    match /consentEvents/{eventId} {
+    // 실데이터 감수 승인 기록. 발급·철회는 서버에서만 한다.
+    match /audit_approvals/{approvalId} {
       allow read, write: if false;
     }
 

@@ -20,7 +20,11 @@ import { AuthError } from './contract';
 import {
   evaluateAccess,
   evaluateResearchCollection,
+  isClassAccessOptions,
+  resolveClassAccessAction,
   routeForNonConsented,
+  type AccessAction,
+  type ClassAccessOptions,
   type ServerPrincipal,
 } from './access';
 import {
@@ -39,6 +43,7 @@ import {
 import { CONSENT_VERSION } from '@/server/config';
 import {
   COLLECTIONS,
+  assertSafeDocId,
   getAdminAuth,
   getAdminFirestore,
   isAdminConfigured,
@@ -233,10 +238,24 @@ async function requireRole(...roles: Role[]): Promise<Principal> {
   return p;
 }
 
-async function requireClassAccess(classResearchId: string, ...roles: Role[]): Promise<Principal> {
+/**
+ * 학급 접근 관문.
+ *
+ * 행위를 함께 받는다. 예전에는 무조건 'read'로 판정해 연구자의 write·delete 금지
+ * 분기를 아무도 타지 않았다(감사 A-4). 행위를 밝히지 않은 호출은 'write'로 본다.
+ * 읽기로 가정하는 쪽이 더 관대하기 때문이며, 읽기 전용 경로는 { action: 'read' }를
+ * 명시한다. 기존 호출 방식(역할만 나열)은 그대로 둔다.
+ */
+async function requireClassAccess(
+  classResearchId: string,
+  ...rolesOrOptions: (Role | ClassAccessOptions)[]
+): Promise<Principal> {
   if (!classResearchId) {
     throw new AuthError('대상 학급이 지정되지 않았습니다.', 'forbidden');
   }
+  const roles = rolesOrOptions.filter((v): v is Role => !isClassAccessOptions(v));
+  const action: AccessAction = resolveClassAccessAction(rolesOrOptions);
+
   const p = await requireRole(...roles);
 
   if (p.role === 'student') {
@@ -254,7 +273,7 @@ async function requireClassAccess(classResearchId: string, ...roles: Role[]): Pr
       grantedScopes: account?.grantedScopes ?? [],
     }),
     { scope: 'research', classResearchId },
-    'read'
+    action
   );
   if (!decision.allowed) {
     throw new AuthError(`학급 접근이 거부되었습니다(${decision.reason}).`, 'forbidden');
@@ -539,7 +558,7 @@ async function requireRealDataAuditApproval(input: {
   classResearchId: string;
 }): Promise<{ approvalId: string; approvedBy: string; approvedAt: string }> {
   const principal = await requireRole('researcher');
-  await requireClassAccess(input.classResearchId, 'researcher');
+  await requireClassAccess(input.classResearchId, { action: 'read' }, 'researcher');
   if (!isAdminConfigured()) {
     throw new AuthError('서버 인증 자격증명이 설정되지 않았습니다.', 'not_configured');
   }
@@ -565,48 +584,84 @@ async function requireRealDataAuditApproval(input: {
 
 // ── 차시 모듈(@/server/lessons/auth-bridge)이 요구하는 표면 ──────
 
-async function resolveSessionContext(): Promise<{
-  sessionType: string;
+export interface ServerStudentSession {
+  sessionType: SessionType;
   classResearchId: string | null;
   researchId: string | null;
   classCode: string | null;
+  /** 세션 자체의 소유자 식별자. 연구ID가 없는 체험 세션의 소유 판정에 쓴다. */
+  sessionOwner: string;
   consentActive: boolean;
-  verified: boolean;
-} | null> {
-  let principal: Principal | null = null;
-  try {
-    principal = await getPrincipal();
-  } catch {
-    return null;
-  }
+  consentVersion: string | null;
+  verified: true;
+}
+
+/**
+ * 학생 요청의 서버 확정 세션.
+ *
+ * 확정하지 못하면 null이다. 예전에는 오류를 삼켜 null을 돌려주었고 호출부가 그것을
+ * 일반 체험으로 채워 넣었다. 설정 오류(not_configured)는 이제 그대로 올라가고,
+ * 세션이 없거나 서명 검증에 실패하면 null이 되어 호출부가 거부한다(감사 A-3).
+ */
+async function resolveSessionContext(): Promise<ServerStudentSession | null> {
+  // not_configured는 던진다. 삼켜서 '설정 없이 개방'이 되게 하지 않는다.
+  const principal = await getPrincipal();
   if (!principal || principal.role !== 'student') return null;
 
-  let consentActive = false;
-  if (principal.researchId) {
-    try {
-      consentActive = isResearchConsentActive(await getConsent(principal.researchId));
-    } catch {
-      consentActive = false;
-    }
-  }
-
+  // 세션 토큰의 서명을 다시 확인한다. 통과하지 못하면 세션이 없는 것이다.
   const token = await readCookie(SESSION_TOKEN_COOKIE);
   const verified = verifySessionToken(token, sessionSecret(), Date.now());
+  if (!verified.ok) {
+    if (verified.reason === 'no_secret') {
+      throw new AuthError('세션 서명 키가 설정되지 않았습니다.', 'not_configured');
+    }
+    return null;
+  }
+
+  let consentActive = false;
+  let consentVersion: string | null = null;
+  if (principal.researchId) {
+    // 조회 실패를 '동의 없음'으로 조용히 바꾸지 않는다. 오류는 올려서 거부하게 한다.
+    const consent = await getConsent(principal.researchId);
+    consentActive = isResearchConsentActive(consent);
+    consentVersion = consent?.consentVersion ?? null;
+  }
 
   return {
     sessionType: principal.sessionType,
     classResearchId: principal.classResearchId,
     researchId: principal.researchId,
-    classCode: verified.ok ? verified.claims.classCode : null,
+    classCode: verified.claims.classCode,
+    sessionOwner: principal.uid,
     consentActive,
+    consentVersion,
     verified: true,
   };
+}
+
+/**
+ * 학급의 세션 성격을 서버 기록에서 읽는다.
+ * 교사가 보낸 값으로 연구 학급을 체험으로 여는 길을 막는다(감사 A-5).
+ */
+async function getClassSessionType(classResearchId: string): Promise<SessionType> {
+  if (!isAdminConfigured()) {
+    throw new AuthError('서버 인증 자격증명이 설정되지 않았습니다.', 'not_configured');
+  }
+  const snap = await getAdminFirestore()
+    .collection(COLLECTIONS.researchClasses)
+    .doc(assertSafeDocId(classResearchId, '학급'))
+    .get();
+  if (!snap.exists) {
+    throw new AuthError('등록된 수업이 아닙니다.', 'forbidden');
+  }
+  const value = snap.data()?.sessionType;
+  return value === 'research_practice' || value === 'research_assessment' ? value : 'experience';
 }
 
 async function requireTeacherForClass(
   classResearchId: string
 ): Promise<{ teacherId: string; classResearchId: string }> {
-  const p = await requireClassAccess(classResearchId, 'teacher');
+  const p = await requireClassAccess(classResearchId, { action: 'write' }, 'teacher');
   return { teacherId: p.uid, classResearchId };
 }
 
@@ -619,6 +674,7 @@ export const auth: AuthApi & {
   requireRealDataAuditApproval: typeof requireRealDataAuditApproval;
   resolveSessionContext: typeof resolveSessionContext;
   requireTeacherForClass: typeof requireTeacherForClass;
+  getClassSessionType: typeof getClassSessionType;
 } = {
   getPrincipal,
   requirePrincipal,
@@ -634,6 +690,7 @@ export const auth: AuthApi & {
   requireRealDataAuditApproval,
   resolveSessionContext,
   requireTeacherForClass,
+  getClassSessionType,
 };
 
 export { AuthError } from './contract';

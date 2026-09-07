@@ -45,6 +45,30 @@ export type ServerPrincipal = {
   grantedScopes?: string[];
 };
 
+/**
+ * requireClassAccess에 행위를 함께 넘길 때 쓰는 선택 인자.
+ * 역할 목록 사이에 섞여 들어오므로 기존 호출 방식을 깨지 않는다.
+ */
+export type ClassAccessOptions = { action: AccessAction };
+
+export function isClassAccessOptions(value: unknown): value is ClassAccessOptions {
+  return typeof value === 'object' && value !== null && 'action' in value;
+}
+
+/**
+ * 호출 인자에서 판정할 행위를 고른다.
+ *
+ * 행위를 밝히지 않은 호출은 'write'로 본다. 예전에는 무조건 'read'로 판정해
+ * 연구자의 write·delete 금지 분기를 아무도 타지 않았다(감사 A-4).
+ * 읽기 전용 경로는 { action: 'read' }를 명시한다.
+ */
+export function resolveClassAccessAction(
+  args: readonly (unknown | ClassAccessOptions)[]
+): AccessAction {
+  const found = args.find(isClassAccessOptions);
+  return found ? found.action : 'write';
+}
+
 export type AccessTarget = {
   scope: DataScope;
   classCode?: string | null;

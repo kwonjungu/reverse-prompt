@@ -1,4 +1,11 @@
 {
+  "_comment": [
+    "연구 자료는 research/{schemaVersion}/<컬렉션> 아래에 있다. collectionGroup 이름은",
+    "경로의 마지막 세그먼트이므로 아래 이름은 src/server/firebase-admin.ts의",
+    "RESEARCH_COLLECTIONS 값과 같아야 한다.",
+    "이 파일이 저장소에 있다는 것만으로 콘솔에 색인이 만들어졌다는 뜻은 아니다.",
+    "배포 예: firebase deploy --only firestore:indexes (아직 실행하지 않았다)."
+  ],
   "indexes": [
     {
       "collectionGroup": "practice_attempts",
@@ -9,7 +16,16 @@
       ]
     },
     {
-      "collectionGroup": "researchSubmissions",
+      "collectionGroup": "assessment_sessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "classResearchId", "order": "ASCENDING" },
+        { "fieldPath": "phase", "order": "ASCENDING" },
+        { "fieldPath": "closedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "assessment_submissions",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "classResearchId", "order": "ASCENDING" },
@@ -18,16 +34,25 @@
       ]
     },
     {
-      "collectionGroup": "researchSubmissions",
+      "collectionGroup": "assessment_submissions",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "researchId", "order": "ASCENDING" },
-        { "fieldPath": "questionId", "order": "ASCENDING" },
-        { "fieldPath": "phase", "order": "ASCENDING" }
+        { "fieldPath": "phase", "order": "ASCENDING" },
+        { "fieldPath": "questionId", "order": "ASCENDING" }
       ]
     },
     {
-      "collectionGroup": "scoringRuns",
+      "collectionGroup": "practice_submissions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "classResearchId", "order": "ASCENDING" },
+        { "fieldPath": "researchId", "order": "ASCENDING" },
+        { "fieldPath": "submittedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "scoring_runs",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "submissionId", "order": "ASCENDING" },
@@ -35,12 +60,38 @@
       ]
     },
     {
-      "collectionGroup": "lessonSessions",
+      "collectionGroup": "teacher_blind_scores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "classResearchId", "order": "ASCENDING" },
+        { "fieldPath": "raterUid", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "lesson_sessions",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "classResearchId", "order": "ASCENDING" },
         { "fieldPath": "openedAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "audit_approvals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "classResearchId", "order": "ASCENDING" },
+        { "fieldPath": "revokedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "research_classes",
+      "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "codeHash", "order": "ASCENDING" }]
+    },
+    {
+      "collectionGroup": "consents",
+      "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "researchId", "order": "ASCENDING" }]
     }
   ],
   "fieldOverrides": []

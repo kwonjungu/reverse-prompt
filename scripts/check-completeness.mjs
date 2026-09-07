@@ -7,13 +7,20 @@
  * 이 도구는 결손을 채우지 않고 보고만 한다. 빈 칸을 0점이나 빈 응답으로 만들지 않는다.
  *
  * 실행 (TypeScript 모듈을 그대로 불러오므로 tsx가 필요하다)
- *   node --import tsx scripts/check-completeness.mjs --input <제출목록.json>
- *   node --import tsx scripts/check-completeness.mjs --live --class <연구용학급ID>
+ *
+ *   node --import tsx --import ./scripts/_node-server-modules.mjs scripts/check-completeness.mjs --input <제출목록.json>
+ *   node --import tsx --import ./scripts/_node-server-modules.mjs scripts/check-completeness.mjs --live --class <연구용학급ID>
+ *
+ * `--import ./scripts/_node-server-modules.mjs`를 반드시 함께 넣는다. src/server/** 가 쓰는
+ * `server-only` 패키지는 Node 기본 조건에서 불러오는 즉시 예외를 던지므로, 그 preload가
+ * 빈 모듈로 바꿔 준다. `--conditions=react-server`는 React 18을 깨뜨리므로 쓰지 않는다.
  *
  * 인자
  *   --input   제출 기록 JSON 배열 파일. 합성 자료 점검에 쓴다.
  *   --live    Firestore에서 실제 제출을 읽는다. 서버 자격증명이 필요하다.
  *   --class   특정 학급만 볼 때의 연구용 학급ID.
+ *   --all-classes  학급을 지정하지 않고 전부 본다. 범위를 밝히지 않은 조회를 막으려고,
+ *             --live 를 --class 없이 쓸 때는 이 플래그를 명시하게 한다.
  *   --expect  점검 대상 학생ID 목록 파일(JSON 배열). 기록이 하나도 없는 학생의 결손도 잡는다.
  *   --out     보고서를 쓸 JSON 경로.
  */
@@ -26,6 +33,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--live') out.live = true;
+    else if (a === '--all-classes') out.allClasses = true;
     else if (a === '--input') out.input = argv[++i];
     else if (a === '--class') out.classResearchId = argv[++i];
     else if (a === '--expect') out.expect = argv[++i];
@@ -46,8 +54,12 @@ async function main() {
       '../src/server/assessment/firestore-store.ts'
     );
     const store = createFirestoreAssessmentStore();
+    if (!args.classResearchId && !args.allClasses) {
+      console.error('--class 로 학급을 지정하거나, 전부 보려면 --all-classes 를 명시한다.');
+      process.exit(2);
+    }
     records = await store.listSubmissions(
-      args.classResearchId ? { classResearchId: args.classResearchId } : undefined
+      args.classResearchId ? { classResearchId: args.classResearchId } : { allClasses: true }
     );
   } else if (args.input) {
     records = JSON.parse(await readFile(args.input, 'utf8'));

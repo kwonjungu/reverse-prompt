@@ -8,7 +8,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 const ROOT = process.cwd();
@@ -60,20 +60,106 @@ test('저장소에 학교 실명 대응표 파일이 없다', () => {
   }
 });
 
-test('클라이언트 번들에 들어가는 소스에 검사 앵커 문자열이 없다', () => {
-  // 서버 전용 경로(src/server)는 제외한다. 그 아래에서만 비공개 자산을 다룬다.
-  const suspicious = ['초록 물뿌리개', '노란 상의', '건물 사이 골목'];
-  const files = walk(path.join(ROOT, 'src')).filter(
-    (f) => (f.endsWith('.ts') || f.endsWith('.tsx')) && !f.includes(`${path.sep}server${path.sep}`)
-  );
-  for (const file of files) {
-    const text = readFileSync(file, 'utf8');
-    for (const needle of suspicious) {
-      assert.equal(
-        text.includes(needle),
-        false,
-        `${path.relative(ROOT, file)}에 검사 단서 문자열 '${needle}'이 있다`
-      );
+/**
+ * 검사 단서 노출 점검.
+ *
+ * 표지 문자열을 이 파일에 적어 두면 그 목록 자체가 단서를 공개하게 된다.
+ * 그래서 비공개 단서 팩(RESEARCH_ASSET_DIR/cue-pack.json)이 있을 때에만
+ * 그 안의 실제 문장을 표지로 삼아 저장소를 훑는다. 팩이 없으면 훑지 않고
+ * 건너뛴다. 건너뛴 것은 통과가 아니다.
+ */
+
+/** 팩에서 표지로 쓸 문장·낱말을 모은다. 너무 짧은 조각은 오탐이 많아 뺀다. */
+function markersFromCuePack(pack: unknown): string[] {
+  const out = new Set<string>();
+  const push = (v: unknown) => {
+    if (typeof v === 'string') {
+      const t = v.trim();
+      if (t.length >= 4) out.add(t);
+    }
+  };
+  const questions = (pack as { questions?: Record<string, unknown> })?.questions ?? {};
+  for (const q of Object.values(questions)) {
+    const cues = q as Record<string, unknown>;
+    for (const key of [
+      'coreObjects',
+      'requiredAttributes',
+      'requiredContext',
+      'acceptedExpressions',
+      'contradictions',
+    ]) {
+      const list = cues[key];
+      if (Array.isArray(list)) list.forEach(push);
+    }
+    const anchors = cues.anchors as Record<string, Record<string, unknown>> | undefined;
+    for (const byLevel of Object.values(anchors ?? {})) {
+      for (const text of Object.values(byLevel ?? {})) push(text);
     }
   }
+  return [...out];
+}
+
+function loadCuePack(): unknown | null {
+  const dir = process.env.RESEARCH_ASSET_DIR?.trim();
+  if (!dir) return null;
+  const file = path.join(dir, 'cue-pack.json');
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+test('저장소의 어떤 텍스트 파일에도 검사 단서 문장이 없다', (t) => {
+  const pack = loadCuePack();
+  if (!pack) {
+    t.skip('RESEARCH_ASSET_DIR의 cue-pack.json이 없어 실제 단서로 훑지 못했다 — 미실행');
+    return;
+  }
+  const markers = markersFromCuePack(pack);
+  assert.ok(markers.length > 0, '단서 팩에서 표지 문장을 하나도 얻지 못했다');
+
+  // src/server도 검사한다. 단서는 코드가 아니라 RESEARCH_ASSET_DIR에서만 읽어야 한다.
+  const targets = ['src', 'tests', 'scripts', 'docs', 'research-assets', 'public'];
+  const exts = ['.ts', '.tsx', '.mjs', '.js', '.json', '.md', '.rules'];
+  for (const target of targets) {
+    const dir = path.join(ROOT, target);
+    if (!existsSync(dir)) continue;
+    for (const file of walk(dir)) {
+      if (!exts.some((e) => file.endsWith(e))) continue;
+      const text = readFileSync(file, 'utf8');
+      for (const needle of markers) {
+        assert.equal(
+          text.includes(needle),
+          false,
+          `${path.relative(ROOT, file)}에 검사 단서 문장이 그대로 있다`
+        );
+      }
+    }
+  }
+});
+
+/**
+ * 단서 팩이 없어도 늘 돌아가는 구조 점검.
+ * 실제 단서 문장을 여기에 적지 않고, 단서를 담는 파일이 저장소에 들어왔는지만 본다.
+ */
+test('비공개 단서 팩이 저장소에 커밋되지 않았다', () => {
+  const targets = ['src', 'tests', 'scripts', 'docs', 'research-assets', 'public'];
+  for (const target of targets) {
+    const dir = path.join(ROOT, target);
+    if (!existsSync(dir)) continue;
+    for (const full of walk(dir)) {
+      const name = path.basename(full);
+      assert.notEqual(name, 'cue-pack.json', `${path.relative(ROOT, full)}이 커밋되어 있다`);
+    }
+  }
+});
+
+test('예시 단서 팩은 빈 껍데기여야 한다', () => {
+  const file = path.join(ROOT, 'research-assets', 'cue-pack.example.json');
+  if (!existsSync(file)) return;
+  const parsed = JSON.parse(readFileSync(file, 'utf8'));
+  const markers = markersFromCuePack(parsed);
+  assert.deepEqual(markers, [], '예시 파일에 실제 단서 문장이 들어 있다');
 });

@@ -71,24 +71,73 @@ export function getAdminAuth(): Auth {
   return getAdminAuthSdk(getAdminApp());
 }
 
-/** 컬렉션 이름의 단일 지점. 연구 저장소와 수업 기록을 분리해 둔다. */
+/**
+ * 컬렉션 경로의 단일 지점.
+ *
+ * 연구 자료는 모두 research/{schemaVersion} 아래에 둔다. 기존 classes/ 트리(비연구
+ * 수업 기록)는 손대지 않는다. 쓰기와 읽기가 다른 경로를 쓰는 일이 없도록 어떤 모듈도
+ * 컬렉션 이름을 직접 적지 않고 여기의 값을 쓴다.
+ */
+
+import { SCHEMA_VERSION } from '@/lib/research/types';
+
+/** 계정·동의처럼 스키마 버전과 무관한 최상위 컬렉션 */
 export const COLLECTIONS = {
   /** 계정과 역할. 클라이언트가 쓰지 못한다. */
   users: 'users',
   /** 무작위 수업ID. 실명 대응표는 학교 담당자가 저장소 밖에서 관리한다. */
-  researchClasses: 'researchClasses',
+  researchClasses: 'research_classes',
   /** 보호자 동의·학생 승낙 */
   consents: 'consents',
   /** 동의 상태 변경 이력(철회 포함). 자료 파기는 여기 기록만 남기고 자동 삭제하지 않는다. */
-  consentEvents: 'consentEvents',
+  consentEvents: 'consent_events',
   /** 학생 세션 토큰의 폐기 목록 */
-  studentSessions: 'studentSessions',
-  /** 연구 저장소 */
-  researchSubmissions: 'researchSubmissions',
-  scoringRuns: 'scoringRuns',
-  teacherBlindScores: 'teacherBlindScores',
+  studentSessions: 'student_sessions',
   /** 감수 AI에 실데이터를 보내려면 필요한 명시적 승인 기록 */
-  auditApprovals: 'auditApprovals',
+  auditApprovals: 'audit_approvals',
   /** 비연구 수업 기록(기존 구조 유지) */
   classes: 'classes',
 } as const;
+
+/** research/{schemaVersion} 아래의 연구 자료 컬렉션 이름 */
+export const RESEARCH_COLLECTIONS = {
+  assessmentSessions: 'assessment_sessions',
+  assessmentWindows: 'assessment_windows',
+  assessmentSubmissions: 'assessment_submissions',
+  assessmentRejections: 'assessment_rejections',
+  practiceSubmissions: 'practice_submissions',
+  lessonSessions: 'lesson_sessions',
+  scoringRuns: 'scoring_runs',
+  scoringBatches: 'scoring_batches',
+  teacherBlindScores: 'teacher_blind_scores',
+} as const;
+
+export type ResearchCollection =
+  (typeof RESEARCH_COLLECTIONS)[keyof typeof RESEARCH_COLLECTIONS];
+
+/**
+ * 연구 자료 컬렉션의 전체 경로.
+ * 스키마 버전을 경로에 두어 기존 자료를 덮어쓰거나 강제 이관하지 않는다.
+ */
+export function researchPath(name: ResearchCollection): string {
+  return `research/${SCHEMA_VERSION}/${name}`;
+}
+
+/**
+ * 문서 ID로 쓸 수 있는 값인지 확인한다.
+ * 클라이언트가 보낸 문자열이 경로 구분자를 품고 들어와 다른 문서를 덮어쓰는 일을 막는다.
+ */
+export function assertSafeDocId(value: string, label: string): string {
+  const ok =
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 200 &&
+    !value.includes('/') &&
+    value !== '.' &&
+    value !== '..' &&
+    !/[\x00-\x1f\x7f]/.test(value);
+  if (!ok) {
+    throw new AuthError(`${label} 값이 올바르지 않습니다.`, 'forbidden');
+  }
+  return value;
+}

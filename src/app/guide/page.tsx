@@ -15,38 +15,36 @@
  */
 
 import Link from 'next/link';
-import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Home, ArrowRight, Search, Palette, CloudSun, ShieldAlert, Eye } from 'lucide-react';
-import { PRACTICE_QUESTIONS } from '@/lib/questions';
 
 const AXES = [
   {
     icon: Search,
     no: '축 1',
     name: '무엇이 있나',
-    body: '그림에 있는 것을 빠짐없이 찾아 정확한 이름으로 부르는 거예요. "동물"보다 "강아지", "강아지"보다 "귀가 접힌 흰 강아지"가 좋아요. 이름만 듣고도 그림 하나로 딱 정해지면 성공이에요.',
-    good: '사과 한 개',
-    bad: '과일',
+    body: '그림에 있는 것을 빠짐없이 찾아 정확한 이름으로 부르는 거예요. "학용품"보다 "지우개", "지우개"보다 "모서리가 닳은 지우개"가 좋아요. 이름만 듣고도 그림 하나로 딱 정해지면 성공이에요.',
+    good: '지우개 한 개',
+    bad: '학용품',
   },
   {
     icon: Palette,
     no: '축 2',
     name: '어떻게 생겼나',
     body: '먼저 눈에 바로 보이는 색과 모양, 크기, 개수를 알려 주세요. 만졌을 때의 느낌이나 자세는 나중 단계에서 더해도 돼요. 같은 이름을 가진 다른 물건과 구별되도록 좁혀 주는 말이 좋은 말이에요.',
-    good: '빨간색 사과 한 개',
-    bad: '예쁜 사과',
+    good: '길쭉한 초록 색연필',
+    bad: '예쁜 색연필',
   },
   {
     icon: CloudSun,
     no: '축 3',
     name: '어디에서 언제',
     body: '어디에 있는지, 무엇을 하고 있는지, 언제인지, 어떤 느낌인지 알려 주세요. 느낌을 쓸 때는 그림 속 무엇 때문에 그렇게 느꼈는지 근거도 함께 써야 해요.',
-    good: '해가 지는 운동장에 서 있어서 그림자가 길다',
-    bad: '쓸쓸하다',
+    good: '문 앞 신발장에 나란히 놓여 있어서 줄이 가지런하다',
+    bad: '멋있다',
   },
 ];
 
@@ -72,8 +70,20 @@ const STAGES = [
   { n: 6, title: '내 문장이 어떻게 달라졌나', axis: '세 축 모두' },
 ];
 
-// 예시 해설에 쓰는 문항 — 1단계의 첫 문항을 그대로 쓴다.
-const SAMPLE = PRACTICE_QUESTIONS[0];
+/**
+ * 예시 해설에 쓰는 대상.
+ *
+ * 연습 36문항(L01~L36)과 검사 문항 어디에도 없는 물건으로 고른다. 문항의 그림이나
+ * 그 문항의 만점 문장을 여기에 두면 학생이 예시를 그대로 옮겨 적게 되어 무엇을 스스로
+ * 썼는지 알 수 없다. 그래서 이 카드는 문항 이미지를 띄우지 않고 글로만 설명한다.
+ */
+const SAMPLE = {
+  subject: '운동화 한 켤레',
+  weak: '신발이 있어요.',
+  weakWhy: '이름이 너무 넓어요. 운동화인지 구두인지 장화인지 알 수 없어요.',
+  strong: '하얀 운동화 한 켤레가 있어요. 양옆에 파란 줄이 하나씩 있고 끈은 매여 있어요.',
+  invented: '운동장을 달리는 아이가 신은 빨간 운동화',
+};
 
 export default function GuidePage() {
   return (
@@ -170,45 +180,36 @@ export default function GuidePage() {
               <Eye className="h-6 w-6 text-primary" />
               같이 해 볼까요
             </CardTitle>
-            <div className="grid md:grid-cols-2 gap-8 items-center">
-              <div className="relative aspect-square rounded-xl overflow-hidden shadow-lg bg-black/5">
-                <Image
-                  src={SAMPLE.imageUrl}
-                  alt="예시 그림"
-                  fill
-                  className="object-contain"
-                  sizes="(max-width: 768px) 100vw, 50vw"
-                />
+            <p className="mb-4 text-sm text-muted-foreground font-body">
+              아래 예시는 연습 문제에 나오지 않는 물건으로 해 보는 거예요. 연습 문제의 답을 미리
+              알려 주면 스스로 찾아내는 즐거움이 사라지니까요. 그림 대신 글로만 견주어 봐요.
+            </p>
+            <div className="space-y-4 text-sm font-body">
+              <div>
+                <p className="font-semibold mb-1">이렇게 쓰면 아쉬워요</p>
+                <blockquote className="rounded-r-lg border-l-4 border-muted bg-muted/40 p-3 italic">
+                  {SAMPLE.weak}
+                </blockquote>
+                <p className="mt-1 text-muted-foreground">{SAMPLE.weakWhy}</p>
               </div>
-              <div className="space-y-4 text-sm font-body">
-                <div>
-                  <p className="font-semibold mb-1">이렇게 쓰면 아쉬워요</p>
-                  <blockquote className="rounded-r-lg border-l-4 border-muted bg-muted/40 p-3 italic">
-                    과일이 있어요.
-                  </blockquote>
-                  <p className="mt-1 text-muted-foreground">
-                    이름이 너무 넓어요. 사과인지 배인지 알 수 없어요.
-                  </p>
-                </div>
-                <div>
-                  <p className="font-semibold mb-1">이렇게 쓰면 좋아요</p>
-                  <blockquote className="rounded-r-lg border-l-4 border-primary bg-primary/10 p-3 italic">
-                    빨간색 사과 한 개가 있어요. 동그란 모양이고 위에 짧은 갈색 꼭지가 붙어 있어요.
-                  </blockquote>
-                  <p className="mt-1 text-muted-foreground">
-                    <strong>사과 한 개</strong>로 무엇인지 정하고(축 1),{' '}
-                    <strong>빨간색</strong>과 <strong>동그란 모양</strong>, <strong>짧은 갈색 꼭지</strong>로
-                    어떻게 생겼는지 좁혔어요(축 2). 1단계에서는 여기까지면 충분해요.
-                    &lsquo;반질반질하다&rsquo; 같은 만진 느낌은 4단계에서 배워요.
-                  </p>
-                </div>
-                <div className="rounded-lg bg-destructive/5 p-3">
-                  <p className="font-semibold text-destructive mb-1">이건 안 돼요</p>
-                  <p className="text-muted-foreground">
-                    &ldquo;바닷가 나무에 매달린 황금빛 사과&rdquo; — 바닷가도 나무도 그림에
-                    없어요. 없는 것을 지어내면 수준이 내려가요.
-                  </p>
-                </div>
+              <div>
+                <p className="font-semibold mb-1">이렇게 쓰면 좋아요</p>
+                <blockquote className="rounded-r-lg border-l-4 border-primary bg-primary/10 p-3 italic">
+                  {SAMPLE.strong}
+                </blockquote>
+                <p className="mt-1 text-muted-foreground">
+                  <strong>{SAMPLE.subject}</strong>로 무엇인지 정하고(축 1), <strong>하얀</strong>{' '}
+                  색과 <strong>파란 줄</strong>, <strong>매여 있는 끈</strong>으로 어떻게 생겼는지
+                  좁혔어요(축 2). 1단계에서는 여기까지면 충분해요.
+                  &lsquo;푹신푹신하다&rsquo; 같은 만진 느낌은 4단계에서 배워요.
+                </p>
+              </div>
+              <div className="rounded-lg bg-destructive/5 p-3">
+                <p className="font-semibold text-destructive mb-1">이건 안 돼요</p>
+                <p className="text-muted-foreground">
+                  &ldquo;{SAMPLE.invented}&rdquo; — 운동장도 아이도 그림에 없어요. 없는 것을
+                  지어내면 수준이 내려가요.
+                </p>
               </div>
             </div>
           </Card>

@@ -13,26 +13,15 @@
 
 import type { Band } from '@/lib/scoring';
 import type { QuestionCues } from '@/server/registry/contract';
-import {
-  RUBRIC_VERSION,
-  RUBRIC_AXES,
-  contextNote,
-  renderAxisForModel,
-  renderForModel,
-  JUDGMENT_PRINCIPLES,
-} from '@/lib/rubric';
+import { RUBRIC_VERSION, contextNote, renderForModel } from '@/lib/rubric';
 
 export { RUBRIC_VERSION };
 
-/**
- * 기존 AXIS_* 상수는 공통 루브릭 리소스에서 파생한다.
- * 문언을 고칠 일이 있으면 rubric.ts만 고친다.
+/*
+ * 예전의 AXIS_OBJECT·AXIS_SPECIFICITY·AXIS_CONTEXT_B·AXIS_CONTEXT_C·COMMON_RULE
+ * 상수는 지웠다. 저장소 어디에서도 쓰지 않으면서 축 문언의 두 번째 사본처럼 보였다.
+ * 축 문언이 필요하면 @/lib/rubric의 RUBRIC_AXES·renderForModel을 직접 쓴다.
  */
-export const AXIS_OBJECT = renderAxisForModel(RUBRIC_AXES.object, 1);
-export const AXIS_SPECIFICITY = renderAxisForModel(RUBRIC_AXES.specificity, 2);
-export const AXIS_CONTEXT_B = renderAxisForModel(RUBRIC_AXES.contextB, 3);
-export const AXIS_CONTEXT_C = renderAxisForModel(RUBRIC_AXES.contextC, 3);
-export const COMMON_RULE = ['[공통 판정 원칙]', ...JUDGMENT_PRINCIPLES].join('\n');
 
 /**
  * 피드백 지시.

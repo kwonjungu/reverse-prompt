@@ -10,7 +10,11 @@
  * 연구자에게는 비식별 읽기만 준다. 삭제 단추는 교사에게만 보이며, 보이지 않는 것과
  * 별개로 서버가 다시 거부한다.
  *
- * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §6, 수용시험 11
+ * 차시 개방·폐쇄와 검사 세션 열기·닫기도 여기서 한다(설계서 §4·§5, 수용시험 6).
+ * 점수나 완료 문항 수는 개방 조건이 아니다. 완료 수는 정보로만 보여 준다.
+ * 공통 루브릭은 사본을 만들지 않고 단일 버전 리소스(src/lib/rubric.ts)에서 그대로 낸다(설계서 §2).
+ *
+ * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §2·§4·§5·§6, 수용시험 6·11
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -24,6 +28,20 @@ import {
   deleteLessonRecord,
   loadResearchRecords,
 } from '@/server/auth/class-data-actions';
+import {
+  openLessonAction,
+  closeLessonAction,
+  type OpenLessonResult,
+} from '@/server/lessons/actions';
+import {
+  openAssessmentSession,
+  closeAssessmentSession,
+  finalizeTimeouts,
+} from '@/server/assessment/actions';
+import { renderForTeacher, RUBRIC_VERSION } from '@/lib/rubric';
+import { PII_NOTICE } from '@/server/privacy';
+import type { Band } from '@/lib/scoring';
+import type { AssessmentPhase } from '@/lib/research/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -32,7 +50,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { GraduationCap, ArrowLeft, Printer, Trash2, ClipboardList, TrendingUp, ShieldCheck, LogOut } from 'lucide-react';
+import { Textarea } from '@/components/ui/textarea';
+import { GraduationCap, ArrowLeft, Printer, Trash2, ClipboardList, TrendingUp, ShieldCheck, LogOut, CalendarClock, BookOpenCheck } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -67,6 +86,22 @@ export default function TeacherPage() {
   const [lesson, setLesson] = useState<LessonRecords | null>(null);
   const [research, setResearch] = useState<ResearchRecords | null>(null);
   const [loadingData, setLoadingData] = useState(false);
+
+  /* 차시 개방·폐쇄 — 점수·완료 수는 조건이 아니다. */
+  const [lessonNumber, setLessonNumber] = useState('1');
+  const [lessonReason, setLessonReason] = useState('');
+  const [lessonResult, setLessonResult] = useState<OpenLessonResult | null>(null);
+  const [lessonBusy, setLessonBusy] = useState(false);
+
+  /* 검사 세션 — 열기·닫기와 미제출 칸 마감. */
+  const [assessmentPhase, setAssessmentPhase] = useState<AssessmentPhase>('pre');
+  const [assessmentSessionId, setAssessmentSessionId] = useState('');
+  const [assessmentNotice, setAssessmentNotice] = useState<string | null>(null);
+  const [assessmentBlockers, setAssessmentBlockers] = useState<string[]>([]);
+  const [assessmentBusy, setAssessmentBusy] = useState(false);
+
+  /* 공통 루브릭 — 사본이 아니라 단일 버전 리소스에서 낸다. */
+  const [rubricBand, setRubricBand] = useState<Band>('A');
 
   const refreshContext = useCallback(async () => {
     setChecking(true);
@@ -161,6 +196,129 @@ export default function TeacherPage() {
     }
   };
 
+  /* ─────────── 차시 개방·폐쇄 ───────────
+   * 서버 액션이 교사 권한을 다시 확인한다. 화면은 요청만 보낸다.
+   * 학생의 점수·완료 문항 수를 조건으로 쓰지 않는다.
+   */
+  const requireResearchClass = (): string | null => {
+    if (!activeResearchClass) {
+      toast({
+        variant: 'destructive',
+        title: '수업ID를 먼저 고르세요',
+        description: '위에서 연구 학급(수업ID)을 선택해 주세요.',
+      });
+      return null;
+    }
+    return activeResearchClass;
+  };
+
+  const handleOpenLesson = async () => {
+    const classResearchId = requireResearchClass();
+    if (!classResearchId) return;
+    setLessonBusy(true);
+    try {
+      const res = await openLessonAction({
+        classResearchId,
+        lesson: Number(lessonNumber),
+        reason: lessonReason.trim() || null,
+      });
+      setLessonResult(res);
+      toast(
+        res.ok
+          ? { title: `${lessonNumber}차시를 열었습니다` }
+          : { variant: 'destructive', title: '열지 못했습니다', description: res.error ?? '' }
+      );
+    } catch (err) {
+      setLessonResult(null);
+      toast({ variant: 'destructive', title: '열지 못했습니다', description: String((err as Error)?.message ?? '') });
+    } finally {
+      setLessonBusy(false);
+    }
+  };
+
+  const handleCloseLesson = async (scope: 'one' | 'all') => {
+    const classResearchId = requireResearchClass();
+    if (!classResearchId) return;
+    setLessonBusy(true);
+    try {
+      const res = await closeLessonAction({
+        classResearchId,
+        lesson: scope === 'one' ? Number(lessonNumber) : undefined,
+        reason: lessonReason.trim() || null,
+      });
+      setLessonResult(res);
+      toast(
+        res.ok
+          ? { title: scope === 'one' ? `${lessonNumber}차시를 닫았습니다` : '수업을 닫았습니다' }
+          : { variant: 'destructive', title: '닫지 못했습니다', description: res.error ?? '' }
+      );
+    } catch (err) {
+      setLessonResult(null);
+      toast({ variant: 'destructive', title: '닫지 못했습니다', description: String((err as Error)?.message ?? '') });
+    } finally {
+      setLessonBusy(false);
+    }
+  };
+
+  /* ─────────── 검사 세션 ─────────── */
+  const handleOpenAssessment = async () => {
+    const classResearchId = requireResearchClass();
+    if (!classResearchId) return;
+    setAssessmentBusy(true);
+    setAssessmentBlockers([]);
+    try {
+      const res = await openAssessmentSession(classResearchId, assessmentPhase);
+      if (res.ok && res.assessmentSessionId) {
+        setAssessmentSessionId(res.assessmentSessionId);
+        setAssessmentNotice(`${assessmentPhase === 'pre' ? '사전' : '사후'} 검사를 열었습니다.`);
+      } else {
+        setAssessmentBlockers(res.blockers ?? []);
+        setAssessmentNotice('아직 검사를 열 수 없습니다. 아래 미확정 항목을 확인해 주세요.');
+      }
+    } catch (err) {
+      setAssessmentNotice(String((err as Error)?.message ?? '검사를 열지 못했습니다.'));
+    } finally {
+      setAssessmentBusy(false);
+    }
+  };
+
+  const handleCloseAssessment = async () => {
+    if (!assessmentSessionId.trim()) return;
+    setAssessmentBusy(true);
+    try {
+      const res = await closeAssessmentSession(assessmentSessionId.trim());
+      setAssessmentNotice(res.ok ? '검사를 닫았습니다.' : '닫지 못했습니다. 검사 번호를 확인해 주세요.');
+    } catch (err) {
+      setAssessmentNotice(String((err as Error)?.message ?? '닫지 못했습니다.'));
+    } finally {
+      setAssessmentBusy(false);
+    }
+  };
+
+  /**
+   * 시간이 끝났는데 제출되지 않은 칸을 결측으로 확정한다.
+   * 화면에 남아 있던 초안 텍스트는 넘기지 않는다. 대상 연구ID만 보낸다.
+   */
+  const handleFinalizeTimeouts = async () => {
+    if (!assessmentSessionId.trim()) return;
+    if (!researchIds.length) {
+      setAssessmentNotice('마감할 대상이 없습니다. 먼저 연구 자료를 불러와 주세요.');
+      return;
+    }
+    if (!confirm('제출되지 않은 칸을 결측으로 확정할까요? 되돌릴 수 없습니다.')) return;
+    setAssessmentBusy(true);
+    try {
+      const res = await finalizeTimeouts(assessmentSessionId.trim(), researchIds);
+      setAssessmentNotice(
+        res.ok ? `미제출 칸 ${res.created}개를 결측으로 남겼습니다.` : '마감하지 못했습니다.'
+      );
+    } catch (err) {
+      setAssessmentNotice(String((err as Error)?.message ?? '마감하지 못했습니다.'));
+    } finally {
+      setAssessmentBusy(false);
+    }
+  };
+
   // 연습 기록을 학생 → 문제 → 시간순으로 묶는다.
   const practiceGrouped = useMemo(() => {
     const byStudent: Record<string, Record<number, PracticeAttempt[]>> = {};
@@ -178,6 +336,36 @@ export default function TeacherPage() {
     () => Object.keys(practiceGrouped).sort((a, b) => Number(a) - Number(b)),
     [practiceGrouped]
   );
+
+  /** 불러온 연구 자료에 들어 있는 연구ID. 미제출 칸 마감의 대상 목록으로만 쓴다. */
+  const researchIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const record of research?.records ?? []) {
+      const id = (record as Record<string, unknown>).researchId;
+      if (typeof id === 'string' && id) ids.add(id);
+    }
+    return Array.from(ids).sort();
+  }, [research]);
+
+  /**
+   * 연구ID별 제출 문항 수.
+   * 정보 표시용이다. 차시 개방의 조건이 아니며 이 수로 학생을 막지 않는다.
+   */
+  const submittedCounts = useMemo(() => {
+    const counts = new Map<string, Set<string>>();
+    for (const record of research?.records ?? []) {
+      const r = record as Record<string, unknown>;
+      const id = typeof r.researchId === 'string' ? r.researchId : null;
+      const questionId = typeof r.questionId === 'string' ? r.questionId : null;
+      if (!id || !questionId) continue;
+      if (r.responseStatus && r.responseStatus !== 'submitted') continue;
+      if (!counts.has(id)) counts.set(id, new Set());
+      counts.get(id)!.add(questionId);
+    }
+    return Array.from(counts.entries())
+      .map(([researchId, set]) => ({ researchId, count: set.size }))
+      .sort((a, b) => a.researchId.localeCompare(b.researchId));
+  }, [research]);
 
   if (checking) {
     return (
@@ -301,12 +489,253 @@ export default function TeacherPage() {
           </CardContent>
         </Card>
 
-        <Tabs defaultValue="practice" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-3 max-w-xl no-print">
+        <Tabs defaultValue="schedule" className="space-y-6">
+          <TabsList className="grid w-full grid-cols-2 max-w-3xl no-print sm:grid-cols-5">
+            <TabsTrigger value="schedule"><CalendarClock className="mr-2 h-4 w-4" /> 수업 운영</TabsTrigger>
+            <TabsTrigger value="rubric"><BookOpenCheck className="mr-2 h-4 w-4" /> 채점 기준</TabsTrigger>
             <TabsTrigger value="practice"><TrendingUp className="mr-2 h-4 w-4" /> 연습 기록</TabsTrigger>
             <TabsTrigger value="exam"><ClipboardList className="mr-2 h-4 w-4" /> 시험 결과</TabsTrigger>
             <TabsTrigger value="research"><ShieldCheck className="mr-2 h-4 w-4" /> 연구 자료</TabsTrigger>
           </TabsList>
+
+          {/* 차시 개방·폐쇄와 검사 세션. 수용시험 6을 교사가 실제로 수행하는 자리다. */}
+          <TabsContent value="schedule" className="space-y-6">
+            {!isTeacher ? (
+              <Alert>
+                <AlertTitle>연구자 계정</AlertTitle>
+                <AlertDescription>수업 일정 관리는 교사 계정에서 합니다.</AlertDescription>
+              </Alert>
+            ) : (
+              <>
+                <Card className="rounded-2xl">
+                  <CardHeader>
+                    <CardTitle className="text-lg">차시 열기 · 닫기</CardTitle>
+                    <CardDescription>
+                      고른 수업ID({activeResearchClass || '미선택'})의 차시를 엽니다. 학생의
+                      <strong> 점수나 완료 문항 수는 개방 조건이 아닙니다.</strong> 1차시를 두 문항만
+                      한 학생도 2차시를 열면 들어옵니다. 아래 완료 수는 정보로만 보여 주는 값입니다.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>차시</Label>
+                        <Select value={lessonNumber} onValueChange={setLessonNumber}>
+                          <SelectTrigger className="h-12">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {[1, 2, 3, 4, 5, 6].map((n) => (
+                              <SelectItem key={n} value={String(n)}>{n}차시</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="lesson-reason">사유 (기록에 남습니다, 선택)</Label>
+                        <Input
+                          id="lesson-reason"
+                          value={lessonReason}
+                          onChange={(e) => setLessonReason(e.target.value)}
+                          placeholder="예: 3월 2주 정규 수업"
+                          className="h-12"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={() => void handleOpenLesson()} disabled={lessonBusy}>
+                        {lessonNumber}차시 열기
+                      </Button>
+                      <Button variant="outline" onClick={() => void handleCloseLesson('one')} disabled={lessonBusy}>
+                        {lessonNumber}차시만 닫기
+                      </Button>
+                      <Button variant="outline" onClick={() => void handleCloseLesson('all')} disabled={lessonBusy}>
+                        수업 전체 닫기
+                      </Button>
+                    </div>
+
+                    {lessonResult && (
+                      <Alert className={lessonResult.ok ? '' : 'border-destructive/40'}>
+                        <AlertTitle>
+                          {lessonResult.ok ? '지금 열린 차시' : '처리하지 못했습니다'}
+                        </AlertTitle>
+                        <AlertDescription className="space-y-1">
+                          {lessonResult.ok ? (
+                            <>
+                              <p>
+                                열린 차시:{' '}
+                                {lessonResult.allowedLessons.length
+                                  ? lessonResult.allowedLessons.map((n) => `${n}차시`).join(', ')
+                                  : '없음'}
+                                {lessonResult.currentLesson !== null &&
+                                  ` · 현재 ${lessonResult.currentLesson}차시`}
+                              </p>
+                              {!lessonResult.durable && (
+                                <p className="text-destructive">
+                                  {lessonResult.error ??
+                                    '서버 저장소에 남기지 못했습니다. 연구 운영에 쓰지 마세요.'}
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            <p>{lessonResult.error}</p>
+                          )}
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      이 칸은 방금 처리한 결과를 보여 줍니다. 다른 기기에서 바꾼 상태를 다시 읽어
+                      오려면 차시를 한 번 더 열어 확인해 주세요.
+                    </p>
+                  </CardContent>
+                </Card>
+
+                <Card className="rounded-2xl">
+                  <CardHeader>
+                    <CardTitle className="text-lg">사전 · 사후 검사</CardTitle>
+                    <CardDescription>
+                      검사 화면은 점수·피드백을 보여 주지 않습니다. 미확정 항목이 있으면 서버가
+                      열어 주지 않습니다.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>시점</Label>
+                        <Select
+                          value={assessmentPhase}
+                          onValueChange={(v) => setAssessmentPhase(v as AssessmentPhase)}
+                        >
+                          <SelectTrigger className="h-12">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="pre">사전 검사</SelectItem>
+                            <SelectItem value="post">사후 검사</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="assessment-session">검사 번호</Label>
+                        <Input
+                          id="assessment-session"
+                          value={assessmentSessionId}
+                          onChange={(e) => setAssessmentSessionId(e.target.value)}
+                          placeholder="검사를 열면 자동으로 채워집니다"
+                          className="h-12"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={() => void handleOpenAssessment()} disabled={assessmentBusy}>
+                        검사 열기
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => void handleCloseAssessment()}
+                        disabled={assessmentBusy || !assessmentSessionId.trim()}
+                      >
+                        검사 닫기
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => void handleFinalizeTimeouts()}
+                        disabled={assessmentBusy || !assessmentSessionId.trim()}
+                      >
+                        미제출 칸 마감
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      미제출 칸 마감은 시간이 끝났는데 내지 않은 칸을 결측으로 남깁니다. 학생 화면에
+                      남아 있던 초안은 넘기지 않으므로 초안이 응답으로 확정되지 않습니다. 대상은
+                      불러온 연구 자료의 참가자 {researchIds.length}명입니다.
+                    </p>
+                    {assessmentNotice && (
+                      <Alert className={assessmentBlockers.length ? 'border-destructive/40' : ''}>
+                        <AlertTitle>안내</AlertTitle>
+                        <AlertDescription className="space-y-1">
+                          <p>{assessmentNotice}</p>
+                          {assessmentBlockers.length > 0 && (
+                            <ul className="list-disc pl-5">
+                              {assessmentBlockers.map((b) => (
+                                <li key={b}>{b}</li>
+                              ))}
+                            </ul>
+                          )}
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="rounded-2xl">
+                  <CardHeader>
+                    <CardTitle className="text-lg">제출 문항 수 (정보)</CardTitle>
+                    <CardDescription>
+                      개방 조건이 아닙니다. 이 수가 적어도 다음 차시에 들어갈 수 있습니다.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {submittedCounts.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        불러온 연구 자료가 없습니다. 위에서 수업ID를 고르면 표시합니다.
+                      </p>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>참가자(연구ID)</TableHead>
+                            <TableHead className="text-right">제출 문항 수</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {submittedCounts.map((row) => (
+                            <TableRow key={row.researchId}>
+                              <TableCell className="font-mono text-xs">{row.researchId}</TableCell>
+                              <TableCell className="text-right tabular-nums">{row.count}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </CardContent>
+                </Card>
+              </>
+            )}
+          </TabsContent>
+
+          {/* 공통 루브릭 — 사본을 손으로 옮겨 적지 않고 단일 버전 리소스에서 그대로 낸다. */}
+          <TabsContent value="rubric" className="space-y-4">
+            <Card className="rounded-2xl">
+              <CardHeader>
+                <CardTitle className="text-lg">공통 루브릭 {RUBRIC_VERSION}</CardTitle>
+                <CardDescription>
+                  AI 채점 지시문·이 화면·내보내기 문서가 모두 같은 원본에서 나옵니다. 문항별 단서와
+                  수준 경계는 문항 명세를 함께 적용합니다.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="max-w-xs space-y-2 no-print">
+                  <Label>밴드</Label>
+                  <Select value={rubricBand} onValueChange={(v) => setRubricBand(v as Band)}>
+                    <SelectTrigger className="h-12">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="A">A밴드 (Lv.1~12)</SelectItem>
+                      <SelectItem value="B">B밴드 (Lv.13~24)</SelectItem>
+                      <SelectItem value="C">C밴드 (Lv.25~36)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Textarea
+                  readOnly
+                  value={renderForTeacher(rubricBand)}
+                  className="min-h-[420px] font-body text-sm leading-relaxed"
+                />
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           <TabsContent value="practice" className="space-y-6">
             {!isTeacher ? (
@@ -429,6 +858,7 @@ export default function TeacherPage() {
                 {research?.notice ??
                   '연구ID 자료입니다. 학교명·출석번호·실명 대응표는 포함하지 않습니다.'}
                 {' '}삭제 권한은 분리되어 있어 이 화면에서 연구 자료를 지울 수 없습니다.
+                <span className="mt-2 block text-xs">{PII_NOTICE}</span>
               </AlertDescription>
             </Alert>
             {loadingData ? (

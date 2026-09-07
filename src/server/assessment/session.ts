@@ -94,8 +94,13 @@ export interface ResearchStartCheck {
  * 본연구 검사를 시작해도 되는지 판정한다.
  *
  * candidate 상태이거나 승인일이 없거나 readiness가 false이면 막는다.
- * 합성 자료를 대상으로 하는 모의 실행만 allowCandidate로 따로 허용한다.
  * 화면 토글이 아니라 이 판정이 근거이며 route·server action·스크립트가 모두 이것을 부른다.
+ *
+ * allowCandidate는 '합성 자료 모의 실행'에서만 쓴다. 이 옵션은 레지스트리 상태에 대한
+ * 예외일 뿐 실데이터 채점의 차단을 푸는 열쇠가 아니다. 자료가 실제로 합성인지는
+ * scoring-job의 assertSyntheticDryRun이 따로 강제하며, 이 함수만 통과했다고
+ * 실데이터를 채점해도 된다는 뜻이 아니다. 막힌 사유는 허용하는 경우에도 그대로 돌려주어
+ * 호출한 쪽이 '완료'로 보고하지 않게 한다.
  */
 export function checkResearchStartAllowed(
   registry: AssessmentRegistryView,

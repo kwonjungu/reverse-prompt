@@ -6,21 +6,29 @@
  * 교육학적 적절성 / 채점 공정성 / 피드백 품질 / 문제 난이도 / 이미지 프롬프트 편향을
  * 자동으로 검토하고 개선안을 제시합니다.
  *
- * 모델: gemini-2.5-flash (비용 절감)
+ * 모델: src/server/config.ts의 EVALUATION_MODEL_ID(기본값 googleai/gemini-3.8-flash).
+ * 모델명을 이 파일에 따로 적지 않는다. 운영자가 접근을 확인한 값을 한곳에서만 바꾼다.
  *
  * 이 경로는 학생 응답을 다른 AI에 보내는 경로다. 그러므로 기본은 합성 자료(설정만)
  * 감수이며, 실데이터 입력은 연구자 역할과 명시적 승인 기록이 함께 있을 때만 받는다.
- * 승인 플래그가 없으면 실데이터를 거부한다. 테스트 목적으로 실데이터를 내려받거나
- * 감수 AI로 보내지 않는다.
+ * 테스트 목적으로 실데이터를 내려받거나 감수 AI로 보내지 않는다.
  *
- * 실제 호출은 서버 액션 @/server/auth/audit-actions의 runAuditFromServer를 거친다.
- * 클라이언트가 이 함수를 직접 부르더라도 아래 승인 검사에서 막힌다.
+ * 이 파일은 'use server'이므로 export한 함수의 액션 ID가 클라이언트 번들에 실린다.
+ * 그러므로 호출부(@/server/auth/audit-actions)의 검사에 기대지 않고 여기서 직접
+ * 서버 인증을 다시 한다. 예전에는 이 함수에 인증 검사가 하나도 없었고 approval의
+ * 세 문자열이 채워져 있기만 하면 실데이터 감수가 통과했다(수용시험 7·11 위반).
  *
- * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §1 P1, §6
+ *   1. 역할이 연구자인지 서버에서 확인한다(학생·교사·개발자·익명 거부).
+ *   2. 실데이터는 승인 기록을 서버 저장소에서 조회해 확인한다. 호출자가 보낸
+ *      승인번호·승인자·승인시각 문자열을 그대로 믿지 않는다.
+ *
+ * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §1 P1, §6, 수용시험 7
  */
 
 import { ai } from '@/ai/genkit';
 import { z } from 'genkit';
+import { auth } from '@/server/auth';
+import { EVALUATION_MODEL_ID } from '@/server/config';
 
 // ── 입력 스키마 ──────────────────────────────────────────
 const QuestionSchema = z.object({
@@ -40,14 +48,17 @@ const EvalSampleSchema = z.object({
   originalPrompt: z.string().optional(),
 });
 
-export const AuditInputSchema = z.object({
+const AuditInputSchema = z.object({
   questions: z.array(QuestionSchema).describe('현재 설정된 연습 문제 목록'),
   evaluationPrompt: z.string().describe('채점 AI에 사용 중인 시스템 프롬프트'),
   imagePromptTemplate: z.string().describe('이미지 생성 시 사용하는 buildImagePrompt 전체 텍스트'),
   recentEvaluations: z.array(EvalSampleSchema).optional().describe('최근 학생 제출 (선택, 승인 필요)'),
   /** 기본은 합성 자료다. 실데이터는 승인 기록이 있어야 한다. */
   dataSource: z.enum(['synthetic', 'real']).default('synthetic'),
-  /** 연구자 역할 확인과 명시적 승인 기록. 실데이터일 때만 채운다. */
+  /**
+   * 서버가 저장소에서 확인한 승인 기록. 호출자가 채워 보낸 값은 무시하고
+   * runAuditAgent가 조회 결과로 덮어쓴다. 조회에 실패하면 실행하지 않는다.
+   */
   approval: z
     .object({
       approvalId: z.string(),
@@ -57,6 +68,16 @@ export const AuditInputSchema = z.object({
     .optional(),
 });
 export type AuditInput = z.infer<typeof AuditInputSchema>;
+
+/**
+ * 실데이터 감수를 요청할 때 함께 넘기는 승인 참조.
+ * 이 값은 승인 기록을 조회하는 데만 쓰고 모델에 보내는 지시문에는 넣지 않는다.
+ */
+export interface AuditApprovalRef {
+  approvalId: string;
+  /** 승인 대상 학급. 감수 payload에는 넣지 않는다. */
+  classResearchId: string;
+}
 
 /**
  * 승인 없는 실데이터 감수 전송을 막을 때 던지는 오류.
@@ -86,7 +107,7 @@ const FindingSchema = z.object({
   targetFile: z.string().optional().describe('수정이 필요한 파일 경로'),
 });
 
-export const AuditOutputSchema = z.object({
+const AuditOutputSchema = z.object({
   overallGrade: z.enum(['A', 'B', 'C', 'D']).describe('시스템 전체 품질 등급'),
   overallComment: z.string().describe('전체 평가 요약 (2~3문장)'),
   findings: z.array(FindingSchema).describe('발견 사항 목록 (중요도 순)'),
@@ -95,25 +116,54 @@ export const AuditOutputSchema = z.object({
 });
 export type AuditOutput = z.infer<typeof AuditOutputSchema>;
 
-export async function runAuditAgent(input: AuditInput): Promise<AuditOutput> {
+export async function runAuditAgent(
+  input: AuditInput,
+  approvalRef?: AuditApprovalRef,
+): Promise<AuditOutput> {
   const dataSource = input.dataSource ?? 'synthetic';
   const hasRealData = (input.recentEvaluations?.length ?? 0) > 0;
 
-  // 합성 자료만 기본 허용한다. 실데이터가 섞여 오면 승인 여부와 무관하게 먼저 막는다.
+  // 0. 감수는 승인된 연구자 작업이다. 화면을 거치지 않고 이 액션을 직접 불러도 여기서 막힌다.
+  //    학생·교사·개발자·익명은 통과하지 못한다(개발자는 Principal 자체를 받지 못한다).
+  await auth.requireRole('researcher');
+
+  // 1. 합성 자료만 기본 허용한다. 실데이터가 섞여 오면 승인 여부와 무관하게 먼저 막는다.
   if (hasRealData && dataSource !== 'real') {
     throw new AuditPolicyError(
       '실데이터 감수는 기본 허용되지 않습니다. 합성 자료로만 감수합니다.'
     );
   }
-  if (dataSource === 'real') {
-    const approval = input.approval;
-    if (!approval?.approvalId || !approval.approvedBy || !approval.approvedAt) {
-      throw new AuditPolicyError(
-        '연구자 역할과 명시적 승인 기록이 없으면 실데이터를 감수 AI로 보내지 않습니다.'
-      );
-    }
+
+  if (dataSource !== 'real') {
+    // 합성 자료 감수에는 승인 기록이 필요 없다. 호출자가 붙여 보낸 승인 값도 남기지 않는다.
+    return auditFlow({ ...input, approval: undefined });
   }
-  return auditFlow(input);
+
+  // 2. 실데이터는 서버 저장소의 승인 기록으로만 연다.
+  //    호출자가 보낸 승인번호·승인자·승인시각 문자열은 근거가 되지 못한다.
+  if (!approvalRef?.approvalId || !approvalRef?.classResearchId) {
+    throw new AuditPolicyError(
+      '연구자 역할과 명시적 승인 기록이 없으면 실데이터를 감수 AI로 보내지 않습니다.'
+    );
+  }
+  let approval: { approvalId: string; approvedBy: string; approvedAt: string };
+  try {
+    // 역할·학급 접근·승인 기록(audit_approvals)을 서버가 한 번에 확인한다.
+    approval = await auth.requireRealDataAuditApproval({
+      approvalId: approvalRef.approvalId,
+      classResearchId: approvalRef.classResearchId,
+    });
+  } catch (e) {
+    // 승인 조회에 실패하면 실데이터를 보내지 않는다. 사유는 정책 오류로 통일한다.
+    throw new AuditPolicyError(
+      `승인 기록을 확인하지 못해 실데이터 감수를 중단했습니다: ${
+        e instanceof Error ? e.message : '알 수 없는 사유'
+      }`
+    );
+  }
+
+  // 확인한 값으로 덮어쓴다. 승인 참조(학급ID)는 모델 지시문에 넣지 않는다.
+  return auditFlow({ ...input, dataSource: 'real', approval });
 }
 
 // ── 에이전트 플로우 ──────────────────────────────────────
@@ -165,7 +215,8 @@ findings는 severity 순(즉시수정 → 개선권장 → 양호)으로 정렬�
 
     try {
       const response = await ai.generate({
-        model: 'googleai/gemini-3.8-flash',
+        // 모델 ID는 서버 설정 한곳에서만 정한다. 이 파일에 모델명을 적지 않는다.
+        model: EVALUATION_MODEL_ID,
         output: { schema: AuditOutputSchema },
         prompt,
         config: { temperature: 0.3 },

@@ -22,7 +22,13 @@ export interface SessionHint {
   classResearchId: string | null;
 }
 
-/** 세션 성격을 알 수 없을 때의 기본값. 자율 진행인 일반 체험으로 본다. */
+/**
+ * 힌트 쿠키가 없을 때 middleware(edge)가 쓰는 표시용 기본값.
+ *
+ * **권한의 근거가 아니다.** server action·API는 이 값을 쓰지 않으며, 세션을 확정하지
+ * 못한 요청을 일반 체험으로 강등하지 않는다(감사 A-3). 강등 금지의 실제 구현은
+ * auth-bridge.ts의 resolveStudentSession과 policy.ts의 sessionVerified 판정이다.
+ */
 export const DEFAULT_SESSION_TYPE: SessionType = 'experience';
 
 const SESSION_TYPES: SessionType[] = ['experience', 'research_practice', 'research_assessment'];

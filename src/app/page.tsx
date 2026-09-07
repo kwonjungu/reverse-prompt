@@ -86,6 +86,8 @@ export default function Home() {
   const [participantCode, setParticipantCode] = useState('');
   const [isIssuing, setIsIssuing] = useState(false);
   const [entryNotice, setEntryNotice] = useState<string | null>(null);
+  /** 허용 모드가 비어 있을 때 서버가 준 안내. 구현 용어 없이 그대로 보여 준다. */
+  const [modeNotice, setModeNotice] = useState<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -121,10 +123,12 @@ export default function Home() {
         if (!alive) return;
         setModes(res.modes);
         setSessionType(res.sessionType);
+        setModeNotice(res.modes.length ? null : res.message ?? null);
       } catch {
         if (!alive) return;
-        // 확인하지 못했으면 연구 수업에서 허용되는 범위로만 좁혀 둔다.
-        setModes(['guide', 'practice']);
+        // 확인하지 못했으면 아무 활동도 열지 않는다. 확인 실패를 허용으로 바꾸지 않는다.
+        setModes([]);
+        setModeNotice('지금 무엇을 할 수 있는지 확인하지 못했어요. 잠시 뒤 다시 해 볼까요?');
       }
     })();
     return () => {
@@ -179,10 +183,11 @@ export default function Home() {
       const res = await fetch('/api/auth/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // 옛 신원 잔재(학교코드·학년반·출석번호)를 연구 경로로 보내지 않는다.
+        // 학급·신원·세션 성격은 서버가 수업 번호와 참가 번호로 확정한다.
         body: JSON.stringify({
           classResearchId: classResearchId.trim(),
           participantCode: participantCode.trim() || null,
-          classCode: sessionStorage.getItem('classCode'),
         }),
       });
       if (!res.ok) {
@@ -199,6 +204,7 @@ export default function Home() {
       const modeRes = await getAllowedModesAction();
       setModes(modeRes.modes);
       setSessionType(modeRes.sessionType);
+      setModeNotice(modeRes.modes.length ? null : modeRes.message ?? null);
     } catch {
       setEntryNotice('지금 들어가지 못했어요. 잠시 뒤 다시 해 볼까요?');
     } finally {
@@ -399,6 +405,14 @@ export default function Home() {
 
         {modes === null ? (
           <p className="text-sm text-muted-foreground">잠시만 기다려 주세요.</p>
+        ) : visibleCards.length === 0 ? (
+          <Alert className="mx-auto max-w-xl border-primary/40 bg-primary/5 text-left">
+            <Info className="h-4 w-4" />
+            <AlertTitle>지금 열린 활동이 없어요</AlertTitle>
+            <AlertDescription>
+              {modeNotice ?? '선생님이 활동을 열어 주면 시작할 수 있어요.'}
+            </AlertDescription>
+          </Alert>
         ) : (
           <div
             className={`grid grid-cols-1 md:grid-cols-2 gap-8 mx-auto ${

@@ -15,10 +15,10 @@ import { ai } from '@/ai/genkit';
 import { registry } from '@/server/registry';
 import { privacy } from '@/server/privacy';
 import { CODE_COMMIT, EVALUATION_MODEL_CONFIG, EVALUATION_MODEL_ID } from '@/server/config';
-import { createGrading, type CallModel } from './operational';
+import { createGrading, resolveModelConfig, type CallModel } from './operational';
 import type { GradingApi } from './contract';
 
-export { createGrading } from './operational';
+export { createGrading, resolveModelConfig } from './operational';
 export type { CallModel, GradingDeps, ModelCallInput } from './operational';
 
 /**
@@ -61,6 +61,6 @@ export const grading: GradingApi = createGrading({
   registry,
   privacy,
   modelId: EVALUATION_MODEL_ID,
-  modelConfig: { ...EVALUATION_MODEL_CONFIG },
+  modelConfig: resolveModelConfig({ ...EVALUATION_MODEL_CONFIG }),
   codeCommit: CODE_COMMIT,
 });

@@ -11,6 +11,9 @@ import 'server-only';
  */
 
 import type { ConsentRecord, SessionType } from '@/lib/research/types';
+import type { ClassAccessOptions } from './access';
+
+export type { ClassAccessOptions } from './access';
 
 export type Role = 'student' | 'teacher' | 'researcher' | 'admin';
 
@@ -44,8 +47,18 @@ export interface AuthApi {
   requirePrincipal(): Promise<Principal>;
   /** 역할을 요구한다. */
   requireRole(...roles: Role[]): Promise<Principal>;
-  /** 해당 학급에 대한 접근 권한을 요구한다. */
-  requireClassAccess(classResearchId: string, ...roles: Role[]): Promise<Principal>;
+  /**
+   * 해당 학급에 대한 접근 권한을 요구한다.
+   *
+   * 행위(read/write/delete)를 함께 넘긴다. 넘기지 않으면 'write'로 판정한다.
+   * 무엇을 할지 밝히지 않은 호출을 읽기로 취급하면 연구자의 쓰기·삭제 금지 분기가
+   * 아무도 타지 않기 때문이다(감사 A-4). 읽기 전용 화면은 { action: 'read' }를
+   * 명시한다. 기존 호출 방식(역할만 나열)은 그대로 둔다.
+   */
+  requireClassAccess(
+    classResearchId: string,
+    ...rolesOrOptions: (Role | ClassAccessOptions)[]
+  ): Promise<Principal>;
   /** 서버에서 조회한 동의 상태. 클라이언트 입력을 신뢰하지 않는다. */
   getConsent(researchId: string): Promise<ConsentRecord | null>;
   /** 연구 수집이 가능한 참가자인지 서버에서 확인한다. */

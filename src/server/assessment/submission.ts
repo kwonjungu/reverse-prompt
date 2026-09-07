@@ -4,6 +4,9 @@
  * 설계서 §5
  *  - 제출ID에 대해 idempotent. 더블클릭·네트워크 재시도로 이중 저장·다른 점수 생성 금지.
  *    최초 유효 제출은 불변이고 이후 요청은 거절 기록으로 남긴다.
+ *  - 불변의 단위는 제출ID가 아니라 (researchId, phase, questionId) 한 칸이다.
+ *    클라이언트가 만든 제출ID는 새로 지어낼 수 있으므로 그것만으로는 두 탭·두 기기의
+ *    이중 제출을 막지 못한다. 그래서 이 파일의 판정은 '그 칸의 기존 기록'을 입력으로 받는다.
  *  - 시간 종료 미제출은 timeout_unsubmitted. 장애·철회·미동의는 서로 다른 상태다.
  *  - 빈 응답을 최저 점수로 만들지 않는다.
  *  - 제출 전 타이핑 초안을 자동으로 연구 응답으로 확정하지 않는다.
@@ -31,6 +34,17 @@ const SUBMISSION_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 
 export function isValidSubmissionId(id: string): boolean {
   return SUBMISSION_ID_PATTERN.test(id);
+}
+
+/**
+ * 빈 응답인지 판정한다(설계서 §5 "빈 응답을 최저 점수로 만들지 않는다").
+ *
+ * 정제 뒤 글자가 하나도 없으면 유효 제출로 받지 않는다. 클라이언트 버튼의
+ * disabled만으로는 API 직접 호출을 막지 못하므로 서버가 같은 판정을 한 번 더 한다.
+ * 공백·제어문자만 있는 응답도 빈 응답이다.
+ */
+export function isEmptyResponse(rawOrSanitized: string): boolean {
+  return sanitizeResponseText(rawOrSanitized).length === 0;
 }
 
 /**
@@ -146,7 +160,7 @@ export type SubmissionOutcome =
 
 export interface SubmissionDecision {
   outcome: SubmissionOutcome;
-  /** 이 제출ID의 권위 있는 기록. 거절일 때는 기존 기록을 그대로 돌려준다. */
+  /** 이 칸의 권위 있는 기록. 거절일 때는 기존 기록을 그대로 돌려준다. */
   authoritative: SubmissionRecord;
   /** 저장해야 할 새 문서. 거절일 때는 null이고 대신 rejection을 남긴다. */
   toStore: SubmissionRecord | null;
@@ -155,10 +169,14 @@ export interface SubmissionDecision {
 }
 
 /**
- * 같은 submissionId로 들어온 요청을 판정한다.
+ * 같은 칸(researchId·phase·questionId)으로 들어온 요청을 판정한다.
  *
- * 더블클릭·네트워크 재시도는 모두 여기로 모이며, 최초 유효 제출은 바뀌지 않는다.
- * 두 번째 요청의 텍스트가 달라도 저장된 값을 덮어쓰지 않는다.
+ * 더블클릭·네트워크 재시도·두 탭·두 기기의 제출이 모두 여기로 모이며,
+ * 최초 유효 제출은 바뀌지 않는다. 두 번째 요청의 제출ID나 텍스트가 달라도
+ * 저장된 값을 덮어쓰지 않고 거절 기록만 남긴다.
+ *
+ * existing은 '같은 제출ID의 문서'가 아니라 '그 칸의 문서'다. 제출ID만 보던 판정은
+ * 새 ID를 지어낸 두 번째 제출을 그대로 저장해 한 칸에 유효 제출이 둘 생겼다.
  */
 export function resolveSubmission(
   existing: SubmissionRecord | null,
@@ -197,15 +215,23 @@ export type SubmitGuardFailure =
   | 'consent_withdrawn'
   | 'session_closed'
   | 'deadline_passed'
-  | 'registry_not_ready';
+  | 'registry_not_ready'
+  /** 정제 뒤 글자가 없는 응답. 유효 제출로 받지 않는다. */
+  | 'empty_response'
+  /** 문항을 연 적이 없다. 창 없이 온 제출은 받지 않는다. */
+  | 'item_not_started';
 
 export interface SubmitGuardInput {
   submissionId: string;
   consentActive: boolean;
   consentWithdrawn: boolean;
   sessionOpen: boolean;
+  /** 서버가 연 문항 창이 실제로 있는가. 없으면 시작하지 않은 문항이다. */
+  itemStarted: boolean;
   withinDeadline: boolean;
   registryReady: boolean;
+  /** 정제 뒤 글자가 하나라도 있는가. 서버가 직접 확인한 값만 넣는다. */
+  hasText: boolean;
 }
 
 export function checkSubmitGuards(
@@ -218,7 +244,10 @@ export function checkSubmitGuards(
   if (!input.consentActive) return { ok: false, reason: 'not_consented' };
   if (!input.registryReady) return { ok: false, reason: 'registry_not_ready' };
   if (!input.sessionOpen) return { ok: false, reason: 'session_closed' };
+  if (!input.itemStarted) return { ok: false, reason: 'item_not_started' };
   if (!input.withinDeadline) return { ok: false, reason: 'deadline_passed' };
+  // 빈 응답은 저장하지 않는다. 저장하면 채점 큐에 들어가 수준 1(0점)이 된다.
+  if (!input.hasText) return { ok: false, reason: 'empty_response' };
   return { ok: true };
 }
 
@@ -236,6 +265,11 @@ export function guardFailureToMissingReason(
     case 'invalid_submission_id':
     case 'session_closed':
     case 'registry_not_ready':
+    case 'item_not_started':
+    // 빈 응답은 그 자리에서 결측을 확정하지 않는다. 학생이 남은 시간에 다시 쓸 수
+    // 있어야 하고, 끝내 쓰지 않으면 마감 처리가 timeout_unsubmitted로 남긴다.
+    // 빈 글을 유효 제출로도, 즉시 결측으로도 만들지 않는다.
+    case 'empty_response':
       // 연구 응답으로 세지 않는다. 결측 칸을 만들지 않고 요청만 거부한다.
       return null;
   }

@@ -43,8 +43,9 @@ export type SuggestPromptImprovementsOutput = z.infer<typeof SuggestPromptImprov
  * 외부 전송을 멈추고 교사 확인을 받는다.
  */
 export async function suggestPromptImprovements(input: SuggestPromptImprovementsInput): Promise<SuggestPromptImprovementsOutput> {
-  const session = await auth.resolveSessionContext().catch(() => null);
-  if (session && isResearchSession(session.sessionType as SessionType)) {
+  // 세션을 확인하지 못하면 거부한다. 확인 실패를 일반 체험 허용으로 바꾸지 않는다.
+  const session = await auth.resolveSessionContext();
+  if (!session || isResearchSession(session.sessionType as SessionType)) {
     throw new Error('지금은 선생님이 연 활동만 할 수 있어요.');
   }
 

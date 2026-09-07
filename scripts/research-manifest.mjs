@@ -103,7 +103,7 @@ async function main() {
   const entriesModule = await import(pathToFileURL(join(registryDir, 'entries.ts')).href);
   const coreModule = await import(pathToFileURL(join(registryDir, 'core.ts')).href);
   const { ASSESSMENT_ORDER, baseEntries, collectBlockers, assessmentImageFile } = entriesModule;
-  const { parseCuePack } = coreModule;
+  const { applyCueState, parseCuePack } = coreModule;
 
   const missing = [];
 
@@ -196,7 +196,19 @@ async function main() {
     return { present: true, sha256Actual: sha256(readFileSync(abs)), matchesSpec: null };
   }
 
-  const entries = baseEntries();
+  // 팩이 스스로 밝힌 cueVersion을 반영한다. 적재되지 않은 문항은 레지스트리 값 그대로 둔다.
+  // 없는 버전을 지어내지 않는다.
+  const packState = {
+    loaded: cuePackLoaded,
+    cueVersion:
+      cuePackRaw && typeof cuePackRaw.cueVersion === 'string' && cuePackRaw.cueVersion.trim()
+        ? cuePackRaw.cueVersion.trim()
+        : null,
+    questions: packQuestions,
+    invalid: packInvalid,
+    error: cuePackError ?? null,
+  };
+  const entries = baseEntries().map((entry) => applyCueState(entry, packState));
   const items = entries.map((entry) => {
     const image = imageStatusOf(entry);
     const cueHash = cueHashOf(entry.questionId);

@@ -19,6 +19,8 @@ import Link from 'next/link';
 import type { AuditOutput } from '@/ai/flows/audit-agent';
 import { runAuditFromServer } from '@/server/auth/audit-actions';
 import { loadStaffContext } from '@/server/auth/class-data-actions';
+import { PII_NOTICE } from '@/server/privacy';
+import { RUBRIC_VERSION, renderForExport } from '@/lib/rubric';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -144,6 +146,16 @@ export default function AdminPage() {
           </AlertDescription>
         </Alert>
 
+        {/*
+          전송 전 개인정보 점검의 한계 고지. 이 문구는 src/server/privacy의 PII_NOTICE
+          하나에서 온다. 화면마다 다른 말로 옮겨 적지 않는다.
+        */}
+        <Alert className="mb-6 border-2 border-amber-300 bg-amber-50/60">
+          <ShieldCheck className="h-5 w-5 text-amber-700" />
+          <AlertTitle className="font-bold text-amber-800">개인정보 점검의 한계</AlertTitle>
+          <AlertDescription className="text-amber-900">{PII_NOTICE}</AlertDescription>
+        </Alert>
+
         <Card className="mb-6 border-2 border-primary/20">
           <CardHeader>
             <CardTitle className="text-lg">감수 설정</CardTitle>
@@ -193,6 +205,27 @@ export default function AdminPage() {
                 : <><Bot className="mr-2 h-5 w-5" />감수 시작</>
               }
             </Button>
+          </CardContent>
+        </Card>
+
+        {/*
+          공통 루브릭 문서. AI 지시문·교사 화면·내보내기 문서가 같은 리소스에서 나오는지
+          사람이 눈으로 확인하는 자리다. renderForExport()가 만든 문서를 그대로 보여 준다.
+        */}
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="text-lg">공통 루브릭 문서 ({RUBRIC_VERSION})</CardTitle>
+            <CardDescription>
+              채점 지시문·교사 화면·내보내기가 함께 쓰는 원본입니다. 문항별 단서·앵커는 담기지 않습니다.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <details>
+              <summary className="cursor-pointer text-sm font-medium">문서 보기</summary>
+              <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-muted p-3 text-xs">
+                {renderForExport()}
+              </pre>
+            </details>
           </CardContent>
         </Card>
 

@@ -41,7 +41,10 @@ npm test           # 순수 함수·모의 모델 테스트 (실제 모델을 �
 npm run build      # 프로덕션 빌드 (GOOGLE_GENAI_API_KEY 필요)
 ```
 
-`npm test`의 Firebase Emulator 권한 시험은 에뮬레이터가 없으면 건너뛴다. **건너뛴 것은 통과가 아니다.**
+`npm test`의 Firebase Emulator 권한 시험과 검사 단서 노출 점검은 에뮬레이터·비공개 단서 팩이 없으면
+건너뛴다. **건너뛴 것은 통과가 아니다.** 실제 모델을 호출하는 시험은 없다.
+
+`npm run lint`는 동작하지 않는다 — eslint 설정과 패키지가 없어 `next lint`가 대화형 설치 프롬프트로 빠진다.
 
 ## 비공개 연구 자산
 

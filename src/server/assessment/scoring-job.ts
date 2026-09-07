@@ -56,7 +56,9 @@ export function findForbiddenGraderFields(payload: unknown): string[] {
 /**
  * 채점자에게 보낼 요청을 만든다.
  *
- * SubmissionRecord에서 questionId·band·정제된 text만 가져온다.
+ * SubmissionRecord에서 questionId와 정제된 text만 가져온다.
+ * 밴드는 보내지 않는다. 서버 레지스트리가 questionId로 확정하는 값이므로 저장 기록의
+ * band를 함께 보내면 그것이 채점에 쓰인다는 오해를 남긴다.
  * phase·researchId·classResearchId는 여기서 의도적으로 버린다. 결과를 되붙일 때는
  * 반환하지 않고 호출한 쪽이 별도로 들고 있는 순서 정보로 잇는다.
  */
@@ -67,7 +69,6 @@ export function buildGraderPayload(
 ): GradingRequest {
   return {
     questionId: submission.questionId,
-    band: submission.band,
     studentText: submission.text,
     operationId,
     repeatIndex,
@@ -92,13 +93,22 @@ export interface QueuedItem {
  * 시드 기반 셔플을 돌린다. 같은 시드는 언제나 같은 순서를 낸다.
  * 결측(미제출·철회·미동의)은 채점 대상이 아니므로 큐에 넣지 않는다.
  * 빈 응답에 최저 점수를 매기지 않기 위해서다.
+ *
+ * 글자가 없는 텍스트도 큐에 넣지 않는다. 수집 단계에서 이미 막지만, 이전 세대에
+ * 저장된 빈 텍스트가 모델로 가 수준 1(0점)이 되는 일을 여기서 한 번 더 막는다.
  */
 export function buildScoringQueue(
   submissions: readonly SubmissionRecord[],
   seed: string
 ): QueuedItem[] {
   const ids = submissions
-    .filter((s) => s.responseStatus === 'submitted' && s.persistStatus === 'stored')
+    .filter(
+      (s) =>
+        s.responseStatus === 'submitted' &&
+        s.persistStatus === 'stored' &&
+        typeof s.text === 'string' &&
+        s.text.trim().length > 0
+    )
     .map((s) => s.submissionId)
     .sort();
 
@@ -133,14 +143,78 @@ export interface ScoringJobDeps {
   isConsentActive: (researchId: string) => Promise<boolean>;
   now?: () => number;
   codeCommit?: string;
+  /**
+   * 이 작업이 다루는 자료의 성격. 기본값은 'research'(실데이터)다.
+   * dryRun은 'synthetic'일 때만 쓸 수 있다. 실데이터 채점은 dryRun으로 열리지 않는다.
+   */
+  dataSource?: 'synthetic' | 'research';
+  /**
+   * 연구 저장소(Firestore)에 쓰는 저장소인지. 모의 실행은 연구 저장소에 쓰지 않는다.
+   * 호출한 쪽이 어떤 저장소를 넣었는지 밝힌다.
+   */
+  storeIsPersistent?: boolean;
 }
 
 export interface ScoringJobOptions {
   /** 혼합 시드. 인자로 받아 기록한다. 같은 시드로 순서를 재현한다. */
   seed: string;
   repeatIndex: number;
-  /** 합성 자료 대상 모의 실행. candidate 레지스트리를 이 플래그로만 허용한다. */
+  /**
+   * 합성 자료 대상 모의 실행.
+   *
+   * 이 플래그는 '합성 자료에 한해' candidate 레지스트리를 허용할 뿐이며,
+   * 실데이터 채점의 차단을 풀지 않는다. 아래 assertSyntheticDryRun이 이를 강제한다.
+   */
   dryRun?: boolean;
+}
+
+/**
+ * 합성 자료 표식.
+ *
+ * 수집 경로는 이 필드를 절대 쓰지 않는다(SubmissionRecord에 없는 필드다).
+ * 그러므로 이 표식이 있는 기록은 사람이 만든 합성 픽스처뿐이고,
+ * Firestore에서 읽은 실제 학생 제출에는 붙지 않는다.
+ */
+export const SYNTHETIC_MARKER = 'synthetic' as const;
+
+export function isSyntheticRecord(record: SubmissionRecord): boolean {
+  return (record as unknown as Record<string, unknown>)[SYNTHETIC_MARKER] === true;
+}
+
+/**
+ * dryRun을 합성 자료에만 묶는다.
+ *
+ * 1) 호출한 쪽이 dataSource='synthetic'이라고 밝혀야 한다.
+ * 2) 연구 저장소에 쓰는 저장소로는 모의 실행을 하지 않는다.
+ * 3) 모든 기록에 합성 표식이 있어야 한다. 하나라도 없으면 실데이터로 보고 막는다.
+ * 반대로 실데이터 채점에 합성 기록이 섞여 있어도 막는다(픽스처가 본자료에 들어가지 않게).
+ */
+export function assertSyntheticDryRun(
+  deps: Pick<ScoringJobDeps, 'dataSource' | 'storeIsPersistent'>,
+  submissions: readonly SubmissionRecord[],
+  dryRun: boolean
+): string[] {
+  const blockers: string[] = [];
+  if (dryRun) {
+    if (deps.dataSource !== 'synthetic') {
+      blockers.push('모의 실행(dryRun)은 합성 자료에만 쓸 수 있다(dataSource가 synthetic이 아님)');
+    }
+    if (deps.storeIsPersistent) {
+      blockers.push('모의 실행 결과를 연구 저장소에 쓸 수 없다');
+    }
+    const notSynthetic = submissions.filter((s) => !isSyntheticRecord(s));
+    if (notSynthetic.length) {
+      blockers.push(
+        `모의 실행 대상에 합성 표식이 없는 기록이 ${notSynthetic.length}건 있다(실데이터로 본다)`
+      );
+    }
+  } else {
+    const synthetic = submissions.filter(isSyntheticRecord);
+    if (synthetic.length) {
+      blockers.push(`본채점 대상에 합성 기록이 ${synthetic.length}건 섞여 있다`);
+    }
+  }
+  return blockers;
 }
 
 export type SkipReason =
@@ -160,6 +234,11 @@ export interface ScoringJobResult {
   /** 동의 철회로 전송하지 않고 취소한 대기 작업 */
   cancelled: string[];
   failed: { submissionId: string; reason: string }[];
+  /**
+   * 모의 실행에서 그대로 남아 있는 미확정 값. 비어 있지 않으면 본연구를 시작할 수 없다.
+   * 모의 실행 결과를 '완료'로 읽지 않도록 결과에 함께 담는다.
+   */
+  unresolvedBlockers: string[];
 }
 
 export class ScoringBlockedError extends Error {
@@ -185,11 +264,15 @@ export async function runScoringJob(
     throw new Error(`repeatIndex는 ${ALL_REPEAT_INDICES.join('·')} 중 하나여야 한다`);
   }
 
+  // dryRun을 먼저 자료 성격에 묶는다. 이 검사를 통과하지 못하면
+  // candidate 허용도 받지 못한다(플래그 하나로 실데이터 차단이 풀리지 않게).
+  const syntheticBlockers = assertSyntheticDryRun(deps, submissions, dryRun);
+  if (syntheticBlockers.length) throw new ScoringBlockedError(syntheticBlockers);
+
   const start = checkResearchStartAllowed(deps.registry, { allowCandidate: dryRun });
   if (!start.allowed) throw new ScoringBlockedError(start.blockers);
-  if (dryRun && start.blockers.length) {
-    // 모의 실행이어도 어떤 값이 미확정인지 결과에 남긴다. 완료로 보고하지 않기 위해서다.
-  }
+  // 모의 실행이어도 어떤 값이 미확정인지 결과에 남긴다. 완료로 보고하지 않기 위해서다.
+  const unresolvedBlockers = dryRun ? start.blockers : [];
 
   const now = deps.now ?? (() => Date.now());
   const createdAtMs = now();
@@ -225,6 +308,7 @@ export async function runScoringJob(
     skipped: [],
     cancelled: [],
     failed: [],
+    unresolvedBlockers,
   };
 
   for (const item of queue) {

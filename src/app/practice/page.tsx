@@ -12,12 +12,14 @@
  *   - 같은 제출ID로 다시 보내도 이중 저장되지 않는다. 저장 실패를 완료로 표시하지 않는다.
  *   - 채점 결측은 0점·수준1로 보이게 하지 않는다.
  *   - 적어도 한 문항에서 피드백을 검토하고 수정 또는 고치지 않은 까닭을 남긴다.
+ *   - 학급·신원은 서버 세션이 정한다. 화면이 sessionStorage의 학급코드·출석번호를 보내지 않는다.
  */
 
 import { useState, useTransition, useMemo, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { PRACTICE_QUESTIONS } from '@/lib/questions';
+import { FEEDBACK_FALLBACK_TEXT } from '@/lib/feedback';
 import {
   getLessonStateAction,
   recordFeedbackReviewAction,
@@ -28,6 +30,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
+import { PII_NOTICE } from '@/server/privacy';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -64,11 +67,42 @@ const QUESTIONS_PER_CHASI = 6;
 /** 연습 문항 ID는 레지스트리와 같은 규칙(L01~L36)을 쓴다. */
 const questionIdOf = (level: number) => `L${String(level).padStart(2, '0')}`;
 
-/** 일반 체험에서만 쓰는 학급 구분값. 연구 세션에서는 서버가 확정한 값이 쓰인다. */
-const experienceClassCode = () => {
-  if (typeof window === 'undefined') return null;
-  return sessionStorage.getItem('classCode');
-};
+/**
+ * 일반 체험의 진행 캐시.
+ *
+ * 연구 세션의 진행은 서버의 제출 이력이 근거다. 일반 체험은 서버에 학생 식별이 없어
+ * 새로 고치면 무엇을 했는지 알 수 없으므로, 이 기기에만 남는 캐시로 화면 안에서
+ * 이어 보여 준다. 이 값은 접근 권한·동의·완료의 근거가 아니며 잠금에 쓰지 않는다.
+ */
+const PRACTICE_PROGRESS_KEY = 'experience:practice:v1';
+/** 오래된 기록으로 엉뚱한 안내를 하지 않도록 하루만 둔다. */
+const PRACTICE_PROGRESS_TTL_MS = 24 * 60 * 60 * 1000;
+
+function readCachedQuestionIds(): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(PRACTICE_PROGRESS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as { savedAt?: number; questionIds?: string[] };
+    if (typeof parsed?.savedAt !== 'number') return [];
+    if (Date.now() - parsed.savedAt > PRACTICE_PROGRESS_TTL_MS) return [];
+    return Array.isArray(parsed.questionIds) ? parsed.questionIds.filter((v) => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedQuestionIds(questionIds: string[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      PRACTICE_PROGRESS_KEY,
+      JSON.stringify({ savedAt: Date.now(), questionIds })
+    );
+  } catch {
+    // 저장하지 못해도 화면 동작에는 영향이 없다.
+  }
+}
 
 function newSubmissionId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -93,6 +127,8 @@ export default function PracticePage() {
   const [pendingSubmissionId, setPendingSubmissionId] = useState<string | null>(null);
   const [reviewNote, setReviewNote] = useState('');
   const [reviewSaved, setReviewSaved] = useState(false);
+  /** 이 기기에서 낸 문항. 일반 체험의 표시를 이어 주기 위한 캐시일 뿐이다. */
+  const [cachedQuestionIds, setCachedQuestionIds] = useState<string[]>([]);
   const { toast } = useToast();
 
   /** URL의 lesson 값은 요청일 뿐이다. 허용 여부는 서버가 정한다. */
@@ -124,6 +160,7 @@ export default function PracticePage() {
 
   useEffect(() => {
     void loadLessonState(requestedLessonFromUrl());
+    setCachedQuestionIds(readCachedQuestionIds());
   }, [loadLessonState]);
 
   const currentQuestion = questions[currentQuestionIndex];
@@ -140,10 +177,14 @@ export default function PracticePage() {
   const attemptedCount = useCallback(
     (chasi: number) => {
       const attempts = lessonState?.attemptsByQuestion ?? {};
-      return questions.filter((q) => q.chasi === chasi && (attempts[questionIdOf(q.level)] ?? 0) > 0)
-        .length;
+      return questions.filter((q) => {
+        if (q.chasi !== chasi) return false;
+        const id = questionIdOf(q.level);
+        // 서버 이력이 먼저다. 일반 체험에서는 이 기기의 캐시로 표시만 이어 준다.
+        return (attempts[id] ?? 0) > 0 || cachedQuestionIds.includes(id);
+      }).length;
     },
-    [lessonState]
+    [lessonState, cachedQuestionIds]
   );
 
   const goToChasi = async (c: number) => {
@@ -175,7 +216,6 @@ export default function PracticePage() {
           lesson: currentChasi,
           text: studentPrompt,
           startedAt,
-          experienceClassCode: experienceClassCode(),
         });
         if (res.status === 'blocked') {
           setResult(null);
@@ -188,6 +228,13 @@ export default function PracticePage() {
         setPendingSubmissionId(res.save.ok ? null : submissionId);
         if (res.save.ok) {
           void loadLessonState(currentChasi);
+          // 새로 고쳐도 무엇을 냈는지 화면에서 이어 보이도록 이 기기에만 남긴다.
+          const questionId = questionIdOf(currentQuestion.level);
+          if (!cachedQuestionIds.includes(questionId)) {
+            const next = [...cachedQuestionIds, questionId];
+            setCachedQuestionIds(next);
+            writeCachedQuestionIds(next);
+          }
         }
       } catch {
         setResult(null);
@@ -224,7 +271,6 @@ export default function PracticePage() {
       void recordFeedbackReviewAction({
         submissionId: result.submissionId,
         kind: 'revised',
-        experienceClassCode: experienceClassCode(),
       });
     }
     setResult(null);
@@ -246,7 +292,6 @@ export default function PracticePage() {
       submissionId: result.submissionId,
       kind: 'kept',
       note: reviewNote,
-      experienceClassCode: experienceClassCode(),
     });
     if (res.ok) {
       setReviewSaved(true);
@@ -438,6 +483,8 @@ export default function PracticePage() {
                       className="text-base flex-grow bg-input/50 focus:bg-input/80 transition-colors"
                       disabled={isSubmitting}
                     />
+                    {/* 전송 전 점검의 한계를 문구 사본이 아니라 원문 상수로 알린다. */}
+                    <p className="mt-2 text-xs text-muted-foreground">{PII_NOTICE}</p>
                   </div>
                   <Button type="submit" size="lg" className="mt-4 w-full" disabled={isSubmitting}>
                     {isSubmitting ? (
@@ -529,8 +576,7 @@ export default function PracticePage() {
                           칭찬 및 개선점
                         </h4>
                         <p className="mt-2 text-muted-foreground whitespace-pre-wrap font-body text-base leading-loose">
-                          {result.feedback?.text ??
-                            '표현을 선생님과 함께 확인해 보세요.'}
+                          {result.feedback?.text ?? FEEDBACK_FALLBACK_TEXT}
                         </p>
                       </>
                     )}

@@ -70,6 +70,7 @@ const CONTEXT_C_AXIS: RubricAxis = {
 const CONTEXT_B_AXIS: RubricAxis = {
   id: 'contextB',
   title: '배경·행동(B밴드의 맥락 축)',
+  // scope는 원문 표에 없는 운영 설명이다. 수준 문언 자체는 공통루브릭_v7 원문 그대로 둔다.
   scope: '문항 명세의 장소 단서와 대상의 동작을 평가한다. 분위기는 이 밴드에서 요구하지 않는다.',
   levels: [
     { level: 5, text: '명세의 장소 단서와 대상의 동작을 모두 정확히 연결한다.' },
@@ -107,7 +108,7 @@ export const JUDGMENT_PRINCIPLES: string[] = [
   '원본 이미지 생성 프롬프트는 정답 문장이 아니며, 이미지에 구현되지 않은 요구는 채점 기준에서 제외한다.',
   '동의어와 의미가 분명한 아동 표현을 허용하고, 맞춤법·문장 길이·형용사 개수만으로 가감점하지 않는다.',
   '분위기는 근거가 있는 복수 해석을 허용한다.',
-  '‘모두·대부분·일부’의 판정은 문항별 단서 목록과 앵커 응답으로 구체화한다.',
+  '‘모두·대부분·일부’의 판정은 문항별 단서 목록과 앵커 응답으로 구체화하여 전문가 검토와 예비 채점 전에 문서화한다.',
   '이미지와 명백히 모순되는 요소는 해당 축을 한 수준 낮추되 최저 수준은 1이다.',
   '모순의 수와 무관하게 한 응답의 같은 축에서는 한 수준만 감점하며, 이미 그 모순으로 수준 1이 된 축에 중복 감점을 하지 않는다.',
   '기본 수준은 정확한 단서로 정하고 모순 감점의 적용 여부와 근거를 별도로 기록한다.',
@@ -170,6 +171,27 @@ export function renderForTeacher(band: Band): string {
     '',
     '문항별 단서 목록과 수준 경계는 문항 명세를 함께 적용한다.',
   ].join('\n');
+}
+
+/**
+ * 내보내기 묶음에 그대로 넣을 수 있는 형태의 루브릭 문서.
+ *
+ * CSV와 함께 내보내는 기준 문서다. 내보내기 모듈이 문언을 다시 적지 않고 이 함수를
+ * 불러 쓰도록 파일 이름·본문·버전을 한 덩어리로 돌려준다. 파일 이름에 버전을 넣어
+ * 어떤 기준으로 채점한 자료인지 파일만 봐도 알 수 있게 한다.
+ */
+export function rubricExportDocument(): {
+  filename: string;
+  mediaType: string;
+  rubricVersion: string;
+  content: string;
+} {
+  return {
+    filename: `공통루브릭_${RUBRIC_VERSION}.md`,
+    mediaType: 'text/markdown; charset=utf-8',
+    rubricVersion: RUBRIC_VERSION,
+    content: renderForExport(),
+  };
 }
 
 /** 내보내기 문서(마크다운). 세 밴드의 축을 모두 담고 버전을 명시한다. */

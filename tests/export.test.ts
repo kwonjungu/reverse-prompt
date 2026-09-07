@@ -152,6 +152,8 @@ const SCORED_RUN: ScoringRun = {
   modelConfig: { temperature: 0.2 },
   rubricVersion: 'v7-candidate',
   cueVersion: 'v7-candidate',
+  // 채점에 실제로 보낸 이미지의 해시. 제출 기록의 imageHash와 따로 남긴다.
+  imageHash: 'f4734f7d',
   promptHash: 'ph_1',
   codeCommit: 'abc1234',
   scoredAt: '2026-03-02T02:00:02.000Z',

@@ -370,3 +370,54 @@ test('게임·시간 제한 모드 문항은 일반 체험에서만 쓰이고 �
     assert.throws(() => registry.requireEntry(id, 'research_assessment'), /쓸 수 없는 문항/);
   }
 });
+
+/* ────────────── D4 적재한 단서 팩의 버전이 기록에 반영된다 ────────────── */
+
+test('D4 — 적재한 팩이 밝힌 cueVersion이 항목에 반영된다', () => {
+  const pack = parseCuePack({
+    cueVersion: 'v7.2-frozen',
+    questions: { T1: filledCues('A'), L01: filledCues('A') },
+  });
+  const registry = createRegistry(makeDeps({ cuePack: () => pack }));
+
+  // 예전에는 cuesLoaded만 채우고 팩의 버전을 버려서 항상 코드 상수가 기록되었다.
+  assert.equal(registry.getEntry('T1').cueVersion, 'v7.2-frozen');
+  assert.equal(registry.getEntry('L01').cueVersion, 'v7.2-frozen');
+  assert.equal(registry.getEntry('T1').cuesLoaded, true);
+});
+
+test('D4 — 단서가 적재되지 않은 문항은 팩 버전을 가져다 붙이지 않는다', () => {
+  const pack = parseCuePack({ cueVersion: 'v7.2-frozen', questions: { T1: filledCues('A') } });
+  const registry = createRegistry(makeDeps({ cuePack: () => pack }));
+
+  const t2 = registry.getEntry('T2_v7');
+  assert.equal(t2.cuesLoaded, false);
+  assert.equal(t2.cueVersion, 'v7-candidate', '미적재 상태 그대로 둔다');
+});
+
+test('D4 — 팩이 없으면 버전을 지어내지 않는다', () => {
+  const registry = createRegistry(makeDeps());
+  for (const id of [...ASSESSMENT_ORDER, 'L01']) {
+    const entry = registry.getEntry(id);
+    assert.equal(entry.cuesLoaded, false);
+    assert.equal(entry.cueVersion, 'v7-candidate');
+  }
+});
+
+test('D4 — 팩이 cueVersion을 밝히지 않으면 연구 시작을 막는 사유가 된다', () => {
+  const noVersion = parseCuePack({ questions: { T1: filledCues('A') } });
+  assert.equal(noVersion.cueVersion, null);
+
+  const input: ReadinessInput = {
+    ...ALL_ASSETS_PRESENT,
+    cuePackLoaded: true,
+    cuePackVersion: null,
+    assessmentCuesMissing: [],
+    assessmentImagesMissing: [],
+    assessmentImageHashMismatch: [],
+  };
+  assert.ok(collectBlockers(input).some((b) => b.includes('cueVersion')));
+
+  const withVersion = collectBlockers({ ...input, cuePackVersion: 'v7.2-frozen' });
+  assert.ok(!withVersion.some((b) => b.includes('cueVersion')));
+});

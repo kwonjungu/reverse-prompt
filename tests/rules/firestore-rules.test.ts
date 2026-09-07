@@ -44,14 +44,28 @@ test('firestore.rules 파일이 저장소에 있고 기본 거부로 끝난다',
 
 test('연구 컬렉션은 규칙에서 클라이언트 접근을 열지 않는다', () => {
   const rules = rulesBody();
-  for (const collection of [
-    'researchSubmissions',
-    'scoringRuns',
-    'consents',
-    'lessonSessions',
-    'teacherBlindScores',
-  ]) {
+  // 연구 자료는 research/{schemaVersion}/<컬렉션> 아래에 있다.
+  assert.ok(rules.includes('match /research/{schemaVersion}'), 'research 경로 규칙이 없다');
+  for (const collection of ['consents', 'consent_events', 'research_classes', 'student_sessions', 'audit_approvals']) {
     assert.ok(rules.includes(`match /${collection}/`), `${collection} 규칙이 없다`);
+  }
+});
+
+/**
+ * 규칙 파일과 코드가 같은 경로를 가리키는지 확인한다.
+ * 이름이 갈라지면 규칙은 통과해도 실제 자료가 다른 곳에 쌓인다.
+ */
+test('규칙의 경로 이름이 코드의 컬렉션 이름과 어긋나지 않는다', () => {
+  const rules = rulesBody();
+  const adminSource = readFileSync(
+    path.join(process.cwd(), 'src', 'server', 'firebase-admin.ts'),
+    'utf8'
+  );
+  const names = [...adminSource.matchAll(/:\s*'([a-z_]+)'\s*,/g)].map((m) => m[1]);
+  // 최상위 계정·동의 계열만 규칙에 개별 경로로 적혀 있어야 한다.
+  for (const name of ['users', 'classes', 'consents', 'consent_events', 'research_classes', 'student_sessions', 'audit_approvals']) {
+    assert.ok(names.includes(name), `firebase-admin.ts에 ${name}이 없다`);
+    assert.ok(rules.includes(`match /${name}/`), `규칙에 ${name} 경로가 없다`);
   }
 });
 

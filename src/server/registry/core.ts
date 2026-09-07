@@ -208,11 +208,25 @@ export function parseCuePack(raw: unknown): LoadedCuePack {
 
 /* ────────────────────────── 레지스트리 ────────────────────────── */
 
-export function createRegistry(deps: RegistryDeps): RegistryApi {
-  const withCueState = (entry: RegistryEntry): RegistryEntry => ({
+/**
+ * 실제 적재한 단서 팩의 상태를 항목에 반영한다.
+ *
+ * 팩이 스스로 밝힌 cueVersion이 있으면 그 값을 기록한다. 채점 기록의 cueVersion이
+ * 코드 상수로 고정되어 있으면, 팩을 바꿔도 어떤 단서로 채점했는지 뒤에 알 수 없다.
+ * 팩이 없거나 이 문항의 단서가 실격되었으면 미적재 상태 그대로 두고 버전을 지어내지 않는다.
+ */
+export function applyCueState(entry: RegistryEntry, pack: LoadedCuePack): RegistryEntry {
+  const loaded = Boolean(pack.questions[entry.questionId]);
+  return {
     ...entry,
-    cuesLoaded: Boolean(deps.cuePack().questions[entry.questionId]),
-  });
+    cuesLoaded: loaded,
+    cueVersion: loaded && pack.cueVersion ? pack.cueVersion : entry.cueVersion,
+  };
+}
+
+export function createRegistry(deps: RegistryDeps): RegistryApi {
+  const withCueState = (entry: RegistryEntry): RegistryEntry =>
+    applyCueState(entry, deps.cuePack());
 
   const getEntry = (questionId: string): RegistryEntry => {
     const entry = findBaseEntry(questionId);
@@ -284,6 +298,7 @@ export function createRegistry(deps: RegistryDeps): RegistryApi {
       irbApproval: deps.config.irbApproval,
       modelAccessVerified: deps.config.modelAccessVerified,
       cuePackLoaded: pack.loaded,
+      cuePackVersion: pack.cueVersion,
       assessmentCuesMissing: [...assessmentCuesMissing],
       assessmentImagesMissing: imageStatus.missing,
       assessmentImageHashMismatch: imageStatus.mismatch,
@@ -322,8 +337,8 @@ export function cuesForSession(
   return api.getCues(entry.questionId);
 }
 
-/** 전체 항목의 현재 cuesLoaded까지 반영한 목록. 교사·연구자 화면과 manifest가 쓴다. */
+/** 전체 항목의 현재 cuesLoaded·cueVersion까지 반영한 목록. 교사·연구자 화면과 manifest가 쓴다. */
 export function listEntries(deps: Pick<RegistryDeps, 'cuePack'>): RegistryEntry[] {
   const pack = deps.cuePack();
-  return baseEntries().map((e) => ({ ...e, cuesLoaded: Boolean(pack.questions[e.questionId]) }));
+  return baseEntries().map((e) => applyCueState(e, pack));
 }

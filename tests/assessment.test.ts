@@ -6,6 +6,7 @@
  */
 
 import { test } from 'node:test';
+import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 
 import { SCHEMA_VERSION, type ScoringRun, type SubmissionRecord } from '@/lib/research/types';
@@ -34,13 +35,31 @@ import {
 } from '@/server/assessment/session';
 import {
   checkSubmitGuards,
+  guardFailureToMissingReason,
+  isEmptyResponse,
   makeMissingRecord,
   makeSubmittedRecord,
   resolveSubmission,
   sanitizeResponseText,
   type SubmissionContext,
 } from '@/server/assessment/submission';
-import { createInMemoryAssessmentStore } from '@/server/assessment/store';
+import {
+  cellIdOf,
+  createInMemoryAssessmentStore,
+  makeItemWindow,
+  type AssessmentStore,
+  type InspectableStore,
+} from '@/server/assessment/store';
+import {
+  confirmTechnicalFailure,
+  finalizeTimeouts,
+  getAssessmentState,
+  openAssessmentSession,
+  reportTechnicalFailure,
+  startAssessmentItem,
+  submitAssessmentResponse,
+  type CollectDeps,
+} from '@/server/assessment/collect';
 import {
   PRIMARY_REPEAT_INDEX,
   buildGraderPayload,
@@ -51,6 +70,8 @@ import {
   runScoringJob,
   ScoringBlockedError,
 } from '@/server/assessment/scoring-job';
+import type { ConsentRecord } from '@/lib/research/types';
+import type { Principal, Role } from '@/server/auth/contract';
 
 /* ────────────────────── 가짜 레지스트리 ────────────────────── */
 
@@ -287,7 +308,7 @@ test('수용시험 9: 저장 실패로 남은 자리는 같은 제출ID로 다�
   assert.equal(decision.authoritative.persistStatus, 'stored');
 });
 
-test('수용시험 9: 저장소가 같은 submissionId의 두 번째 쓰기를 거절한다', async () => {
+test('수용시험 9: 저장소가 같은 칸의 두 번째 쓰기를 거절한다', async () => {
   const store = createInMemoryAssessmentStore();
   const first = makeSubmittedRecord(CTX, '노란 세모 블록이 있다.', T0 + 60_000);
   await store.putSubmission(first);
@@ -295,7 +316,15 @@ test('수용시험 9: 저장소가 같은 submissionId의 두 번째 쓰기를 �
     () => store.putSubmission(makeSubmittedRecord(CTX, '다른 글', T0 + 61_000)),
     /이미 있는 문서/
   );
-  const stored = await store.getSubmission(CTX.submissionId);
+  // 제출ID를 새로 지어내도 같은 칸이면 마찬가지다.
+  await assert.rejects(
+    () =>
+      store.putSubmission(
+        makeSubmittedRecord({ ...CTX, submissionId: 'b'.repeat(32) }, '또 다른 글', T0 + 62_000)
+      ),
+    /이미 있는 문서/
+  );
+  const stored = await store.getSubmissionForCell(CTX.researchId, CTX.phase, CTX.questionId);
   assert.equal(stored?.text, '노란 세모 블록이 있다.');
 });
 
@@ -334,8 +363,10 @@ test('수용시험 9: 미동의·철회·마감 뒤 제출을 서버가 거부�
     consentActive: true,
     consentWithdrawn: false,
     sessionOpen: true,
+    itemStarted: true,
     withinDeadline: true,
     registryReady: true,
+    hasText: true,
   };
   assert.deepEqual(checkSubmitGuards(base), { ok: true });
   assert.deepEqual(checkSubmitGuards({ ...base, consentActive: false }), {
@@ -357,6 +388,17 @@ test('수용시험 9: 미동의·철회·마감 뒤 제출을 서버가 거부�
   assert.deepEqual(checkSubmitGuards({ ...base, submissionId: 'short' }), {
     ok: false,
     reason: 'invalid_submission_id',
+  });
+  // 빈 응답은 유효 제출로 받지 않는다. 결측 칸도 만들지 않는다.
+  assert.deepEqual(checkSubmitGuards({ ...base, hasText: false }), {
+    ok: false,
+    reason: 'empty_response',
+  });
+  assert.equal(guardFailureToMissingReason('empty_response'), null);
+  // 열지 않은 문항에 온 제출도 받지 않는다.
+  assert.deepEqual(checkSubmitGuards({ ...base, itemStarted: false }), {
+    ok: false,
+    reason: 'item_not_started',
   });
 });
 
@@ -458,8 +500,8 @@ for (const researchId of ['R-0001', 'R-0002', 'R-0003']) {
 
 test('수용시험 10: 채점자 payload에 시점·학생·학급·자동 점수가 없다', () => {
   const payload = buildGraderPayload(SAMPLE[0], 'op_1', 1);
+  // 밴드도 보내지 않는다. 서버 레지스트리가 questionId로 확정한다.
   assert.deepEqual(Object.keys(payload).sort(), [
-    'band',
     'operationId',
     'questionId',
     'repeatIndex',
@@ -515,15 +557,17 @@ function fakeGrader(scoreByRepeat: Record<number, number>) {
   const calls: GradingRequest[] = [];
   const fn = async (req: GradingRequest): Promise<ScoringRun> => {
     calls.push(req);
+    // 밴드는 payload가 아니라 서버 레지스트리에서 온다. 가짜 채점도 같은 방식으로 정한다.
+    const band = BANDS[req.questionId];
     return {
       operationId: req.operationId,
       repeatIndex: req.repeatIndex,
-      band: req.band,
+      band,
       result: {
         status: 'scored',
-        levels: { objectLevel: 3, specificityLevel: 3, contextLevel: req.band === 'A' ? null : 3 },
+        levels: { objectLevel: 3, specificityLevel: 3, contextLevel: band === 'A' ? null : 3 },
         score: scoreByRepeat[req.repeatIndex] ?? 50,
-        axisScores: { object: 17.5, specificity: 17.5, context: req.band === 'A' ? null : 15 },
+        axisScores: { object: 17.5, specificity: 17.5, context: band === 'A' ? null : 15 },
         feedbackStatus: 'not_requested',
       },
       calls: [],
@@ -533,6 +577,7 @@ function fakeGrader(scoreByRepeat: Record<number, number>) {
       modelConfig: { temperature: 0.2 },
       rubricVersion: 'v7',
       cueVersion: 'v7',
+      imageHash: IMAGE_HASH[req.questionId],
       promptHash: 'hash',
       codeCommit: 'test',
       scoredAt: new Date(T0).toISOString(),
@@ -671,4 +716,537 @@ test('수용시험 10: 동의 철회 뒤에는 새 전송과 대기 작업이 �
     grader.calls.some((c) => c.studentText.includes('R-0002')),
     false
   );
+});
+
+/* ────────────────────── 수집 흐름(server action 본체) ──────────────────────
+ *
+ * actions.ts의 server action은 여기서 시험하는 collect.ts를 그대로 부른다.
+ * 아래 시험은 인증·레지스트리·개인정보 점검·저장소에 가짜를 넣어 같은 코드를 돌린다.
+ * 실제 모델·네트워크는 쓰지 않는다.
+ */
+
+const STUDENT: Principal = {
+  uid: 'stu-1',
+  role: 'student',
+  classResearchIds: [],
+  researchId: 'R-0001',
+  classResearchId: 'C-01',
+  sessionType: 'research_assessment',
+};
+
+const TEACHER: Principal = {
+  uid: 'tea-1',
+  role: 'teacher',
+  classResearchIds: ['C-01'],
+  researchId: null,
+  classResearchId: null,
+  sessionType: 'research_assessment',
+};
+
+const ACTIVE_CONSENT: ConsentRecord = {
+  researchId: 'R-0001',
+  guardianConsent: 'granted',
+  studentAssent: 'granted',
+  consentVersion: 'consent-v7',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  withdrawnAt: null,
+};
+
+function fakeRegistryPort(options?: { status?: RegistryEntry['status'] }) {
+  const view = fakeRegistry(options);
+  return {
+    ...view,
+    requireEntry: (questionId: string, sessionType: string) => {
+      if (sessionType !== 'research_assessment') {
+        throw new Error(`이 세션에서 쓸 수 없는 문항: ${questionId}`);
+      }
+      // 등록되지 않은 문항ID는 여기서 예외가 된다.
+      return view.getEntry(questionId);
+    },
+  };
+}
+
+interface Harness {
+  deps: CollectDeps;
+  store: InspectableStore;
+  setNow: (ms: number) => void;
+  consent: { value: ConsentRecord | null };
+}
+
+function makeHarness(options?: {
+  status?: RegistryEntry['status'];
+  store?: InspectableStore;
+}): Harness {
+  const store = options?.store ?? createInMemoryAssessmentStore();
+  let now = T0;
+  const consent = { value: ACTIVE_CONSENT as ConsentRecord | null };
+
+  const deps: CollectDeps = {
+    auth: {
+      async requirePrincipal() {
+        return STUDENT;
+      },
+      async requireClassAccess(classResearchId: string, ..._roles: Role[]) {
+        void _roles;
+        if (!TEACHER.classResearchIds.includes(classResearchId)) {
+          throw new Error('배정되지 않은 학급');
+        }
+        return TEACHER;
+      },
+      async getConsent() {
+        return consent.value;
+      },
+    },
+    registry: fakeRegistryPort({ status: options?.status }),
+    privacy: {
+      checkBeforeSend: () => ({
+        decision: 'pass' as const,
+        matchedTypes: [],
+        checkVersion: 'test',
+        notice: '',
+      }),
+      assertNoSecrets: () => undefined,
+    },
+    store,
+    now: () => now,
+    consentVersion: 'consent-v7',
+  };
+
+  return {
+    deps,
+    store,
+    setNow: (ms) => {
+      now = ms;
+    },
+    consent,
+  };
+}
+
+/** 교사가 pre 세션을 열고 학생이 문항을 차례로 여는 데까지 진행한다. */
+async function openSessionAndItems(h: Harness, itemCount: number): Promise<string> {
+  const opened = await openAssessmentSession(h.deps, 'C-01', 'pre');
+  assert.equal(opened.ok, true, opened.blockers?.join(' / '));
+  for (let i = 0; i < itemCount; i += 1) {
+    await startAssessmentItem(h.deps, null);
+  }
+  return opened.assessmentSessionId as string;
+}
+
+test('C1: 같은 칸에 새 제출ID로 다시 내도 최초 제출만 남는다', async () => {
+  const h = makeHarness();
+  await openSessionAndItems(h, 1);
+
+  const first = await submitAssessmentResponse(h.deps, {
+    submissionId: 'a'.repeat(32),
+    questionId: 'T1',
+    text: '노란 세모 블록이 있다.',
+  });
+  assert.equal(first.stored, true);
+  assert.equal(first.duplicate, false);
+
+  // 두 번째 탭·두 번째 기기는 새 제출ID를 만든다. 제출ID만 보던 판정은 이것을 통과시켰다.
+  const second = await submitAssessmentResponse(h.deps, {
+    submissionId: 'b'.repeat(32),
+    questionId: 'T1',
+    text: '완전히 다른 글',
+  });
+  assert.equal(second.duplicate, true);
+
+  const stored = await h.store.listSubmissions({ classResearchId: 'C-01' });
+  const valid = stored.filter((r) => r.responseStatus === 'submitted');
+  assert.equal(valid.length, 1, '한 칸에 유효 제출은 하나뿐이다');
+  assert.equal(valid[0].text, '노란 세모 블록이 있다.', '최초 값이 불변이다');
+  assert.equal(h.store.rejections.length, 1);
+  assert.equal(h.store.rejections[0].persistStatus, 'rejected_duplicate');
+
+  // 같은 칸에 repeatIndex 1 ScoringRun이 둘 생기지 않는다.
+  assert.equal(buildScoringQueue(stored, 'seed-2026').length, 1);
+});
+
+test('C1: 같은 제출ID의 더블클릭도 최초 값을 바꾸지 않는다', async () => {
+  const h = makeHarness();
+  await openSessionAndItems(h, 1);
+  const id = 'c'.repeat(32);
+  await submitAssessmentResponse(h.deps, { submissionId: id, questionId: 'T1', text: '첫 글' });
+  const again = await submitAssessmentResponse(h.deps, {
+    submissionId: id,
+    questionId: 'T1',
+    text: '고친 글',
+  });
+  assert.equal(again.duplicate, true);
+  const stored = await h.store.getSubmissionForCell('R-0001', 'pre', 'T1');
+  assert.equal(stored?.text, '첫 글');
+});
+
+test('C2: 열지 않은 문항에 기술 실패를 보내도 유령 창이 생기지 않는다', async () => {
+  const h = makeHarness();
+  await openSessionAndItems(h, 1); // T1만 열렸다
+
+  const reported = await reportTechnicalFailure(h.deps, { questionId: 'T3', reason: 'network' });
+  assert.equal(reported.ok, false);
+  assert.equal(reported.recorded, false);
+  assert.equal(await h.store.getItemWindow(cellIdOf('R-0001', 'pre', 'T3')), null);
+
+  // 시작 시각 없는 창이 생기지 않았으므로 순서대로 T2_v7 → T3로 들어갈 수 있다.
+  const next = await startAssessmentItem(h.deps, null);
+  assert.equal(next.nextQuestionId, 'T3');
+  const last = await startAssessmentItem(h.deps, null);
+  assert.equal(last.nextQuestionId, null);
+  const t3 = await h.store.getItemWindow(cellIdOf('R-0001', 'pre', 'T3'));
+  assert.ok(t3 && Number.isFinite(Date.parse(t3.startedAt)), 'T3 창에 시작 시각이 있다');
+});
+
+test('C2: 등록되지 않은 문항ID로는 기술 실패를 남길 수 없다', async () => {
+  const h = makeHarness();
+  await openSessionAndItems(h, 1);
+  await assert.rejects(() =>
+    reportTechnicalFailure(h.deps, { questionId: 'T1/../hack', reason: 'network' })
+  );
+});
+
+test('C2: 학생 신고만으로 결측 사유가 technical_failure가 되지 않는다', async () => {
+  const h = makeHarness();
+  const sessionId = await openSessionAndItems(h, 2); // T1, T2_v7
+
+  // 학생이 T1에 장애를 신고한다. 기록은 남지만 사유를 확정하지 않는다.
+  const reported = await reportTechnicalFailure(h.deps, { questionId: 'T1', reason: 'network' });
+  assert.equal(reported.recorded, true);
+  const t1 = await h.store.getItemWindow(cellIdOf('R-0001', 'pre', 'T1'));
+  assert.equal(t1?.studentReportedFailureReason, 'network');
+  assert.equal(t1?.delivery, 'delivered', '학생 신고가 전달 상태를 바꾸지 않는다');
+
+  // 교사가 확인한 T2_v7만 기술 실패로 확정된다.
+  const confirmed = await confirmTechnicalFailure(h.deps, {
+    classResearchId: 'C-01',
+    researchId: 'R-0001',
+    phase: 'pre',
+    questionId: 'T2_v7',
+    reason: '기기 고장 확인',
+  });
+  assert.equal(confirmed.ok, true);
+
+  h.setNow(T0 + 40 * 60_000);
+  const finalized = await finalizeTimeouts(h.deps, sessionId, ['R-0001']);
+  assert.equal(finalized.created, 3);
+
+  const byQuestion = new Map(
+    (await h.store.listSubmissions({ classResearchId: 'C-01' })).map((r) => [r.questionId, r])
+  );
+  assert.equal(byQuestion.get('T1')?.missingReason, 'timeout_unsubmitted');
+  assert.equal(byQuestion.get('T2_v7')?.missingReason, 'technical_failure');
+  assert.equal(byQuestion.get('T3')?.missingReason, 'absent');
+});
+
+test('C4: 빈 응답을 유효 제출로 받지 않는다', async () => {
+  const h = makeHarness();
+  await openSessionAndItems(h, 1);
+
+  const empty = await submitAssessmentResponse(h.deps, {
+    submissionId: 'd'.repeat(32),
+    questionId: 'T1',
+    text: '   \n\t ',
+  });
+  assert.equal(empty.stored, false);
+  assert.equal(empty.duplicate, false);
+  assert.equal((await h.store.listSubmissions({ classResearchId: 'C-01' })).length, 0);
+
+  // 학생은 남은 시간에 다시 쓸 수 있고, 그때는 정상으로 저장된다.
+  const later = await submitAssessmentResponse(h.deps, {
+    submissionId: 'd'.repeat(32),
+    questionId: 'T1',
+    text: '노란 세모 블록이 있다.',
+  });
+  assert.equal(later.stored, true);
+  assert.equal(isEmptyResponse('  '), true);
+  assert.equal(isEmptyResponse('가'), false);
+});
+
+test('C4: 빈 텍스트가 저장돼 있어도 채점 큐에 넣지 않는다', () => {
+  const emptyStored = makeSubmittedRecord({ ...CTX, submissionId: 'e'.repeat(32) }, '', T0 + 1000);
+  assert.equal(emptyStored.responseStatus, 'submitted');
+  assert.equal(buildScoringQueue([emptyStored], 'seed-2026').length, 0);
+});
+
+test('C7: dryRun은 합성 자료에만 적용되고 실데이터 채점을 열지 않는다', async () => {
+  const registry = fakeRegistry({ status: 'candidate' });
+  // 합성 표식은 SubmissionRecord에 없는 필드다. 수집 경로가 절대 만들지 않는다.
+  const synthetic = SAMPLE.slice(0, 3).map(
+    (r) => ({ ...r, synthetic: true }) as unknown as SubmissionRecord
+  );
+
+  const base = () => ({
+    store: createInMemoryAssessmentStore(),
+    registry,
+    isConsentActive: async () => true,
+  });
+
+  // 1) 합성 표식이 없는 기록은 dataSource를 synthetic이라 밝혀도 모의 실행되지 않는다.
+  const g1 = fakeGrader({ 1: 50 });
+  await assert.rejects(
+    () =>
+      runScoringJob(
+        { ...base(), runOperationalScoring: g1.fn, dataSource: 'synthetic' },
+        SAMPLE.slice(0, 3),
+        { seed: 's', repeatIndex: 1, dryRun: true }
+      ),
+    ScoringBlockedError
+  );
+  assert.equal(g1.calls.length, 0, '막혔으면 모델을 한 번도 부르지 않는다');
+
+  // 2) 자료 성격을 밝히지 않으면 합성 표식이 있어도 모의 실행되지 않는다.
+  const g2 = fakeGrader({ 1: 50 });
+  await assert.rejects(
+    () =>
+      runScoringJob({ ...base(), runOperationalScoring: g2.fn }, synthetic, {
+        seed: 's',
+        repeatIndex: 1,
+        dryRun: true,
+      }),
+    ScoringBlockedError
+  );
+
+  // 3) 연구 저장소에 쓰는 저장소로는 모의 실행하지 않는다.
+  const g3 = fakeGrader({ 1: 50 });
+  await assert.rejects(
+    () =>
+      runScoringJob(
+        {
+          ...base(),
+          runOperationalScoring: g3.fn,
+          dataSource: 'synthetic',
+          storeIsPersistent: true,
+        },
+        synthetic,
+        { seed: 's', repeatIndex: 1, dryRun: true }
+      ),
+    ScoringBlockedError
+  );
+
+  // 4) 합성 자료임을 밝히고 비영속 저장소일 때만 돈다. 그래도 미확정 값은 그대로 남는다.
+  const g4 = fakeGrader({ 1: 50 });
+  const ok = await runScoringJob(
+    { ...base(), runOperationalScoring: g4.fn, dataSource: 'synthetic' },
+    synthetic,
+    { seed: 's', repeatIndex: 1, dryRun: true }
+  );
+  assert.equal(ok.scored.length, 3);
+  assert.ok(
+    ok.unresolvedBlockers.length > 0,
+    '모의 실행이어도 미확정 값을 해결한 것처럼 보고하지 않는다'
+  );
+});
+
+test('C7: 본채점 대상에 합성 기록이 섞이면 막는다', async () => {
+  const g = fakeGrader({ 1: 50 });
+  await assert.rejects(
+    () =>
+      runScoringJob(
+        {
+          store: createInMemoryAssessmentStore(),
+          registry: fakeRegistry(),
+          runOperationalScoring: g.fn,
+          isConsentActive: async () => true,
+        },
+        [
+          ...SAMPLE.slice(0, 2),
+          { ...SAMPLE[2], synthetic: true } as unknown as SubmissionRecord,
+        ],
+        { seed: 's', repeatIndex: 1 }
+      ),
+    ScoringBlockedError
+  );
+  assert.equal(g.calls.length, 0);
+});
+
+/* ────────────────────── 저장소 두 구현의 동작 일치 ────────────────────── */
+
+interface FakeDoc {
+  path: string;
+  data: Record<string, unknown>;
+}
+
+/**
+ * 가짜 Firestore. 실제 Firestore의 두 성질을 흉내 낸다.
+ *  - create는 문서가 이미 있으면 실패한다.
+ *  - update는 문서가 없으면 실패한다(merge-set과 달리 문서를 만들지 않는다).
+ * 이 두 성질이 메모리 저장소와 어긋나면 결함이 시험에 잡히지 않는다.
+ */
+function createFakeFirestore() {
+  const docs = new Map<string, FakeDoc>();
+  let autoId = 0;
+
+  const matchDocs = (path: string, filters: [string, unknown][]) =>
+    [...docs.values()].filter(
+      (d) =>
+        d.path === path &&
+        filters.every(([field, value]) => (d.data as Record<string, unknown>)[field] === value)
+    );
+
+  const makeQuery = (path: string, filters: [string, unknown][], take: number | null) => ({
+    where(field: string, _op: string, value: unknown) {
+      void _op;
+      return makeQuery(path, [...filters, [field, value]], take);
+    },
+    limit(n: number) {
+      return makeQuery(path, filters, n);
+    },
+    async get() {
+      const all = matchDocs(path, filters);
+      const matched = take === null ? all : all.slice(0, take);
+      return {
+        empty: matched.length === 0,
+        docs: matched.map((d) => ({ exists: true, data: () => d.data })),
+      };
+    },
+  });
+
+  const db = {
+    collection(path: string) {
+      return {
+        ...makeQuery(path, [], null),
+        doc(id: string) {
+          const key = `${path}/${id}`;
+          return {
+            async get() {
+              return { exists: docs.has(key), data: () => docs.get(key)?.data };
+            },
+            async create(data: Record<string, unknown>) {
+              if (docs.has(key)) throw new Error('ALREADY_EXISTS');
+              docs.set(key, { path, data });
+            },
+            async set(data: Record<string, unknown>, options?: { merge?: boolean }) {
+              const prev = docs.get(key);
+              docs.set(key, {
+                path,
+                data: options?.merge ? { ...(prev?.data ?? {}), ...data } : data,
+              });
+            },
+            async update(data: Record<string, unknown>) {
+              const prev = docs.get(key);
+              // 없는 문서를 만들지 않는다. 실제 Firestore의 update와 같다.
+              if (!prev) throw new Error('NOT_FOUND');
+              docs.set(key, { path, data: { ...prev.data, ...data } });
+            },
+          };
+        },
+        async add(data: Record<string, unknown>) {
+          autoId += 1;
+          docs.set(`${path}/auto_${autoId}`, { path, data });
+        },
+      };
+    },
+  };
+
+  return {
+    db,
+    countIn: (needle: string) => [...docs.values()].filter((d) => d.path.includes(needle)).length,
+    size: () => docs.size,
+  };
+}
+
+/** server-only를 빈 모듈로 바꾼다. 스크립트 preload와 같은 방법이다. */
+function stubServerOnly(): void {
+  const req = createRequire(import.meta.url);
+  try {
+    const resolved = req.resolve('server-only');
+    (req.cache as unknown as Record<string, unknown>)[resolved] = {
+      id: resolved,
+      filename: resolved,
+      loaded: true,
+      children: [],
+      paths: [],
+      exports: {},
+    };
+  } catch {
+    // 없으면 아무것도 하지 않는다.
+  }
+}
+
+async function firestoreStoreFor(db: unknown): Promise<AssessmentStore> {
+  stubServerOnly();
+  const mod = await import('@/server/assessment/firestore-store');
+  return mod.createFirestoreAssessmentStore({ db: db as never });
+}
+
+test('저장소 일치: 두 구현 모두 같은 칸의 두 번째 제출을 거절한다', async () => {
+  const fake = createFakeFirestore();
+  const stores: AssessmentStore[] = [
+    createInMemoryAssessmentStore(),
+    await firestoreStoreFor(fake.db),
+  ];
+
+  for (const store of stores) {
+    const first = makeSubmittedRecord(CTX, '노란 세모 블록이 있다.', T0 + 60_000);
+    const d1 = await store.claimSubmission(first);
+    assert.equal(d1.outcome, 'stored');
+
+    const second = makeSubmittedRecord(
+      { ...CTX, submissionId: 'z'.repeat(32) },
+      '완전히 다른 글',
+      T0 + 61_000
+    );
+    const d2 = await store.claimSubmission(second);
+    assert.equal(d2.outcome, 'rejected_duplicate');
+    assert.equal(d2.toStore, null);
+    assert.equal(d2.authoritative.text, '노란 세모 블록이 있다.');
+
+    const stored = await store.getSubmissionForCell(CTX.researchId, 'pre', CTX.questionId);
+    assert.equal(stored?.text, '노란 세모 블록이 있다.');
+  }
+
+  // Firestore 쪽에도 제출 문서는 하나뿐이다.
+  assert.equal(fake.countIn('assessment_submissions'), 1);
+});
+
+test('저장소 일치: 두 구현 모두 없는 문항 창을 만들지 않는다', async () => {
+  const fake = createFakeFirestore();
+  const windowId = cellIdOf('R-0001', 'pre', 'T3');
+  const stores: AssessmentStore[] = [
+    createInMemoryAssessmentStore(),
+    await firestoreStoreFor(fake.db),
+  ];
+
+  for (const store of stores) {
+    const patched = await store.patchItemWindow(windowId, {
+      studentReportedFailureReason: 'network',
+      studentReportedFailureAt: new Date(T0).toISOString(),
+    });
+    assert.equal(patched, false, '없는 창을 만들지 않고 실패로 알린다');
+    assert.equal(await store.getItemWindow(windowId), null);
+  }
+  assert.equal(fake.size(), 0, 'merge-set으로 유령 문서를 만들지 않는다');
+});
+
+test('저장소 일치: 이미 열린 창에는 학생 신고를 남긴다', async () => {
+  const fake = createFakeFirestore();
+  const win = makeItemWindow({
+    researchId: 'R-0001',
+    classResearchId: 'C-01',
+    phase: 'pre',
+    questionId: 'T1',
+    startedAt: new Date(T0).toISOString(),
+    durationSeconds: EXPECTED_ITEM_SECONDS.T1,
+  });
+  const stores: AssessmentStore[] = [
+    createInMemoryAssessmentStore(),
+    await firestoreStoreFor(fake.db),
+  ];
+
+  for (const store of stores) {
+    await store.createItemWindowIfAbsent(win);
+    // 두 번 열어도 시작 시각이 바뀌지 않는다.
+    const again = await store.createItemWindowIfAbsent({
+      ...win,
+      startedAt: new Date(T0 + 120_000).toISOString(),
+    });
+    assert.equal(again.startedAt, win.startedAt);
+
+    assert.equal(
+      await store.patchItemWindow(win.windowId, { studentReportedFailureReason: 'network' }),
+      true
+    );
+    const stored = await store.getItemWindow(win.windowId);
+    assert.equal(stored?.studentReportedFailureReason, 'network');
+    assert.equal(stored?.delivery, 'delivered');
+  }
 });

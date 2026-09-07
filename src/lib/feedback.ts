@@ -32,19 +32,30 @@ export const FEEDBACK_LINE_COUNT = 4;
 
 export type FeedbackRejectReason =
   | 'empty_line' // 네 줄 가운데 빈 줄이 있음
+  | 'line_count' // 한 필드에 여러 줄을 몰아넣어 네 줄을 넘김
   | 'quote_not_found'; // quote가 학생 원문에 없음
 
 export type FeedbackValidation =
   | { ok: true; text: string; quote: string | null }
   | { ok: false; reason: FeedbackRejectReason };
 
-/** 줄머리 기호와 여분 공백을 정리한다. 문구 내용은 바꾸지 않는다. */
+/**
+ * 줄머리 기호와 여분 공백을 정리한다. 문구 내용은 바꾸지 않는다.
+ * 한 필드 안에 줄바꿈이 들어오면 줄 수가 늘어나므로 공백으로 합친다.
+ * 합쳐도 되는지 판단은 validateFeedback이 하고, 여기서는 정리만 한다.
+ */
 function normalizeLine(line: string): string {
   return line
     .replace(/\r/g, '')
     .replace(/^[\s*#\-•]+/, '')
+    .replace(/\s*\n+\s*/g, ' ')
     .replace(/[ \t]+/g, ' ')
     .trim();
+}
+
+/** 한 필드에 줄바꿈이 들어 있는지. 모형이 네 줄을 한 필드에 몰아 넣은 경우를 잡는다. */
+function hasLineBreak(line: string): boolean {
+  return /\n/.test((line ?? '').replace(/\r/g, ''));
 }
 
 /** 인용 확인용 정규화. 앞뒤 따옴표와 여분 공백만 걷어낸다. */
@@ -73,10 +84,13 @@ export function quoteAppearsInText(studentText: string, quote: string): boolean 
  * quote가 있는데 원문에 없으면 인용 실패로 구분해 돌려준다.
  */
 export function validateFeedback(draft: FeedbackDraft, studentText: string): FeedbackValidation {
-  const lines = [draft.line1, draft.line2, draft.line3, draft.line4].map((l) =>
-    normalizeLine(l ?? ''),
-  );
+  const raw = [draft.line1, draft.line2, draft.line3, draft.line4];
+  // 한 필드에 여러 줄을 몰아넣으면 화면에서 네 줄을 넘긴다. 합쳐서 통과시키지 않고 거른다.
+  if (raw.some(hasLineBreak)) return { ok: false, reason: 'line_count' };
+
+  const lines = raw.map((l) => normalizeLine(l ?? ''));
   if (lines.some((l) => !l.length)) return { ok: false, reason: 'empty_line' };
+  if (lines.length !== FEEDBACK_LINE_COUNT) return { ok: false, reason: 'line_count' };
   const text = lines.join('\n');
 
   if (draft.quote === null || draft.quote === undefined) {

@@ -61,6 +61,8 @@ export const SUBMISSION_COLUMNS: CsvColumn<ExportRow>[] = [
   },
   { key: 'code_commit', get: (r) => r.run?.codeCommit ?? null },
   { key: 'prompt_hash', get: (r) => r.run?.promptHash ?? null },
+  // 채점에 실제로 보낸 이미지의 해시. 제출 기록의 image_hash와 달라지면 자료가 섞인 것이다.
+  { key: 'scored_image_hash', get: (r) => r.run?.imageHash ?? null },
   { key: 'scored_at', get: (r) => r.run?.scoredAt ?? null },
   { key: 'result_status', get: (r) => r.run?.result.status ?? null },
   {

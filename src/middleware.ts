@@ -13,16 +13,20 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { modeForPath } from '@/server/lessons/mode-policy';
 import { isModeAllowed } from '@/lib/research/session-modes';
-import { DEFAULT_SESSION_TYPE, SESSION_HINT_COOKIE, parseSessionHint } from '@/server/lessons/session-cookie';
+import { SESSION_HINT_COOKIE, parseSessionHint } from '@/server/lessons/session-cookie';
 
 export function middleware(request: NextRequest) {
   const mode = modeForPath(request.nextUrl.pathname);
   if (!mode) return NextResponse.next();
 
   const hint = parseSessionHint(request.cookies.get(SESSION_HINT_COOKIE)?.value);
-  const sessionType = hint?.sessionType ?? DEFAULT_SESSION_TYPE;
 
-  if (isModeAllowed(sessionType, mode)) return NextResponse.next();
+  // 힌트가 없으면 어떤 세션인지 확인할 수 없다. 확인 실패를 허용으로 바꾸지 않는다.
+  // 입장하면 /api/auth/session이 힌트를 심으므로, 여기서 막히는 것은 아직 입장하지 않은 요청뿐이다.
+  // edge에서는 힌트만 읽으므로 이 판정은 1차 그물이고, server action·API가 다시 판정한다.
+  if (hint) {
+    if (isModeAllowed(hint.sessionType, mode)) return NextResponse.next();
+  }
 
   // API 요청은 그대로 거절하고, 화면 요청은 홈으로 돌려보내며 사유를 남긴다.
   if (request.nextUrl.pathname.startsWith('/api/')) {

@@ -85,6 +85,12 @@ export interface ScoringRun {
   modelConfig: Record<string, unknown>;
   rubricVersion: string;
   cueVersion: string;
+  /**
+   * 채점에 실제로 보낸 이미지의 SHA-256(설계서 §7 필수 필드).
+   * 연습 문항은 명세 해시가 없으므로 읽을 때 계산한 값을 쓴다.
+   * 이미지를 열기 전에 끝난 결측에서는 빈 문자열이며, 없는 값을 지어내지 않는다.
+   */
+  imageHash: string;
   promptHash: string;
   codeCommit: string;
   scoredAt: string;

@@ -18,6 +18,18 @@ npm run manifest      # 연구용 manifest 생성 (scripts/research-manifest.mjs
 npm run genkit:dev    # Genkit 플로우 격리 실행 (선택)
 ```
 
+`npm run lint`는 **동작하지 않는다.** eslint 설정도 패키지도 없어 `next lint`가 대화형 설치 프롬프트로 빠진다.
+쓰려면 `eslint`·`eslint-config-next`를 설치하고 설정 파일을 추가해야 한다. `next.config.ts`가
+`eslint.ignoreDuringBuilds: true`라 빌드에는 영향이 없다.
+
+서버 전용 모듈을 쓰는 연구용 스크립트는 preload가 필요하다. `src/server/**`가 `server-only`를
+쓰는데 Node 기본 조건에서 그 패키지가 예외를 던지기 때문이다(`--conditions=react-server`는 React 18을 깨뜨린다).
+
+```bash
+node --import tsx --import ./scripts/_node-server-modules.mjs scripts/score-assessments.mjs --seed <시드>
+node --import tsx --import ./scripts/_node-server-modules.mjs scripts/check-completeness.mjs --input <파일>
+```
+
 `npm test`는 실제 모델을 호출하지 않는다. 모델 호출은 주입 가능한 함수로 두고 테스트에서 가짜 구현을 넣는다.
 Firebase Emulator 권한 시험(`tests/rules/`)은 에뮬레이터가 없으면 skip 된다. **skip은 통과가 아니다.**
 
@@ -194,6 +206,10 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 - 교사는 인증된 계정으로 **배정된 학급만** 본다. 학생은 서버가 발급·검증한 세션 토큰으로 허용된 활동만 한다.
   옛 sessionStorage(학교코드·학년반·출석번호) 신원은 연구 세션의 권위 있는 신원이 아니다.
 - Admin SDK가 보안 규칙을 우회하므로 **서버에서도 역할과 대상 범위를 검증**한다.
+  `requireClassAccess`는 행위(read/write/delete)까지 함께 판정한다. 행위를 넘기지 않으면
+  가장 강한 `write`로 본다 — 읽기 전용 화면은 `{ action: 'read' }`를 명시해야 한다.
+- 자격증명이 없으면 **우회 없이 실패**한다. 설정 오류를 일반 체험으로 강등하지 않는다.
+  로컬에서 자격증명 없이 띄우면 차시 조회가 503이 되는데, 의도한 fail-closed다.
 - 보호자 동의 + 학생 승낙이 모두 활성일 때만 연구 수집이 가능하다. 미동의자는 수집 단계에서 차단하고
   외부 전송 없는 대체 활동으로 연결한다. 비연구 수업 기록은 연구 저장소와 분리한다.
 - 철회 뒤에는 새 전송·추가 채점을 차단한다. **자료 파기는 기록만 남기고 자동 전체 삭제를 하지 않는다.**
@@ -203,12 +219,27 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 
 ## Firestore 스키마
 
-기존 `classes/` 트리(비연구 수업 기록)는 **그대로 두고 건드리지 않는다.** 연구 자료는 별도 컬렉션에
-`schemaVersion`(현재 `v7.0`)으로 구분해 저장한다. 강제 이관을 하지 않는다.
+기존 `classes/` 트리(비연구 수업 기록)는 **그대로 두고 건드리지 않는다.** 연구 자료는
+`research/{schemaVersion}/` 아래에 모아 두고 강제 이관을 하지 않는다.
 
-`src/server/firebase-admin.ts`의 `COLLECTIONS` 참고:
-`users`, `researchClasses`, `consents`, `consentEvents`, `studentSessions`,
-`researchSubmissions`, `scoringRuns`, `teacherBlindScores`, `auditApprovals`, `classes`.
+경로는 `src/server/firebase-admin.ts` 한 곳에서만 정한다. 어떤 모듈도 컬렉션 이름을 직접 적지 않는다.
+
+```
+users                       # 계정과 역할
+research_classes            # 무작위 수업ID (실명 대응표는 저장소 밖)
+consents / consent_events   # 동의·승낙과 그 변경 이력
+student_sessions            # 학생 세션 토큰 폐기 목록
+audit_approvals             # 실데이터 감수 승인 기록
+classes/…                   # 비연구 수업 기록 (기존 구조 유지)
+
+research/v7.0/
+  assessment_sessions  assessment_windows  assessment_submissions
+  assessment_rejections  practice_submissions  lesson_sessions
+  scoring_runs  scoring_batches  teacher_blind_scores
+```
+
+클라이언트가 보낸 문자열을 문서 ID나 경로에 쓰기 전에는 `assertSafeDocId`를 지난다.
+`firestore.rules`와 `firestore.indexes.json`도 같은 이름을 쓴다.
 
 저장 문서의 필수 필드는 `src/lib/research/types.ts`의 `SubmissionRecord`·`ScoringRun`이 정의한다.
 CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 기준 버전을 포함한다. 수식 주입을 막고 UTF-8 BOM을 붙인다.
@@ -245,9 +276,15 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 ## 알려진 한계
 
 - Firebase Emulator 권한 시험과 브라우저 통합 시험은 **작성만 하고 실행하지 않았다.**
-- 배포 번들·소스맵에 대한 노출 점검은 정적 소스 스캔까지만 했다.
-- edge middleware는 힌트 쿠키만 읽는다. 실제 판정은 server action·API 층에서 다시 한다.
-- `.firebaserc`와 이 문서의 Firebase 프로젝트명이 다르다.
+  `npm test`에서 skip으로 나오며 **skip은 통과가 아니다.**
+- 실제 모델 연동 시험을 하지 않았다. 모델 호출은 전부 가짜 구현으로 시험했다.
+- 검사 단서 노출 점검은 비공개 단서 팩이 있을 때만 실제 문장으로 훑는다. 팩이 없으면 건너뛴다.
+- edge middleware는 힌트 쿠키만 읽는다(힌트가 없으면 열지 않는다). 실제 판정은 server action·API가 다시 한다.
+- 교사 블라인드·연구자 화면이 아직 연습 제출만 읽는다. 검사 6응답은 내보내기 경로로 받아야 한다.
+- 교사 화면은 방금 누른 결과만 보여 준다. 현재 차시 상태를 조회하는 액션이 아직 없다.
+- 게임·시간 제한 모드의 결과는 **어디에도 저장되지 않는다.** 화면에도 그렇게 표시한다.
+- `npm run lint`가 동작하지 않는다(위 참고).
+- **`.firebaserc`(`promptgrader-jun`)와 이 문서의 프로젝트명(`promptgrader`)이 다르다. 배포 전에 어느 쪽이 맞는지 확인할 것.**
 - NEIS API는 가끔 한국 외 리전에서 응답 느림.
 - `package-lock.json` 커밋됨 — npm 사용 가정.
 
@@ -267,7 +304,10 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 | 세션별 허용 모드 | `src/lib/research/session-modes.ts` |
 | 검사 시간 계획 | `src/server/assessment/timing.ts` |
 | 권한·역할 판정 | `src/server/auth/access.ts` |
-| 보안 규칙 | `firestore.rules` |
+| 보안 규칙 | `firestore.rules` (경로 이름은 `src/server/firebase-admin.ts`와 맞출 것) |
+| 컬렉션 경로 | `src/server/firebase-admin.ts`의 `COLLECTIONS`·`RESEARCH_COLLECTIONS` |
+| 개인정보 점검 규칙 | `src/server/privacy/index.ts` (오탐·미탐 사례는 `tests/privacy.test.ts`에 고정) |
+| 교사 차시 개방·루브릭 화면 | `src/app/teacher/page.tsx` |
 | 모델 교체 | `src/server/config.ts`의 `EVALUATION_MODEL_ID` |
 
 ## 복구 기록

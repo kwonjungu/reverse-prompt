@@ -19,7 +19,13 @@ import { auth } from '@/server/auth';
 import { AuthError } from '@/server/auth/contract';
 import { evaluateAccess } from '@/server/auth/access';
 import { toResearcherView, toTeacherBlindRecord } from '@/server/auth/deidentify';
-import { COLLECTIONS, getAdminFirestore } from '@/server/firebase-admin';
+import {
+  COLLECTIONS,
+  RESEARCH_COLLECTIONS,
+  assertSafeDocId,
+  getAdminFirestore,
+  researchPath,
+} from '@/server/firebase-admin';
 import type { QueryDocumentSnapshot } from 'firebase-admin/firestore';
 
 /** 로그인한 운영 계정의 역할과 배정된 학급. 학교 실명 대응표는 담지 않는다. */
@@ -72,7 +78,7 @@ export async function loadLessonRecords(classCode: string): Promise<{
 }> {
   await requireLessonClass(classCode);
   const db = getAdminFirestore();
-  const base = db.collection(COLLECTIONS.classes).doc(classCode);
+  const base = db.collection(COLLECTIONS.classes).doc(assertSafeDocId(classCode, '학급'));
   const [practiceSnap, submissionSnap] = await Promise.all([
     base.collection('practice_attempts').orderBy('createdAt', 'asc').get(),
     base.collection('submissions').orderBy('createdAt', 'desc').get(),
@@ -103,11 +109,12 @@ export async function deleteLessonRecord(
   if (collectionName !== 'practice_attempts' && collectionName !== 'submissions') {
     throw new AuthError('허용되지 않은 대상입니다.', 'forbidden');
   }
+  // 클라이언트가 보낸 값을 문서 ID로 쓰기 전에 반드시 확인한다(경로 주입 방지).
   await getAdminFirestore()
     .collection(COLLECTIONS.classes)
-    .doc(classCode)
+    .doc(assertSafeDocId(classCode, '학급'))
     .collection(collectionName)
-    .doc(docId)
+    .doc(assertSafeDocId(docId, '기록'))
     .delete();
   return { deleted: true };
 }
@@ -120,9 +127,10 @@ export async function loadResearchRecords(classResearchId: string): Promise<{
   records: Record<string, unknown>[];
   notice: string;
 }> {
-  await auth.requireClassAccess(classResearchId, 'teacher', 'researcher');
+  // 읽기 전용 화면이므로 행위를 명시한다. 연구자의 비식별 읽기는 여기서 허용된다(감사 A-4).
+  await auth.requireClassAccess(classResearchId, { action: 'read' }, 'teacher', 'researcher');
   const snap = await getAdminFirestore()
-    .collection(COLLECTIONS.researchSubmissions)
+    .collection(researchPath(RESEARCH_COLLECTIONS.practiceSubmissions))
     .where('classResearchId', '==', classResearchId)
     .get();
   return {
@@ -139,15 +147,19 @@ export async function loadTeacherBlindRecords(classResearchId: string): Promise<
   records: Record<string, unknown>[];
   myScores: Record<string, unknown>[];
 }> {
-  const principal = await auth.requireClassAccess(classResearchId, 'teacher');
+  const principal = await auth.requireClassAccess(
+    classResearchId,
+    { action: 'read' },
+    'teacher'
+  );
   const db = getAdminFirestore();
   const [submissions, scores] = await Promise.all([
     db
-      .collection(COLLECTIONS.researchSubmissions)
+      .collection(researchPath(RESEARCH_COLLECTIONS.practiceSubmissions))
       .where('classResearchId', '==', classResearchId)
       .get(),
     db
-      .collection(COLLECTIONS.teacherBlindScores)
+      .collection(researchPath(RESEARCH_COLLECTIONS.teacherBlindScores))
       .where('classResearchId', '==', classResearchId)
       .where('raterUid', '==', principal.uid)
       .get(),
@@ -169,7 +181,11 @@ export async function requestResearchDataDisposition(
   researchId: string,
   reason: string
 ): Promise<{ recorded: boolean }> {
-  const principal = await auth.requireClassAccess(classResearchId, 'teacher');
+  const principal = await auth.requireClassAccess(
+    classResearchId,
+    { action: 'write' },
+    'teacher'
+  );
   await getAdminFirestore().collection(COLLECTIONS.consentEvents).add({
     researchId,
     classResearchId,
