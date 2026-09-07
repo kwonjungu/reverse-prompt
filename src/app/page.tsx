@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Zap, Gamepad2, ArrowRight, Timer, BookOpen, GraduationCap, User } from 'lucide-react';
+import { Zap, Gamepad2, ArrowRight, Timer, BookOpen, GraduationCap, User, Sparkles } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { SchoolPicker } from '@/components/school-picker';
 import type { SchoolMatch } from '@/lib/school-search';
@@ -18,6 +18,9 @@ export default function Home() {
   const [classNumber, setClassNumber] = useState('');
   const [attendanceNumber, setAttendanceNumber] = useState('');
   const [isEntered, setIsEntered] = useState(false);
+  // 확장 버전: 게임 모드와 시간 제한 모드를 연다.
+  // 기본은 꺼짐 — 수업(처치)에서는 설명 모드와 연습 모드만 쓴다.
+  const [extended, setExtended] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -176,6 +179,17 @@ export default function Home() {
               {school?.name} {grade}-{classNumber} {attendanceNumber}번
             </span>
           </div>
+          <Button
+            variant={extended ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setExtended((v) => !v)}
+            className="text-xs"
+            aria-pressed={extended}
+            title="게임 모드와 시간 제한 모드를 켜고 끕니다. 수업 중에는 꺼 두세요."
+          >
+            <Sparkles className="mr-1 h-3.5 w-3.5" />
+            확장 버전 {extended ? '켜짐' : '꺼짐'}
+          </Button>
           <Button variant="ghost" size="sm" onClick={handleLogout} className="text-xs">
             로그아웃
           </Button>
@@ -186,7 +200,7 @@ export default function Home() {
           <p className="mt-3 text-lg text-muted-foreground max-w-2xl mx-auto">AI 프롬프트 엔지니어링 챌린지! 모드를 선택하고 실력을 뽐내보세요.</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 max-w-7xl mx-auto">
+        <div className={`grid grid-cols-1 md:grid-cols-2 gap-8 mx-auto ${extended ? 'lg:grid-cols-4 max-w-7xl' : 'max-w-4xl'}`}>
           <Card className="shadow-2xl shadow-primary/10 rounded-2xl overflow-hidden border-2 border-transparent hover:border-primary/40 transition-all duration-300 transform hover:-translate-y-2 bg-card/80 backdrop-blur-sm">
             <CardHeader>
               <BookOpen className="h-10 w-10 mx-auto text-primary" />
@@ -221,8 +235,10 @@ export default function Home() {
             </CardContent>
           </Card>
 
+          {extended && (
+            <>
           <Card className="shadow-2xl shadow-primary/10 rounded-2xl overflow-hidden border-2 border-transparent hover:border-primary/40 transition-all duration-300 transform hover:-translate-y-2 bg-card/80 backdrop-blur-sm">
-            <CardHeader>
+          <CardHeader>
               <Gamepad2 className="h-10 w-10 mx-auto text-primary" />
               <CardTitle className="text-3xl font-headline mt-4">게임 모드</CardTitle>
               <CardDescription className="text-muted-foreground mt-2 min-h-[6rem]">
@@ -254,6 +270,8 @@ export default function Home() {
               </Link>
             </CardContent>
           </Card>
+            </>
+          )}
         </div>
         <div className="mt-8">
           <p className="text-muted-foreground text-sm mt-4">Made by 권준구</p>
