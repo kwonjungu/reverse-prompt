@@ -53,11 +53,14 @@ const AXES = [
 /**
  * 1차시 도입(4분)에 쓰는 기본 색·형태 예시.
  * 전문 질감·재질은 필수로 요구하지 않는다. 채점 축 문언과 어긋나지 않게 유지할 것.
+ *
+ * 예시로 드는 대상은 연습·검사 문항에 없는 것으로 고른다. 문항의 답을 그대로 보여 주면
+ * 학생이 예시를 옮겨 적게 되어 무엇을 스스로 썼는지 알 수 없다.
  */
 const BASIC_EXAMPLES = [
-  { name: 'apple', nameOnly: '사과', withColorShape: '빨간색 동그란 사과 한 개' },
-  { name: 'umbrella', nameOnly: '우산', withColorShape: '노란색 길쭉하게 접힌 우산' },
-  { name: 'key', nameOnly: '열쇠', withColorShape: '은색의 작은 열쇠 하나' },
+  { name: 'eraser', nameOnly: '지우개', withColorShape: '하얀 네모난 지우개' },
+  { name: 'pencil', nameOnly: '색연필', withColorShape: '길쭉한 초록 색연필' },
+  { name: 'button', nameOnly: '단추', withColorShape: '작고 동그란 파란 단추' },
 ];
 
 const STAGES = [
