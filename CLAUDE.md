@@ -169,6 +169,23 @@ classes/
 처치 기간에는 두 모드의 접근을 차단하므로 학습자 노출은 없으나, 두 모드를 유지한다면
 같은 방식으로 정적 전환해야 문서와 일치한다.
 
+## 연습 모드의 단계 구조와 잠금
+
+연습 모드는 논문의 6차시 구성을 그대로 **1~6단계**로 보여 준다. 각 단계는 6문항이며,
+**그 단계의 6문항을 모두 제출해야 다음 단계가 열린다.**
+
+- 단계와 문항 구간은 `src/lib/questions.ts`의 `CHASI_RANGE`가 단일 진실이다.
+- 완료로 세는 것은 **채점이 정상으로 끝난 제출**뿐이다. `missing: true`인 결측은 세지 않는다.
+- 점수는 잠금 조건이 아니다. 낮은 점수로도 다음 단계로 갈 수 있다. 처치의 목적이
+  통과가 아니라 반복 수정이므로, 점수 문턱을 두면 낮은 점수의 학생이 갇힌다.
+- 진행 상황은 `localStorage`에 `practice-progress:{classCode}:{attendanceNumber}` 키로
+  저장하여 다음 차시에도 이어진다. 기기를 바꾸면 초기화된다.
+- 잠긴 단계는 자물쇠, 마친 단계는 체크 표시로 구분한다.
+
+**설계상 남은 것**: 지금은 학생이 한 차시 안에서 여러 단계를 연달아 열 수 있다.
+논문은 주 1회 6주에 걸쳐 한 차시씩 운영하도록 규정하므로, 교사가 단계를 여닫는
+장치가 필요하면 별도로 만들어야 한다.
+
 ## 자주 손볼 만한 곳
 
 | 원하는 변경 | 건드릴 파일 |
@@ -176,6 +193,7 @@ classes/
 | 채점 문언 조정 | `src/lib/evaluation-prompt.ts` (채점·감수가 공유하는 단일 진실) |
 | 연습 문항 추가/수정 | `src/lib/questions.ts` + `public/questions/L01~L36.jpg` |
 | 밴드·배점·환산 규칙 | `src/lib/scoring.ts` |
+| 단계 구간·잠금 조건 | `src/lib/questions.ts`의 `CHASI_RANGE`, `src/app/practice/page.tsx`의 `REQUIRED_PER_CHASI` |
 | 게임 문제 변경 | `src/app/game/page.tsx` 상단 `questions` 배열 |
 | 이미지 생성 프롬프트 wrapper | `src/lib/image-prompt.ts` |
 | 모델 교체 | `src/ai/genkit.ts` + `src/ai/flows/*.ts` 각 `model:` |

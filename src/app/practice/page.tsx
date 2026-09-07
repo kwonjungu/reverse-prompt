@@ -7,23 +7,49 @@ import Link from 'next/link';
 import { evaluatePrompt, type EvaluatePromptOutput } from '@/ai/flows/evaluate-prompt';
 import { useFirestore } from '@/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { PRACTICE_QUESTIONS } from '@/lib/questions';
+import { PRACTICE_QUESTIONS, CHASI_RANGE } from '@/lib/questions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { ArrowRight, Wand2, RefreshCw, BookOpen, Star, Home, RotateCcw } from 'lucide-react';
+import { ArrowRight, Wand2, RefreshCw, BookOpen, Star, Home, RotateCcw, Lock, Check } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 
-// 문제 목록은 src/lib/questions.ts가 단일 진실 (admin 감수 페이지와 공유)
+// 문항 목록은 src/lib/questions.ts가 단일 진실 (admin 감수 페이지와 공유)
 const questions = PRACTICE_QUESTIONS;
 
+/** 차시 이름. 논문 <부록 표 2> 차시별 문항 구간 배정과 같다. */
+const CHASI_TITLE: Record<number, string> = {
+  1: '무엇을 그렸는지 이름 붙이기',
+  2: '색과 모양을 더하기',
+  3: '어디에서 무엇을 하고 있나',
+  4: '질감과 자세까지 말하기',
+  5: '분위기를 담아 쓰기',
+  6: '내 문장이 어떻게 달라졌나',
+};
+
+const CHASI_LIST = [1, 2, 3, 4, 5, 6];
+
+/** 한 차시를 마치려면 그 차시의 6문항을 모두 한 번 이상 제출해야 한다. */
+const REQUIRED_PER_CHASI = 6;
+
+/** 진행 상황 저장 키 — 학급과 출석번호로 학생을 구분한다. */
+const progressKey = () => {
+  if (typeof window === 'undefined') return null;
+  const cls = sessionStorage.getItem('classCode');
+  const no = sessionStorage.getItem('attendanceNumber');
+  return cls && no ? `practice-progress:${cls}:${no}` : null;
+};
+
 export default function PracticePage() {
+  const [currentChasi, setCurrentChasi] = useState(1);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  /** 제출을 마친 문항 레벨의 집합. 차시 잠금 해제의 근거가 된다. */
+  const [doneLevels, setDoneLevels] = useState<Set<number>>(new Set());
   const [studentPrompt, setStudentPrompt] = useState('');
   const [evaluation, setEvaluation] = useState<EvaluatePromptOutput | null>(null);
   const [isEvaluating, startEvaluationTransition] = useTransition();
@@ -35,6 +61,54 @@ export default function PracticePage() {
   const isPending = isEvaluating;
   const currentQuestion = questions[currentQuestionIndex];
   const currentAttempts = attemptCounts[currentQuestionIndex] ?? 0;
+
+  /** 저장해 둔 진행 상황을 불러온다. */
+  useEffect(() => {
+    const key = progressKey();
+    if (!key) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) ?? '[]') as number[];
+      const set = new Set(saved);
+      setDoneLevels(set);
+      // 마지막으로 열려 있는 차시에서 이어 시작한다.
+      let open = 1;
+      for (const c of CHASI_LIST) {
+        const [from, to] = CHASI_RANGE[c];
+        const done = questions.filter(q => q.level >= from && q.level <= to && set.has(q.level)).length;
+        if (done >= REQUIRED_PER_CHASI && c < 6) open = c + 1;
+      }
+      setCurrentChasi(open);
+      setCurrentQuestionIndex(questions.findIndex(q => q.chasi === open));
+    } catch {
+      // 저장값이 깨졌으면 처음부터 시작한다.
+    }
+  }, []);
+
+  /** 차시별 진행 수와 잠금 여부 */
+  const chasiState = useMemo(() => {
+    const state: Record<number, { done: number; unlocked: boolean; cleared: boolean }> = {};
+    let unlocked = true;
+    for (const c of CHASI_LIST) {
+      const [from, to] = CHASI_RANGE[c];
+      const done = questions.filter(q => q.level >= from && q.level <= to && doneLevels.has(q.level)).length;
+      const cleared = done >= REQUIRED_PER_CHASI;
+      state[c] = { done, unlocked, cleared };
+      unlocked = unlocked && cleared; // 앞 차시를 마쳐야 다음 차시가 열린다
+    }
+    return state;
+  }, [doneLevels]);
+
+  const chasiQuestions = useMemo(
+    () => questions.filter(q => q.chasi === currentChasi),
+    [currentChasi]
+  );
+  const posInChasi = chasiQuestions.findIndex(q => q.level === currentQuestion.level);
+
+  const goToChasi = (c: number) => {
+    if (!chasiState[c]?.unlocked) return;
+    setCurrentChasi(c);
+    setCurrentQuestionIndex(questions.findIndex(q => q.chasi === c));
+  };
 
   useEffect(() => {
     setEvaluation(null);
@@ -70,6 +144,19 @@ export default function PracticePage() {
 
         // 시도 횟수 증가
         setAttemptCounts(prev => ({ ...prev, [currentQuestionIndex]: (prev[currentQuestionIndex] ?? 0) + 1 }));
+
+        // 채점이 정상으로 끝난 문항만 완료로 기록한다(결측은 세지 않는다).
+        if (!result.missing) {
+          setDoneLevels(prev => {
+            const next = new Set(prev);
+            next.add(currentQuestion.level);
+            const key = progressKey();
+            if (key) {
+              try { localStorage.setItem(key, JSON.stringify([...next])); } catch {}
+            }
+            return next;
+          });
+        }
 
         // Firestore 저장
         const classCode = sessionStorage.getItem('classCode');
@@ -107,8 +194,20 @@ export default function PracticePage() {
     // studentPrompt는 유지 — 학생이 이전 답을 보고 수정할 수 있도록
   };
 
+  /** 같은 차시 안에서만 순환한다. 다음 차시로는 마쳐야 넘어갈 수 있다. */
   const handleNextQuestion = () => {
-    setCurrentQuestionIndex((prev) => (prev + 1) % questions.length);
+    const idxs = questions
+      .map((q, i) => ({ q, i }))
+      .filter(({ q }) => q.chasi === currentChasi)
+      .map(({ i }) => i);
+    const at = idxs.indexOf(currentQuestionIndex);
+    setCurrentQuestionIndex(idxs[(at + 1) % idxs.length]);
+  };
+
+  /** 현재 차시를 마쳤을 때 다음 차시로 넘어간다. */
+  const handleNextChasi = () => {
+    if (currentChasi >= 6 || !chasiState[currentChasi]?.cleared) return;
+    goToChasi(currentChasi + 1);
   };
 
   const levelColor = (lv: number) => {
@@ -127,7 +226,7 @@ export default function PracticePage() {
             Lv.{currentQuestion.level}
           </Badge>
           <span className="text-sm text-muted-foreground">
-            문제 {currentQuestionIndex + 1} / {questions.length}
+            {currentChasi}단계 · {posInChasi + 1} / {REQUIRED_PER_CHASI}
           </span>
           {currentAttempts > 0 && (
             <Badge variant="secondary" className="text-xs">
@@ -141,13 +240,76 @@ export default function PracticePage() {
       </header>
 
       <div className="px-4 pb-2">
-        <Progress value={((currentQuestionIndex) / questions.length) * 100} className="h-2" />
+        <Progress
+          value={(chasiState[currentChasi].done / REQUIRED_PER_CHASI) * 100}
+          className="h-2"
+        />
       </div>
+
+      {/* 단계 선택 — 앞 단계의 6문항을 모두 마쳐야 다음 단계가 열린다 */}
+      <nav className="px-4 pb-4" aria-label="단계 선택">
+        <ol className="mx-auto flex max-w-4xl flex-wrap justify-center gap-2">
+          {CHASI_LIST.map((c) => {
+            const s = chasiState[c];
+            const active = c === currentChasi;
+            return (
+              <li key={c}>
+                <button
+                  type="button"
+                  onClick={() => goToChasi(c)}
+                  disabled={!s.unlocked}
+                  aria-current={active ? 'step' : undefined}
+                  title={s.unlocked ? CHASI_TITLE[c] : `${c - 1}단계를 마치면 열려요`}
+                  className={[
+                    'flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition',
+                    active
+                      ? 'border-primary bg-primary text-primary-foreground shadow'
+                      : s.unlocked
+                        ? 'border-primary/30 bg-card hover:bg-accent'
+                        : 'cursor-not-allowed border-muted bg-muted/40 text-muted-foreground',
+                  ].join(' ')}
+                >
+                  {!s.unlocked ? (
+                    <Lock className="h-3 w-3" />
+                  ) : s.cleared ? (
+                    <Check className="h-3 w-3" />
+                  ) : null}
+                  <span className="font-semibold">{c}단계</span>
+                  <span className="hidden sm:inline opacity-80">{CHASI_TITLE[c]}</span>
+                  <span className="tabular-nums opacity-70">
+                    {s.done}/{REQUIRED_PER_CHASI}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
 
       <main className="container mx-auto p-4 sm:p-6 lg:p-8">
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary via-purple-400 to-pink-500 sm:text-5xl font-headline">연습 모드</h1>
-          <p className="mt-2 text-muted-foreground">AI 그림을 보고 설명을 써보세요. 몇 번이든 다시 도전할 수 있어요!</p>
+          <p className="mt-2 text-muted-foreground">
+            {currentChasi}단계 · {CHASI_TITLE[currentChasi]}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            그림을 보고 설명을 써 보세요. 몇 번이든 다시 도전할 수 있어요.
+            이 단계의 {REQUIRED_PER_CHASI}문항을 모두 마치면 다음 단계가 열려요.
+          </p>
+
+          {chasiState[currentChasi].cleared && currentChasi < 6 && (
+            <div className="mt-4">
+              <Button onClick={handleNextChasi} size="lg" className="rounded-full">
+                {currentChasi + 1}단계로 넘어가기
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </div>
+          )}
+          {chasiState[6].cleared && (
+            <p className="mt-4 text-sm font-semibold text-primary">
+              여섯 단계를 모두 마쳤어요. 1차시에 쓴 문장과 지금 문장을 견주어 보세요.
+            </p>
+          )}
         </div>
 
         <Card className="max-w-4xl mx-auto shadow-2xl shadow-primary/20 rounded-2xl overflow-hidden border-2 border-primary/20 bg-card/80 backdrop-blur-sm">
