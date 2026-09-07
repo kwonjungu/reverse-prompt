@@ -1,0 +1,47 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "practice_attempts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "attendanceNumber", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "researchSubmissions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "classResearchId", "order": "ASCENDING" },
+        { "fieldPath": "phase", "order": "ASCENDING" },
+        { "fieldPath": "submittedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "researchSubmissions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "researchId", "order": "ASCENDING" },
+        { "fieldPath": "questionId", "order": "ASCENDING" },
+        { "fieldPath": "phase", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "scoringRuns",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "submissionId", "order": "ASCENDING" },
+        { "fieldPath": "repeatIndex", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "lessonSessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "classResearchId", "order": "ASCENDING" },
+        { "fieldPath": "openedAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

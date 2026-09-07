@@ -18,6 +18,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { useFirestore } from '@/firebase';
 import { buildImagePrompt } from '@/lib/image-prompt';
+import { ModeGuard } from '@/components/mode-guard';
 
 const allQuestions = [
   {
@@ -82,14 +83,45 @@ const allQuestions = [
   },
   // 이미지는 사전 생성된 정적 파일 (scripts/generate-question-images.mjs).
   // dataAiHint 변경 시 스크립트로 재생성할 것.
-].map((q, i) => ({ ...q, imageUrl: `/questions/game-${String(i + 1).padStart(2, '0')}.jpg` }));
+].map((q, i) => {
+  // questionId는 서버 레지스트리가 밴드·이미지·단서를 확정하는 유일한 근거다.
+  // 게임 모드 문항은 아직 레지스트리에 등록되어 있지 않아 채점이 거부된다.
+  // 이 모드는 연구 세션에서 차단되므로 여기서 문항을 새로 만들지 않고 ID 규칙만 맞춰 둔다.
+  const questionId = `game-${String(i + 1).padStart(2, '0')}`;
+  return { ...q, questionId, imageUrl: `/questions/${questionId}.jpg` };
+});
 
 const GAME_QUESTION_COUNT = 5;
 
 type GameState = 'nickname' | 'playing' | 'results';
-type Result = EvaluatePromptOutput & { questionIndex: number; questionLevel: number; koreanTitle: string; studentPrompt: string; originalPrompt: string; };
+/**
+ * 채점 결과를 화면이 쓰는 모양으로 줄인 것.
+ * 결측(status:'missing')이면 score는 0이 아니라 null이다.
+ */
+type Result = {
+  questionIndex: number;
+  questionLevel: number;
+  koreanTitle: string;
+  studentPrompt: string;
+  originalPrompt: string;
+  score: number | null;
+  feedback: string;
+};
 
+/**
+ * 게임 모드는 일반 체험에서만 연다. 연구 세션에서는 진입을 거부한다(수용시험 7).
+ * 기능은 그대로 두고 가드만 감싼다. 차단의 근거는 화면이 아니라 서버 판정이며,
+ * route(middleware)·API가 각각 다시 거부한다.
+ */
 export default function GamePage() {
+  return (
+    <ModeGuard mode="game">
+      <GameModeScreen />
+    </ModeGuard>
+  );
+}
+
+function GameModeScreen() {
   const db = useFirestore();
   const [gameState, setGameState] = useState<GameState>('nickname');
   const [nickname, setNickname] = useState('');
@@ -147,15 +179,16 @@ export default function GamePage() {
 
     startEvaluationTransition(async () => {
       try {
-        const photoDataUri = await toDataURL(currentQuestion.imageUrl);
-        const result = await evaluatePrompt({ studentPrompt, photoDataUri, questionLevel: currentQuestion.level });
+        // 밴드·이미지·단서는 서버가 questionId로 확정한다. 클라이언트 이미지 URI를 보내지 않는다.
+        const result = await evaluatePrompt({ questionId: currentQuestion.questionId, studentPrompt });
         const newResults = [...results, {
-          ...result,
           questionIndex: currentQuestionIndex,
           questionLevel: currentQuestion.level,
           koreanTitle: currentQuestion.koreanTitle,
           studentPrompt,
           originalPrompt: buildImagePrompt(currentQuestion.dataAiHint),
+          score: result.result.status === 'scored' ? result.result.score : null,
+          feedback: result.feedback?.text ?? '채점을 마치지 못했어요. 선생님과 함께 확인해요.',
         }];
         setResults(newResults);
 
@@ -177,7 +210,11 @@ export default function GamePage() {
     const attendanceNumber = sessionStorage.getItem('attendanceNumber');
     if (!db || !classCode || !attendanceNumber) return;
 
-    const averageScore = finalResults.reduce((acc, r) => acc + r.score, 0) / finalResults.length;
+    // 결측은 0점이 아니므로 평균에서 제외한다. 유효한 점수가 없으면 평균도 없다.
+    const scored = finalResults.filter((r): r is Result & { score: number } => r.score !== null);
+    const averageScore = scored.length
+      ? scored.reduce((acc, r) => acc + r.score, 0) / scored.length
+      : null;
 
     addDoc(collection(db, 'classes', classCode, 'submissions'), {
       attendanceNumber,
@@ -252,7 +289,10 @@ export default function GamePage() {
   }
 
   if (gameState === 'results') {
-    const averageScore = results.reduce((acc, r) => acc + r.score, 0) / results.length;
+    const scoredResults = results.filter((r): r is Result & { score: number } => r.score !== null);
+    const averageScore = scoredResults.length
+      ? scoredResults.reduce((acc, r) => acc + r.score, 0) / scoredResults.length
+      : null;
     return (
         <div className="min-h-screen bg-background font-sans">
             <header className="p-4 flex justify-end">
@@ -270,7 +310,7 @@ export default function GamePage() {
                     <CardContent className="space-y-8">
                         <div className="text-center bg-muted/50 p-6 rounded-xl border-2 border-primary/20">
                             <p className="text-xl font-semibold text-muted-foreground">나의 평균 점수</p>
-                            <p className="text-7xl font-bold text-primary">{Math.round(averageScore)}점</p>
+                            <p className="text-7xl font-bold text-primary">{averageScore === null ? '채점 못함' : `${Math.round(averageScore)}점`}</p>
                         </div>
                         <div>
                           <h3 className="text-2xl font-headline mb-4 text-center">상세 결과</h3>
@@ -288,7 +328,7 @@ export default function GamePage() {
                                     <TableRow key={index}>
                                       <TableCell className="font-medium">{index + 1}</TableCell>
                                       <TableCell className="font-body text-muted-foreground">{result.studentPrompt}</TableCell>
-                                      <TableCell className="text-right font-bold text-primary text-lg">{result.score}</TableCell>
+                                      <TableCell className="text-right font-bold text-primary text-lg">{result.score === null ? '채점 못함' : Math.round(result.score)}</TableCell>
                                     </TableRow>
                                   ))}
                                 </TableBody>
@@ -302,7 +342,7 @@ export default function GamePage() {
                                 <p className="recipient-line">성명: {nickname}</p>
                                 <p className="certificate-body">
                                     위 어린이는 AI 프롬프트 엔지니어링 챌린지에서<br/>
-                                    평균 {Math.round(averageScore)}점이라는 우수한 성적을 거두었기에<br/>
+                                    평균 {averageScore === null ? '' : `${Math.round(averageScore)}점`}이라는 우수한 성적을 거두었기에<br/>
                                     이 상장을 수여하여 실력을 인증합니다.
                                 </p>
                                 <p className="date-line">{currentDate}</p>

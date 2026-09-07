@@ -1,0 +1,134 @@
+rules_version = '2';
+
+// reverse-prompt Firestore 보안 규칙 (v7)
+//
+// 이 파일은 저장소에 처음 추가한 규칙이다. CLAUDE.md가 기술하던
+// `allow read, write: if true` 임시 개방 규칙을 대체하려는 것이다.
+//
+// 주의. 이 파일이 저장소에 있다는 사실만으로 Firebase 콘솔의 실제 규칙이
+// 같은 상태라고 단정할 수 없다. 콘솔 실제 적용 여부는 별도 확인이 필요하다.
+// (배포 명령 예: firebase deploy --only firestore:rules — 실행하지 않았다.)
+//
+// 설계 전제
+//  1. 연구 자료(researchSubmissions, scoringRuns, consents, lessonSessions,
+//     researchClasses, auditRuns)는 클라이언트가 직접 읽거나 쓰지 않는다.
+//     서버 Admin SDK만 접근하며 Admin SDK는 이 규칙을 우회하므로,
+//     서버 코드(src/server/auth)의 requireClassAccess가 별도 관문이다.
+//  2. 수업 기록(classes/*)은 인증된 교사가 자기 소속 학급만 읽는다.
+//     학생 클라이언트는 쓰기도 서버 API를 거친다. 학생이 점수를 직접 쓰지 못한다.
+//  3. 명시적으로 허용하지 않은 모든 경로는 거부한다.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── 공통 헬퍼 ────────────────────────────────────────────
+    // 익명 로그인(provider가 anonymous)은 어떤 자료에도 접근하지 못한다.
+    function isNamedUser() {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function userExists() {
+      return isNamedUser()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    // 역할은 users 문서에서만 읽는다. 클라이언트가 보낸 토큰 클레임이나
+    // 요청 본문의 role 필드를 신뢰하지 않는다(학생의 교사 권한 위조 거부).
+    function hasRole(r) {
+      return userExists() && userDoc().role == r && userDoc().disabled != true;
+    }
+
+    // 교사는 users/{uid}.classCodes 에 등록된 학급만 본다.
+    function isTeacherOfClass(classCode) {
+      return hasRole('teacher')
+        && userDoc().classCodes is list
+        && userDoc().classCodes.hasAny([classCode]);
+    }
+
+    // ── 계정·역할 ────────────────────────────────────────────
+    // 자기 문서만 읽는다. 역할·소속 학급 변경은 서버(Admin SDK)에서만 한다.
+    match /users/{uid} {
+      allow read: if isNamedUser() && request.auth.uid == uid;
+      allow create, update, delete: if false;
+    }
+
+    // ── 수업(비연구) 기록 ────────────────────────────────────
+    // 별도 적법한 수업 도구 이용 근거로 남기는 기록이다.
+    // 연구 저장소(researchSubmissions 등)와 접근자·보존기간이 분리된다.
+    match /classes/{classCode} {
+      allow read: if isTeacherOfClass(classCode);
+      allow write: if false;
+
+      // 학생 제출은 서버 API가 Admin SDK로 기록한다.
+      // 클라이언트 직접 쓰기를 막아 학생이 조작한 score가 DB 정답이 되지 않게 한다.
+      match /submissions/{submissionId} {
+        allow read: if isTeacherOfClass(classCode);
+        allow create, update, delete: if false;
+      }
+
+      match /practice_attempts/{attemptId} {
+        allow read: if isTeacherOfClass(classCode);
+        allow create, update, delete: if false;
+      }
+
+      // 그 밖의 하위 컬렉션은 기본 거부.
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    // ── 연구 자료 ────────────────────────────────────────────
+    // 어떤 클라이언트도 직접 접근하지 않는다. 서버 API만 사용한다.
+    // 연구자에게 주는 비식별 읽기도 서버가 필드를 걸러 내보낸다.
+    match /researchClasses/{classResearchId} {
+      allow read, write: if false;
+      match /{document=**} { allow read, write: if false; }
+    }
+
+    match /consents/{researchId} {
+      allow read, write: if false;
+    }
+
+    match /lessonSessions/{sessionId} {
+      allow read, write: if false;
+    }
+
+    match /assessmentSessions/{sessionId} {
+      allow read, write: if false;
+    }
+
+    match /researchSubmissions/{submissionId} {
+      allow read, write: if false;
+    }
+
+    match /scoringRuns/{runId} {
+      allow read, write: if false;
+    }
+
+    match /teacherBlindScores/{scoreId} {
+      allow read, write: if false;
+    }
+
+    match /auditRuns/{auditId} {
+      allow read, write: if false;
+    }
+
+    match /studentSessions/{tokenId} {
+      allow read, write: if false;
+    }
+
+    match /consentEvents/{eventId} {
+      allow read, write: if false;
+    }
+
+    // ── 기본 거부 ────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

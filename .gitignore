@@ -36,3 +36,21 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 비공개 연구 자산 — 검사 이미지·문항별 단서·앵커는 커밋하지 않는다.
+# 형식만 보여 주는 research-assets/README.md와 cue-pack.example.json은 커밋한다.
+research-assets/cue-pack.json
+research-assets/images/
+research-assets/**/cue-pack.json
+
+# 학교 실명 대응표 등 신원 자료
+research-assets/roster*
+research-assets/*.csv
+research-assets/*.xlsx
+
+# 로컬 환경 파일
+*.env.local
+.env.*.local
+
+# 연구용 manifest 산출물(생성 시각·자산 상태가 들어가므로 저장소에 두지 않는다)
+research-manifest.json

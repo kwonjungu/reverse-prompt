@@ -1,0 +1,73 @@
+{
+  "_note": "형식만 보여 주는 빈 껍데기입니다. 실제 단서·경계·앵커 문장을 이 파일에 쓰지 마세요. 작성한 단서는 같은 디렉터리의 cue-pack.json에만 두고 커밋하지 않습니다.",
+  "cueVersion": "",
+  "rubricVersion": "",
+  "writtenBy": "",
+  "writtenAt": "",
+  "reviewStatus": "candidate",
+  "questions": {
+    "T1": {
+      "coreObjects": [],
+      "requiredAttributes": [],
+      "requiredContext": [],
+      "acceptedExpressions": [],
+      "notRequired": [],
+      "contradictions": [],
+      "anchors": {
+        "object": { "1": "", "2": "", "3": "", "4": "", "5": "" },
+        "specificity": { "1": "", "2": "", "3": "", "4": "", "5": "" }
+      }
+    },
+    "T2_v7": {
+      "coreObjects": [],
+      "requiredAttributes": [],
+      "requiredContext": [],
+      "acceptedExpressions": [],
+      "notRequired": [],
+      "contradictions": [],
+      "anchors": {
+        "object": { "1": "", "2": "", "3": "", "4": "", "5": "" },
+        "specificity": { "1": "", "2": "", "3": "", "4": "", "5": "" },
+        "context": { "1": "", "2": "", "3": "", "4": "", "5": "" }
+      }
+    },
+    "T3": {
+      "coreObjects": [],
+      "requiredAttributes": [],
+      "requiredContext": [],
+      "acceptedExpressions": [],
+      "notRequired": [],
+      "contradictions": [],
+      "anchors": {
+        "object": { "1": "", "2": "", "3": "", "4": "", "5": "" },
+        "specificity": { "1": "", "2": "", "3": "", "4": "", "5": "" },
+        "context": { "1": "", "2": "", "3": "", "4": "", "5": "" }
+      }
+    },
+    "L01": {
+      "coreObjects": [],
+      "requiredAttributes": [],
+      "requiredContext": [],
+      "acceptedExpressions": [],
+      "notRequired": [],
+      "contradictions": [],
+      "anchors": {
+        "object": { "1": "", "2": "", "3": "", "4": "", "5": "" },
+        "specificity": { "1": "", "2": "", "3": "", "4": "", "5": "" }
+      }
+    },
+    "L13": {
+      "coreObjects": [],
+      "requiredAttributes": [],
+      "requiredContext": [],
+      "acceptedExpressions": [],
+      "notRequired": [],
+      "contradictions": [],
+      "anchors": {
+        "object": { "1": "", "2": "", "3": "", "4": "", "5": "" },
+        "specificity": { "1": "", "2": "", "3": "", "4": "", "5": "" },
+        "context": { "1": "", "2": "", "3": "", "4": "", "5": "" }
+      }
+    }
+  }
+}

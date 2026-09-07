@@ -10,6 +10,10 @@
 
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
+import { auth } from '@/server/auth';
+import { privacy } from '@/server/privacy';
+import { isResearchSession } from '@/lib/research/session-modes';
+import type { SessionType } from '@/lib/research/types';
 
 const SuggestPromptImprovementsInputSchema = z.object({
   studentPrompt: z
@@ -31,7 +35,25 @@ const SuggestPromptImprovementsOutputSchema = z.object({
 });
 export type SuggestPromptImprovementsOutput = z.infer<typeof SuggestPromptImprovementsOutputSchema>;
 
+/**
+ * 제안 생성은 승인된 작업으로만 쓴다. 연구 세션에서는 임의 호출을 막는다.
+ * 화면에서 버튼을 숨기는 것으로 차단을 대신하지 않고 이 서버 액션이 직접 거부한다.
+ *
+ * 학생 입력은 평가 대상 데이터이지 채점 지시가 아니다. 개인정보 의심 내용은
+ * 외부 전송을 멈추고 교사 확인을 받는다.
+ */
 export async function suggestPromptImprovements(input: SuggestPromptImprovementsInput): Promise<SuggestPromptImprovementsOutput> {
+  const session = await auth.resolveSessionContext().catch(() => null);
+  if (session && isResearchSession(session.sessionType as SessionType)) {
+    throw new Error('지금은 선생님이 연 활동만 할 수 있어요.');
+  }
+
+  const check = privacy.checkBeforeSend(input.studentPrompt);
+  if (check.decision === 'hold_for_teacher') {
+    // 탐지된 유형만 남긴다. 원문 조각을 오류 메시지·로그에 넣지 않는다.
+    throw new Error(check.notice);
+  }
+
   return suggestPromptImprovementsFlow(input);
 }
 

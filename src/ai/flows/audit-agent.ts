@@ -7,7 +7,16 @@
  * 자동으로 검토하고 개선안을 제시합니다.
  *
  * 모델: gemini-2.5-flash (비용 절감)
- * 실제 데이터(학생 제출물)가 있으면 패턴 분석까지 수행합니다.
+ *
+ * 이 경로는 학생 응답을 다른 AI에 보내는 경로다. 그러므로 기본은 합성 자료(설정만)
+ * 감수이며, 실데이터 입력은 연구자 역할과 명시적 승인 기록이 함께 있을 때만 받는다.
+ * 승인 플래그가 없으면 실데이터를 거부한다. 테스트 목적으로 실데이터를 내려받거나
+ * 감수 AI로 보내지 않는다.
+ *
+ * 실제 호출은 서버 액션 @/server/auth/audit-actions의 runAuditFromServer를 거친다.
+ * 클라이언트가 이 함수를 직접 부르더라도 아래 승인 검사에서 막힌다.
+ *
+ * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §1 P1, §6
  */
 
 import { ai } from '@/ai/genkit';
@@ -22,11 +31,12 @@ const QuestionSchema = z.object({
   rubric: z.string(),
 });
 
+// 감수 payload에는 신원 ID(연구ID·학급ID·출석번호·학교명)를 넣지 않는다.
 const EvalSampleSchema = z.object({
   questionLevel: z.number().optional(),
   studentPrompt: z.string(),
-  score: z.number(),
-  feedback: z.string(),
+  score: z.number().optional(),
+  feedback: z.string().optional(),
   originalPrompt: z.string().optional(),
 });
 
@@ -34,9 +44,31 @@ export const AuditInputSchema = z.object({
   questions: z.array(QuestionSchema).describe('현재 설정된 연습 문제 목록'),
   evaluationPrompt: z.string().describe('채점 AI에 사용 중인 시스템 프롬프트'),
   imagePromptTemplate: z.string().describe('이미지 생성 시 사용하는 buildImagePrompt 전체 텍스트'),
-  recentEvaluations: z.array(EvalSampleSchema).optional().describe('최근 학생 제출 및 채점 결과 (선택)'),
+  recentEvaluations: z.array(EvalSampleSchema).optional().describe('최근 학생 제출 (선택, 승인 필요)'),
+  /** 기본은 합성 자료다. 실데이터는 승인 기록이 있어야 한다. */
+  dataSource: z.enum(['synthetic', 'real']).default('synthetic'),
+  /** 연구자 역할 확인과 명시적 승인 기록. 실데이터일 때만 채운다. */
+  approval: z
+    .object({
+      approvalId: z.string(),
+      approvedBy: z.string(),
+      approvedAt: z.string(),
+    })
+    .optional(),
 });
 export type AuditInput = z.infer<typeof AuditInputSchema>;
+
+/**
+ * 승인 없는 실데이터 감수 전송을 막을 때 던지는 오류.
+ * 'use server' 파일은 async 함수 외의 export를 두지 않으므로 내보내지 않는다.
+ * 호출부는 error.name === 'AuditPolicyError'로 구분한다.
+ */
+class AuditPolicyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuditPolicyError';
+  }
+}
 
 // ── 출력 스키마 ──────────────────────────────────────────
 const FindingSchema = z.object({
@@ -64,6 +96,23 @@ export const AuditOutputSchema = z.object({
 export type AuditOutput = z.infer<typeof AuditOutputSchema>;
 
 export async function runAuditAgent(input: AuditInput): Promise<AuditOutput> {
+  const dataSource = input.dataSource ?? 'synthetic';
+  const hasRealData = (input.recentEvaluations?.length ?? 0) > 0;
+
+  // 합성 자료만 기본 허용한다. 실데이터가 섞여 오면 승인 여부와 무관하게 먼저 막는다.
+  if (hasRealData && dataSource !== 'real') {
+    throw new AuditPolicyError(
+      '실데이터 감수는 기본 허용되지 않습니다. 합성 자료로만 감수합니다.'
+    );
+  }
+  if (dataSource === 'real') {
+    const approval = input.approval;
+    if (!approval?.approvalId || !approval.approvedBy || !approval.approvedAt) {
+      throw new AuditPolicyError(
+        '연구자 역할과 명시적 승인 기록이 없으면 실데이터를 감수 AI로 보내지 않습니다.'
+      );
+    }
+  }
   return auditFlow(input);
 }
 
@@ -77,11 +126,11 @@ const auditFlow = ai.defineFlow(
   async (input) => {
     const hasData = (input.recentEvaluations?.length ?? 0) > 0;
     const dataSection = hasData
-      ? `\n\n[실제 학생 제출 데이터 ${input.recentEvaluations!.length}건]\n` +
+      ? `\n\n[승인된 학생 제출 자료 ${input.recentEvaluations!.length}건 - 신원 정보 없음]\n` +
         input.recentEvaluations!.map((e, i) =>
-          `#${i + 1} Lv.${e.questionLevel ?? '?'} | 점수:${e.score} | 학생:"${e.studentPrompt.slice(0, 60)}..." | 피드백:"${e.feedback.slice(0, 80)}..."`
+          `#${i + 1} Lv.${e.questionLevel ?? '?'} | 학생 응답:"${e.studentPrompt.slice(0, 60)}..."`
         ).join('\n')
-      : '\n\n[실제 데이터 없음 — 설정만으로 감수]';
+      : '\n\n[학생 자료 없음 — 설정만으로 감수]';
 
     const prompt = `
 너는 초등교육 전문가이자 AI 시스템 품질 감수관이야.

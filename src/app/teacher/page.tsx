@@ -1,191 +1,233 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+/**
+ * 교사·연구자 대시보드.
+ *
+ * 예전에는 학급코드만 입력하면 클라이언트가 Firestore를 직접 조회·삭제했다.
+ * 이제는 서버 인증을 거쳐 서버가 배정한 학급만 목록으로 받고, 조회·삭제도
+ * 서버 액션이 소속 권한을 확인한 뒤에만 수행한다.
+ *
+ * 연구자에게는 비식별 읽기만 준다. 삭제 단추는 교사에게만 보이며, 보이지 않는 것과
+ * 별개로 서버가 다시 거부한다.
+ *
+ * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §6, 수용시험 11
+ */
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useFirestore, useCollection } from '@/firebase';
-import { collection, query, orderBy, deleteDoc, doc, getDocs, writeBatch } from 'firebase/firestore';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { useAuth } from '@/firebase';
+import { postStaffSession, clearStaffSession } from '@/firebase/auth/staff-session';
+import {
+  loadStaffContext,
+  loadLessonRecords,
+  deleteLessonRecord,
+  loadResearchRecords,
+} from '@/server/auth/class-data-actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { GraduationCap, ArrowLeft, Printer, Trash2, Search, ClipboardList, TrendingUp, AlertTriangle } from 'lucide-react';
-import { useToast } from "@/hooks/use-toast";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { GraduationCap, ArrowLeft, Printer, Trash2, ClipboardList, TrendingUp, ShieldCheck, LogOut } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { SchoolPicker } from '@/components/school-picker';
-import type { SchoolMatch } from '@/lib/school-search';
+
+type StaffContext = Awaited<ReturnType<typeof loadStaffContext>>;
+type LessonRecords = Awaited<ReturnType<typeof loadLessonRecords>>;
+type ResearchRecords = Awaited<ReturnType<typeof loadResearchRecords>>;
 
 type PracticeAttempt = {
   id: string;
-  attendanceNumber: string;
-  questionIndex: number;
+  attendanceNumber?: string;
+  questionIndex?: number;
   questionLevel?: number;
   questionTitle?: string;
-  originalPrompt: string;
-  studentPrompt: string;
-  score: number;
-  feedback: string;
-  createdAt: any;
+  studentPrompt?: string;
+  score?: number | null;
+  createdAt?: string | null;
 };
 
 export default function TeacherPage() {
-  const [school, setSchool] = useState<SchoolMatch | null>(null);
-  const [grade, setGrade] = useState('');
-  const [classNumber, setClassNumber] = useState('');
-  const [activeClassCode, setActiveClassCode] = useState<string | null>(null);
-  const [activeLabel, setActiveLabel] = useState('');
-  const db = useFirestore();
+  const firebaseAuth = useAuth();
   const { toast } = useToast();
 
-  const submissionsQuery = useMemo(() => {
-    if (!db || !activeClassCode) return null;
-    return query(
-      collection(db, 'classes', activeClassCode, 'submissions'),
-      orderBy('createdAt', 'desc')
-    );
-  }, [db, activeClassCode]);
+  const [context, setContext] = useState<StaffContext | null>(null);
+  const [checking, setChecking] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [signingIn, setSigningIn] = useState(false);
 
-  const practiceQuery = useMemo(() => {
-    if (!db || !activeClassCode) return null;
-    return query(
-      collection(db, 'classes', activeClassCode, 'practice_attempts'),
-      orderBy('createdAt', 'asc')
-    );
-  }, [db, activeClassCode]);
+  const [activeClassCode, setActiveClassCode] = useState('');
+  const [activeResearchClass, setActiveResearchClass] = useState('');
+  const [lesson, setLesson] = useState<LessonRecords | null>(null);
+  const [research, setResearch] = useState<ResearchRecords | null>(null);
+  const [loadingData, setLoadingData] = useState(false);
 
-  const { data: submissions, loading } = useCollection(submissionsQuery);
-  const { data: practice, loading: practiceLoading } = useCollection(practiceQuery);
+  const refreshContext = useCallback(async () => {
+    setChecking(true);
+    try {
+      const ctx = await loadStaffContext();
+      setContext(ctx);
+    } catch {
+      setContext(null);
+    } finally {
+      setChecking(false);
+    }
+  }, []);
 
-  // 연습 기록을 학생 → 문제 → 시간순으로 그룹화
+  useEffect(() => {
+    void refreshContext();
+  }, [refreshContext]);
+
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firebaseAuth) return;
+    setSigningIn(true);
+    try {
+      const credential = await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
+      const idToken = await credential.user.getIdToken();
+      await postStaffSession(idToken);
+      setPassword('');
+      await refreshContext();
+    } catch {
+      // 실패 사유를 세분해서 알리지 않는다(계정 존재 여부 노출 방지).
+      toast({ variant: 'destructive', title: '로그인 실패', description: '계정 정보를 확인해 주세요.' });
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await clearStaffSession();
+    setContext(null);
+    setLesson(null);
+    setResearch(null);
+    setActiveClassCode('');
+    setActiveResearchClass('');
+  };
+
+  const openLessonClass = async (classCode: string) => {
+    setActiveClassCode(classCode);
+    setLoadingData(true);
+    try {
+      setLesson(await loadLessonRecords(classCode));
+    } catch (err) {
+      setLesson(null);
+      toast({ variant: 'destructive', title: '조회 실패', description: String((err as Error)?.message ?? '') });
+    } finally {
+      setLoadingData(false);
+    }
+  };
+
+  const openResearchClass = async (classResearchId: string) => {
+    setActiveResearchClass(classResearchId);
+    setLoadingData(true);
+    try {
+      setResearch(await loadResearchRecords(classResearchId));
+    } catch (err) {
+      setResearch(null);
+      toast({ variant: 'destructive', title: '조회 실패', description: String((err as Error)?.message ?? '') });
+    } finally {
+      setLoadingData(false);
+    }
+  };
+
+  const handleDeletePractice = async (id: string) => {
+    if (!activeClassCode) return;
+    if (!confirm('이 도전 기록을 삭제할까요?')) return;
+    try {
+      await deleteLessonRecord(activeClassCode, 'practice_attempts', id);
+      toast({ title: '삭제 완료' });
+      await openLessonClass(activeClassCode);
+    } catch {
+      toast({ variant: 'destructive', title: '삭제 실패' });
+    }
+  };
+
+  const handleDeleteSubmission = async (id: string) => {
+    if (!activeClassCode) return;
+    if (!confirm('이 기록을 정말 삭제할까요?')) return;
+    try {
+      await deleteLessonRecord(activeClassCode, 'submissions', id);
+      toast({ title: '삭제 완료' });
+      await openLessonClass(activeClassCode);
+    } catch {
+      toast({ variant: 'destructive', title: '삭제 실패' });
+    }
+  };
+
+  // 연습 기록을 학생 → 문제 → 시간순으로 묶는다.
   const practiceGrouped = useMemo(() => {
-    if (!practice) return {};
     const byStudent: Record<string, Record<number, PracticeAttempt[]>> = {};
-    for (const raw of practice as any[]) {
-      const a = raw as PracticeAttempt;
-      if (!byStudent[a.attendanceNumber]) byStudent[a.attendanceNumber] = {};
-      const qMap = byStudent[a.attendanceNumber];
-      if (!qMap[a.questionIndex]) qMap[a.questionIndex] = [];
-      qMap[a.questionIndex].push(a);
+    for (const raw of (lesson?.practiceAttempts ?? []) as PracticeAttempt[]) {
+      const student = raw.attendanceNumber ?? '-';
+      const question = raw.questionIndex ?? 0;
+      if (!byStudent[student]) byStudent[student] = {};
+      if (!byStudent[student][question]) byStudent[student][question] = [];
+      byStudent[student][question].push(raw);
     }
     return byStudent;
-  }, [practice]);
+  }, [lesson]);
 
-  const sortedStudentNumbers = useMemo(() => {
-    return Object.keys(practiceGrouped).sort((a, b) => Number(a) - Number(b));
-  }, [practiceGrouped]);
+  const sortedStudents = useMemo(
+    () => Object.keys(practiceGrouped).sort((a, b) => Number(a) - Number(b)),
+    [practiceGrouped]
+  );
 
-  const handleClassEntry = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!school || !grade || !classNumber) return;
-    const code = `${school.code}_${grade}-${classNumber}`;
-    setActiveClassCode(code);
-    setActiveLabel(`${school.name} ${grade}학년 ${classNumber}반`);
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!db || !activeClassCode) return;
-    if (confirm('이 기록을 정말 삭제할까요?')) {
-      try {
-        await deleteDoc(doc(db, 'classes', activeClassCode, 'submissions', id));
-        toast({ title: "삭제 완료" });
-      } catch (e) {
-        toast({ variant: "destructive", title: "삭제 실패" });
-      }
-    }
-  };
-
-  const handleDeletePracticeAttempt = async (id: string) => {
-    if (!db || !activeClassCode) return;
-    if (confirm('이 도전 기록을 삭제할까요?')) {
-      try {
-        await deleteDoc(doc(db, 'classes', activeClassCode, 'practice_attempts', id));
-        toast({ title: '삭제 완료' });
-      } catch {
-        toast({ variant: 'destructive', title: '삭제 실패' });
-      }
-    }
-  };
-
-  const handlePrint = () => window.print();
-
-  const handleDeleteAll = async () => {
-    if (!db || !activeClassCode) return;
-    const confirmed = confirm(
-      `⚠️ "${activeLabel}" 학급의 모든 데이터를 삭제합니다.\n연습 기록과 시험 결과가 영구 삭제됩니다. 계속할까요?`
+  if (checking) {
+    return (
+      <div className="min-h-screen bg-background p-8">
+        <Skeleton className="h-40 w-full max-w-xl mx-auto rounded-2xl" />
+      </div>
     );
-    if (!confirmed) return;
+  }
 
-    try {
-      const batch = writeBatch(db);
-      const [subSnap, pracSnap] = await Promise.all([
-        getDocs(collection(db, 'classes', activeClassCode, 'submissions')),
-        getDocs(collection(db, 'classes', activeClassCode, 'practice_attempts')),
-      ]);
-      subSnap.forEach(d => batch.delete(d.ref));
-      pracSnap.forEach(d => batch.delete(d.ref));
-      await batch.commit();
-      toast({ title: '삭제 완료', description: `${subSnap.size + pracSnap.size}건의 데이터를 삭제했습니다.` });
-    } catch (e) {
-      toast({ variant: 'destructive', title: '삭제 실패', description: String(e) });
-    }
-  };
-
-  if (!activeClassCode) {
+  if (!context) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
         <main className="max-w-md w-full">
-          <Card className="shadow-2xl border-2 border-primary/20 bg-card/80 backdrop-blur-sm">
+          <Card className="shadow-2xl border-2 border-primary/20">
             <CardHeader className="text-center">
               <GraduationCap className="h-12 w-12 mx-auto text-primary mb-2" />
-              <CardTitle className="text-3xl font-headline">교사 대시보드</CardTitle>
-              <CardDescription>학교·학년·반을 선택하여 학생 기록을 확인하세요.</CardDescription>
+              <CardTitle className="text-2xl font-headline">교사·연구자 로그인</CardTitle>
+              <CardDescription>
+                학급 자료는 배정된 계정으로만 볼 수 있습니다. 학급 코드만으로는 열리지 않습니다.
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleClassEntry} className="space-y-4">
+              <form onSubmit={handleSignIn} className="space-y-4">
                 <div className="space-y-2">
-                  <Label>학교</Label>
-                  <SchoolPicker value={school} onChange={setSchool} />
+                  <Label htmlFor="staff-email">계정</Label>
+                  <Input
+                    id="staff-email"
+                    type="email"
+                    autoComplete="username"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="h-12"
+                  />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label>학년</Label>
-                    <Select value={grade} onValueChange={setGrade}>
-                      <SelectTrigger className="h-12 text-lg">
-                        <SelectValue placeholder="학년" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {[1,2,3,4,5,6].map(g => (
-                          <SelectItem key={g} value={String(g)}>{g}학년</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>반</Label>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={20}
-                      placeholder="반 번호"
-                      value={classNumber}
-                      onChange={e => setClassNumber(e.target.value)}
-                      className="h-12 text-lg"
-                    />
-                  </div>
+                <div className="space-y-2">
+                  <Label htmlFor="staff-password">비밀번호</Label>
+                  <Input
+                    id="staff-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="h-12"
+                  />
                 </div>
-                <Button
-                  type="submit"
-                  className="w-full font-bold h-12"
-                  size="lg"
-                  disabled={!school || !grade || !classNumber}
-                >
-                  확인하기
+                <Button type="submit" className="w-full h-12 font-bold" disabled={signingIn || !firebaseAuth}>
+                  로그인
                 </Button>
-                <Link href="/" className="block text-center mt-4 text-sm text-muted-foreground hover:text-primary flex items-center justify-center">
-                  <ArrowLeft className="mr-2 h-4 w-4" /> 홈으로 돌아가기
+                <Link href="/" className="block text-center text-sm text-muted-foreground hover:text-primary">
+                  <ArrowLeft className="inline mr-2 h-4 w-4" /> 홈으로 돌아가기
                 </Link>
               </form>
             </CardContent>
@@ -195,107 +237,114 @@ export default function TeacherPage() {
     );
   }
 
+  const isTeacher = context.role === 'teacher';
+
   return (
     <div className="min-h-screen bg-background p-4 md:p-8 font-sans">
-      <header className="container mx-auto max-w-6xl mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 no-print">
+      <header className="container mx-auto max-w-6xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 no-print">
         <div>
           <h1 className="text-3xl font-black flex items-center gap-3 font-headline">
             <ClipboardList className="h-8 w-8 text-primary" />
-            {activeLabel} 결과지
+            학급 자료
           </h1>
-          <p className="text-muted-foreground font-body">학생들의 학습 기록을 확인하세요.</p>
+          <p className="text-muted-foreground font-body">
+            역할: {isTeacher ? '교사' : '연구자'} · 배정된 학급만 표시합니다.
+          </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" onClick={() => setActiveClassCode(null)}>
-            <Search className="mr-2 h-4 w-4" /> 다른 학급
-          </Button>
-          <Button onClick={handlePrint} className="font-bold">
+          <Button variant="outline" onClick={() => window.print()}>
             <Printer className="mr-2 h-4 w-4" /> 인쇄
           </Button>
-          <Button
-            variant="destructive"
-            onClick={handleDeleteAll}
-            className="font-bold"
-          >
-            <AlertTriangle className="mr-2 h-4 w-4" /> 수업 결과 전체 삭제
+          <Button variant="ghost" onClick={handleSignOut}>
+            <LogOut className="mr-2 h-4 w-4" /> 로그아웃
           </Button>
         </div>
       </header>
 
-      <main className="container mx-auto max-w-6xl">
+      <main className="container mx-auto max-w-6xl space-y-6">
+        <Card className="no-print">
+          <CardHeader>
+            <CardTitle className="text-lg">학급 선택</CardTitle>
+            <CardDescription>
+              목록은 서버가 계정에 배정한 학급입니다. 다른 학급은 서버가 거부합니다.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-2">
+            {isTeacher && (
+              <div className="space-y-2">
+                <Label>수업 기록 학급</Label>
+                <Select value={activeClassCode} onValueChange={(v) => void openLessonClass(v)}>
+                  <SelectTrigger className="h-12">
+                    <SelectValue placeholder={context.classCodes.length ? '학급 선택' : '배정된 학급 없음'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {context.classCodes.map((code) => (
+                      <SelectItem key={code} value={code}>{code}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label>연구 학급(수업ID)</Label>
+              <Select value={activeResearchClass} onValueChange={(v) => void openResearchClass(v)}>
+                <SelectTrigger className="h-12">
+                  <SelectValue placeholder={context.classResearchIds.length ? '수업ID 선택' : '배정된 수업ID 없음'} />
+                </SelectTrigger>
+                <SelectContent>
+                  {context.classResearchIds.map((id) => (
+                    <SelectItem key={id} value={id}>{id}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+
         <Tabs defaultValue="practice" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2 max-w-md no-print">
-            <TabsTrigger value="practice">
-              <TrendingUp className="mr-2 h-4 w-4" /> 연습 기록
-            </TabsTrigger>
-            <TabsTrigger value="exam">
-              <ClipboardList className="mr-2 h-4 w-4" /> 시험 결과
-            </TabsTrigger>
+          <TabsList className="grid w-full grid-cols-3 max-w-xl no-print">
+            <TabsTrigger value="practice"><TrendingUp className="mr-2 h-4 w-4" /> 연습 기록</TabsTrigger>
+            <TabsTrigger value="exam"><ClipboardList className="mr-2 h-4 w-4" /> 시험 결과</TabsTrigger>
+            <TabsTrigger value="research"><ShieldCheck className="mr-2 h-4 w-4" /> 연구 자료</TabsTrigger>
           </TabsList>
 
-          {/* 연습 기록 탭: 학생별 · 문제별 · 차수별 변화 */}
           <TabsContent value="practice" className="space-y-6">
-            {practiceLoading ? (
+            {!isTeacher ? (
+              <Alert>
+                <AlertTitle>연구자 계정</AlertTitle>
+                <AlertDescription>수업 기록은 연구 저장소와 분리되어 있어 열람 대상이 아닙니다.</AlertDescription>
+              </Alert>
+            ) : loadingData ? (
               <Skeleton className="h-40 w-full rounded-2xl" />
-            ) : sortedStudentNumbers.length === 0 ? (
+            ) : sortedStudents.length === 0 ? (
               <Card className="p-12 text-center text-muted-foreground rounded-2xl border-2 border-dashed">
-                아직 연습 도전 기록이 없습니다.
+                표시할 연습 기록이 없습니다.
               </Card>
             ) : (
-              sortedStudentNumbers.map((studentNum) => {
+              sortedStudents.map((studentNum) => {
                 const qMap = practiceGrouped[studentNum];
-                const sortedQuestions = Object.keys(qMap)
-                  .map(Number)
-                  .sort((a, b) => a - b);
-                const totalAttempts = sortedQuestions.reduce((acc, q) => acc + qMap[q].length, 0);
-
+                const questions = Object.keys(qMap).map(Number).sort((a, b) => a - b);
                 return (
                   <Card key={studentNum} className="border-2 rounded-2xl bg-card/50 print:break-inside-avoid">
-                    <CardHeader className="bg-muted/30 border-b p-5 flex flex-row items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <Badge variant="outline" className="text-lg py-1 px-4 bg-background">
-                          {studentNum}번
-                        </Badge>
-                        <CardDescription className="font-body">
-                          문제 {sortedQuestions.length}개 · 도전 총 {totalAttempts}회
-                        </CardDescription>
-                      </div>
+                    <CardHeader className="bg-muted/30 border-b p-5">
+                      <Badge variant="outline" className="text-lg py-1 px-4 bg-background w-fit">
+                        {studentNum}번
+                      </Badge>
                     </CardHeader>
                     <CardContent className="p-5 space-y-6">
-                      {sortedQuestions.map((qIdx) => {
+                      {questions.map((qIdx) => {
                         const attempts = qMap[qIdx];
-                        const firstScore = attempts[0]?.score ?? 0;
-                        const lastScore = attempts[attempts.length - 1]?.score ?? 0;
-                        const diff = lastScore - firstScore;
                         return (
                           <div key={qIdx} className="border rounded-xl p-4 bg-background/60">
-                            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                              <div>
-                                <div className="flex items-center gap-2 mb-0.5">
-                                  <p className="text-xs text-muted-foreground font-bold uppercase">문제 {qIdx + 1}</p>
-                                  {attempts[0].questionLevel && (
-                                    <span className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">Lv.{attempts[0].questionLevel}</span>
-                                  )}
-                                </div>
-                                <p className="text-sm font-medium">
-                                  {attempts[0].questionTitle ?? attempts[0].originalPrompt.slice(0, 40) + '…'}
-                                </p>
-                              </div>
-                              {attempts.length > 1 && (
-                                <Badge
-                                  variant={diff > 0 ? 'default' : diff < 0 ? 'destructive' : 'secondary'}
-                                  className="text-xs"
-                                >
-                                  {diff > 0 ? `+${diff}` : diff} 점 변화
-                                </Badge>
-                              )}
-                            </div>
+                            <p className="text-sm font-medium mb-3">
+                              문제 {qIdx + 1} {attempts[0]?.questionTitle ?? ''}
+                            </p>
                             <Table>
                               <TableHeader>
                                 <TableRow>
                                   <TableHead className="w-[80px] font-bold">차수</TableHead>
-                                  <TableHead className="font-bold">학생 프롬프트</TableHead>
-                                  <TableHead className="w-[80px] text-right font-bold">점수</TableHead>
+                                  <TableHead className="font-bold">학생 응답</TableHead>
+                                  <TableHead className="w-[90px] text-right font-bold">점수</TableHead>
                                   <TableHead className="w-[40px] no-print"></TableHead>
                                 </TableRow>
                               </TableHeader>
@@ -303,13 +352,18 @@ export default function TeacherPage() {
                                 {attempts.map((att, i) => (
                                   <TableRow key={att.id}>
                                     <TableCell className="font-bold">{i + 1}차</TableCell>
-                                    <TableCell className="whitespace-pre-wrap py-3 leading-relaxed">{att.studentPrompt}</TableCell>
-                                    <TableCell className="text-right font-black text-primary text-lg">{att.score}</TableCell>
+                                    <TableCell className="whitespace-pre-wrap py-3 leading-relaxed">
+                                      {att.studentPrompt ?? ''}
+                                    </TableCell>
+                                    {/* 결측은 0점이 아니다. 점수가 없으면 '기록 없음'으로 둔다. */}
+                                    <TableCell className="text-right font-black text-primary text-lg">
+                                      {typeof att.score === 'number' ? att.score : '기록 없음'}
+                                    </TableCell>
                                     <TableCell className="no-print">
                                       <Button
                                         variant="ghost"
                                         size="icon"
-                                        onClick={() => handleDeletePracticeAttempt(att.id)}
+                                        onClick={() => void handleDeletePractice(att.id)}
                                         className="text-destructive/60 hover:bg-destructive/10 h-8 w-8"
                                       >
                                         <Trash2 className="h-4 w-4" />
@@ -329,75 +383,68 @@ export default function TeacherPage() {
             )}
           </TabsContent>
 
-          {/* 시험 결과 탭: 기존 구조 */}
           <TabsContent value="exam" className="space-y-6">
-            {loading ? (
-              <Skeleton className="h-40 w-full rounded-2xl" />
-            ) : !submissions || submissions.length === 0 ? (
+            {!isTeacher ? (
+              <Alert>
+                <AlertTitle>연구자 계정</AlertTitle>
+                <AlertDescription>수업 기록은 열람 대상이 아닙니다.</AlertDescription>
+              </Alert>
+            ) : !lesson || lesson.submissions.length === 0 ? (
               <Card className="p-12 text-center text-muted-foreground rounded-2xl border-2 border-dashed">
-                아직 제출된 시험 결과가 없습니다.
+                표시할 결과가 없습니다.
               </Card>
             ) : (
-              <div className="grid gap-8 print:gap-12">
-                {submissions.map((sub: any) => (
-                  <Card key={sub.id} className="overflow-hidden border-2 print:border-none print:shadow-none rounded-2xl bg-card/50">
-                    <CardHeader className="bg-muted/30 border-b flex flex-row items-center justify-between p-6">
-                      <div className="flex items-center gap-4">
-                        <Badge variant="outline" className="text-xl py-1 px-4 bg-background">
-                          {sub.attendanceNumber}번
-                        </Badge>
-                        <div>
-                          <CardTitle className="text-2xl font-bold font-headline">{sub.nickname}</CardTitle>
-                          <CardDescription className="font-body">
-                            {sub.createdAt?.toDate ? new Date(sub.createdAt.toDate()).toLocaleString() : '일시 정보 없음'}
-                          </CardDescription>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-6">
-                        <div className="text-right">
-                          <p className="text-xs text-muted-foreground uppercase font-bold">{sub.mode === 'game' ? '게임 모드' : '시간 제한'}</p>
-                          <p className="text-3xl font-black text-primary">{Math.round(sub.averageScore)}점</p>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDelete(sub.id)}
-                          className="no-print text-destructive hover:bg-destructive/10"
-                        >
-                          <Trash2 className="h-5 w-5" />
-                        </Button>
-                      </div>
+              <div className="grid gap-6">
+                {(lesson.submissions as Record<string, unknown>[]).map((sub) => (
+                  <Card key={String(sub.id)} className="border-2 rounded-2xl bg-card/50">
+                    <CardHeader className="bg-muted/30 border-b flex flex-row items-center justify-between p-5">
+                      <Badge variant="outline" className="text-lg py-1 px-4 bg-background">
+                        {String(sub.attendanceNumber ?? '-')}번
+                      </Badge>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => void handleDeleteSubmission(String(sub.id))}
+                        className="no-print text-destructive hover:bg-destructive/10"
+                      >
+                        <Trash2 className="h-5 w-5" />
+                      </Button>
                     </CardHeader>
-                    <CardContent className="p-6">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-[80px] font-bold">문제</TableHead>
-                            <TableHead className="font-bold">원본 프롬프트</TableHead>
-                            <TableHead className="font-bold">학생 프롬프트</TableHead>
-                            <TableHead className="w-[80px] text-right font-bold">점수</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {sub.results.map((res: any, idx: number) => (
-                            <TableRow key={idx}>
-                              <TableCell className="font-bold text-lg">{idx + 1}</TableCell>
-                              <TableCell className="text-sm py-4">
-                                {res.questionTitle
-                                  ? <span className="font-medium">{res.questionTitle}</span>
-                                  : <span className="text-muted-foreground italic">{(res.originalPrompt ?? '-').slice(0, 50)}…</span>
-                                }
-                              </TableCell>
-                              <TableCell className="whitespace-pre-wrap font-body py-4 leading-relaxed">{res.studentPrompt}</TableCell>
-                              <TableCell className="text-right font-black text-primary text-xl">{res.score}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
+                    <CardContent className="p-5">
+                      <pre className="text-sm whitespace-pre-wrap font-body">
+                        {JSON.stringify(sub.results ?? [], null, 2)}
+                      </pre>
                     </CardContent>
                   </Card>
                 ))}
               </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="research" className="space-y-4">
+            <Alert>
+              <ShieldCheck className="h-5 w-5" />
+              <AlertTitle>비식별 읽기</AlertTitle>
+              <AlertDescription>
+                {research?.notice ??
+                  '연구ID 자료입니다. 학교명·출석번호·실명 대응표는 포함하지 않습니다.'}
+                {' '}삭제 권한은 분리되어 있어 이 화면에서 연구 자료를 지울 수 없습니다.
+              </AlertDescription>
+            </Alert>
+            {loadingData ? (
+              <Skeleton className="h-40 w-full rounded-2xl" />
+            ) : !research || research.records.length === 0 ? (
+              <Card className="p-12 text-center text-muted-foreground rounded-2xl border-2 border-dashed">
+                표시할 연구 자료가 없습니다.
+              </Card>
+            ) : (
+              <Card className="rounded-2xl">
+                <CardContent className="p-5 overflow-x-auto">
+                  <pre className="text-xs whitespace-pre-wrap">
+                    {JSON.stringify(research.records, null, 2)}
+                  </pre>
+                </CardContent>
+              </Card>
             )}
           </TabsContent>
         </Tabs>
@@ -408,9 +455,6 @@ export default function TeacherPage() {
           .no-print { display: none !important; }
           body { background: white !important; color: black !important; padding: 0 !important; }
           .container { max-width: 100% !important; padding: 0 !important; margin: 0 !important; }
-          .card { border: 1px solid #ddd !important; margin-bottom: 2rem !important; break-inside: avoid; border-radius: 0 !important; }
-          .bg-muted\\/30 { background-color: #f3f4f6 !important; -webkit-print-color-adjust: exact; }
-          .text-primary { color: #7c3aed !important; -webkit-print-color-adjust: exact; }
         }
       `}</style>
     </div>

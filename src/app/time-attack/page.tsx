@@ -18,6 +18,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Slider } from '@/components/ui/slider';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { useFirestore } from '@/firebase';
+import { ModeGuard } from '@/components/mode-guard';
 
 const allQuestions = [
   {
@@ -70,16 +71,47 @@ const allQuestions = [
   },
   // 이미지는 사전 생성된 정적 파일 (scripts/generate-question-images.mjs).
   // 3번(유니콘)은 게임 모드와 같은 힌트라 game-05 파일 공유.
-].map((q, i) => ({ ...q, imageUrl: `/questions/${['ta-01', 'ta-02', 'game-05', 'ta-04', 'ta-05', 'ta-06', 'ta-07', 'ta-08'][i]}.jpg` }));
+].map((q, i) => {
+  // questionId는 서버 레지스트리가 밴드·이미지·단서를 확정하는 유일한 근거다.
+  // 시간 제한 모드 문항은 아직 레지스트리에 등록되어 있지 않아 채점이 거부된다.
+  // 이 모드는 연구 세션에서 차단되므로 여기서 문항을 새로 만들지 않고 ID 규칙만 맞춰 둔다.
+  const questionId = ['ta-01', 'ta-02', 'game-05', 'ta-04', 'ta-05', 'ta-06', 'ta-07', 'ta-08'][i];
+  return { ...q, questionId, imageUrl: `/questions/${questionId}.jpg` };
+});
 
 const GAME_QUESTION_COUNT = 5;
 // 기준 점수 — 평균이 이 점수 이상이어야 통과
 const PASS_SCORE = 80;
 
 type GameState = 'setup' | 'playing' | 'results';
-type Result = EvaluatePromptOutput & { questionIndex: number; questionLevel: number; koreanTitle: string; studentPrompt: string; originalPrompt: string; };
+/**
+ * 채점 결과를 화면이 쓰는 모양으로 줄인 것.
+ * 결측(status:'missing')이면 score는 0이 아니라 null이다.
+ */
+type Result = {
+  questionIndex: number;
+  questionLevel: number;
+  koreanTitle: string;
+  studentPrompt: string;
+  originalPrompt: string;
+  score: number | null;
+  feedback: string;
+};
 
+/**
+ * 시간 제한 모드는 일반 체험에서만 연다. 연구 세션에서는 진입을 거부한다(수용시험 7).
+ * 기능은 그대로 두고 가드만 감싼다. 차단의 근거는 화면이 아니라 서버 판정이며,
+ * route(middleware)·API가 각각 다시 거부한다.
+ */
 export default function TimeAttackPage() {
+  return (
+    <ModeGuard mode="time-attack">
+      <TimeAttackScreen />
+    </ModeGuard>
+  );
+}
+
+function TimeAttackScreen() {
   const db = useFirestore();
   const [gameState, setGameState] = useState<GameState>('setup');
   const [nickname, setNickname] = useState('');
@@ -143,28 +175,28 @@ export default function TimeAttackPage() {
     
     startEvaluationTransition(async () => {
       const promptToEvaluate = studentPrompt.trim() === '' ? '시간 안에 제출하지 못했습니다.' : studentPrompt;
-      let result: EvaluatePromptOutput;
+      const q = questions[currentQuestionIndex];
+      let score: number | null = null;
+      let feedback = '채점을 마치지 못했어요. 선생님과 함께 확인해요.';
 
       try {
-        const photoDataUri = await toDataURL(questions[currentQuestionIndex].imageUrl);
-        result = await evaluatePrompt({ studentPrompt: promptToEvaluate, photoDataUri, questionLevel: questions[currentQuestionIndex]?.level });
+        // 밴드·이미지·단서는 서버가 questionId로 확정한다. 클라이언트 이미지 URI를 보내지 않는다.
+        const result = await evaluatePrompt({ questionId: q.questionId, studentPrompt: promptToEvaluate });
+        score = result.result.status === 'scored' ? result.result.score : null;
+        feedback = result.feedback?.text ?? feedback;
       } catch (error) {
-        result = {
-          score: 0, feedback: 'AI 평가에 실패했습니다.', band: 'A',
-          levels: { objectLevel: 1, specificityLevel: 1, contextLevel: null },
-          axisScores: { object: 0, specificity: 0, context: null },
-          calls: [], extraCall: false, missing: true,
-        };
+        // 채점 실패는 결측이다. 0점으로 만들지 않는다.
+        console.error('채점 실패:', error);
       }
-      
-      const q = questions[currentQuestionIndex];
+
       const newResults = [...results, {
-        ...result,
         questionIndex: currentQuestionIndex,
         questionLevel: q?.level ?? 0,
         koreanTitle: q?.koreanTitle ?? '',
         studentPrompt: promptToEvaluate,
         originalPrompt: buildImagePrompt(q?.dataAiHint ?? ''),
+        score,
+        feedback,
       }];
       setResults(newResults);
 
@@ -182,7 +214,11 @@ export default function TimeAttackPage() {
     const attendanceNumber = sessionStorage.getItem('attendanceNumber');
     if (!db || !classCode || !attendanceNumber) return;
 
-    const averageScore = finalResults.reduce((acc, r) => acc + r.score, 0) / finalResults.length;
+    // 결측은 0점이 아니므로 평균에서 제외한다. 유효한 점수가 없으면 평균도 없다.
+    const scored = finalResults.filter((r): r is Result & { score: number } => r.score !== null);
+    const averageScore = scored.length
+      ? scored.reduce((acc, r) => acc + r.score, 0) / scored.length
+      : null;
 
     addDoc(collection(db, 'classes', classCode, 'submissions'), {
       attendanceNumber,
@@ -190,7 +226,7 @@ export default function TimeAttackPage() {
       results: finalResults,
       averageScore,
       passScore: PASS_SCORE,
-      passed: Math.round(averageScore) >= PASS_SCORE,
+      passed: averageScore !== null && Math.round(averageScore) >= PASS_SCORE,
       mode: 'time-attack',
       createdAt: serverTimestamp()
     });
@@ -237,8 +273,11 @@ export default function TimeAttackPage() {
   }
 
   if (gameState === 'results') {
-    const averageScore = results.reduce((acc, r) => acc + r.score, 0) / results.length;
-    const passed = Math.round(averageScore) >= PASS_SCORE;
+    const scoredResults = results.filter((r): r is Result & { score: number } => r.score !== null);
+    const averageScore = scoredResults.length
+      ? scoredResults.reduce((acc, r) => acc + r.score, 0) / scoredResults.length
+      : null;
+    const passed = averageScore !== null && Math.round(averageScore) >= PASS_SCORE;
     return (
         <div className="min-h-screen bg-background p-4 flex flex-col items-center justify-center">
             <Card className={`max-w-4xl w-full p-8 text-center space-y-6 shadow-2xl border-2 ${passed ? 'border-primary/20' : 'border-destructive/30'}`}>
@@ -250,7 +289,7 @@ export default function TimeAttackPage() {
                 <h1 className="text-5xl font-bold font-headline">{passed ? '기준 통과!' : '아쉬워요!'}</h1>
                 <div className={`p-10 rounded-2xl border-2 ${passed ? 'bg-muted/50 border-primary/10' : 'bg-destructive/5 border-destructive/10'}`}>
                     <p className="text-muted-foreground text-xl">최종 평균 점수 (기준 {PASS_SCORE}점)</p>
-                    <p className={`text-8xl font-black mt-2 ${passed ? 'text-primary' : 'text-destructive'}`}>{Math.round(averageScore)}점</p>
+                    <p className={`text-8xl font-black mt-2 ${passed ? 'text-primary' : 'text-destructive'}`}>{averageScore === null ? '채점 못함' : `${Math.round(averageScore)}점`}</p>
                 </div>
                 <p className="text-xl">
                   {passed

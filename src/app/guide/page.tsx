@@ -36,8 +36,8 @@ const AXES = [
     icon: Palette,
     no: '축 2',
     name: '어떻게 생겼나',
-    body: '색, 모양, 크기, 개수, 만졌을 때의 느낌, 자세를 알려 주세요. 같은 이름을 가진 다른 물건과 구별되도록 좁혀 주는 말이 좋은 말이에요.',
-    good: '겉이 반질반질한 진한 빨간색 사과 한 개',
+    body: '먼저 눈에 바로 보이는 색과 모양, 크기, 개수를 알려 주세요. 만졌을 때의 느낌이나 자세는 나중 단계에서 더해도 돼요. 같은 이름을 가진 다른 물건과 구별되도록 좁혀 주는 말이 좋은 말이에요.',
+    good: '빨간색 사과 한 개',
     bad: '예쁜 사과',
   },
   {
@@ -50,9 +50,19 @@ const AXES = [
   },
 ];
 
+/**
+ * 1차시 도입(4분)에 쓰는 기본 색·형태 예시.
+ * 전문 질감·재질은 필수로 요구하지 않는다. 채점 축 문언과 어긋나지 않게 유지할 것.
+ */
+const BASIC_EXAMPLES = [
+  { name: 'apple', nameOnly: '사과', withColorShape: '빨간색 동그란 사과 한 개' },
+  { name: 'umbrella', nameOnly: '우산', withColorShape: '노란색 길쭉하게 접힌 우산' },
+  { name: 'key', nameOnly: '열쇠', withColorShape: '은색의 작은 열쇠 하나' },
+];
+
 const STAGES = [
-  { n: 1, title: '무엇을 그렸는지 이름 붙이기', axis: '축 1' },
-  { n: 2, title: '색과 모양을 더하기', axis: '축 1 + 축 2' },
+  { n: 1, title: '이름과 눈에 보이는 색·모양 함께 쓰기', axis: '축 1 + 축 2(기본 색·형태)' },
+  { n: 2, title: '색과 모양을 더 자세히', axis: '축 1 + 축 2' },
   { n: 3, title: '어디에서 무엇을 하고 있나', axis: '축 1 + 축 2 + 배경·행동' },
   { n: 4, title: '질감과 자세까지 말하기', axis: '축 1 + 축 2 + 배경·행동' },
   { n: 5, title: '분위기를 담아 쓰기', axis: '세 축 모두' },
@@ -180,13 +190,13 @@ export default function GuidePage() {
                 <div>
                   <p className="font-semibold mb-1">이렇게 쓰면 좋아요</p>
                   <blockquote className="rounded-r-lg border-l-4 border-primary bg-primary/10 p-3 italic">
-                    흰 배경에 겉이 반질반질한 진한 빨간색 사과 한 개가 있고, 위에 짧은 갈색 꼭지가
-                    붙어 있어요.
+                    빨간색 사과 한 개가 있어요. 동그란 모양이고 위에 짧은 갈색 꼭지가 붙어 있어요.
                   </blockquote>
                   <p className="mt-1 text-muted-foreground">
                     <strong>사과 한 개</strong>로 무엇인지 정하고(축 1),{' '}
-                    <strong>반질반질한 진한 빨간색</strong>과 <strong>짧은 갈색 꼭지</strong>로
-                    어떻게 생겼는지 좁혔어요(축 2).
+                    <strong>빨간색</strong>과 <strong>동그란 모양</strong>, <strong>짧은 갈색 꼭지</strong>로
+                    어떻게 생겼는지 좁혔어요(축 2). 1단계에서는 여기까지면 충분해요.
+                    &lsquo;반질반질하다&rsquo; 같은 만진 느낌은 4단계에서 배워요.
                   </p>
                 </div>
                 <div className="rounded-lg bg-destructive/5 p-3">
@@ -200,10 +210,46 @@ export default function GuidePage() {
             </div>
           </Card>
 
+          {/* 1차시 도입(4분) — 이름과 눈에 보이는 기본 색·형태를 함께 쓰는 연습 */}
+          <Card className="rounded-2xl bg-card/60 backdrop-blur-sm p-6 md:p-8 mb-10">
+            <CardTitle className="text-2xl font-headline mb-3 flex items-center gap-2">
+              <Palette className="h-6 w-6 text-primary" />
+              오늘은 이름과 색·모양을 함께 써 봐요
+            </CardTitle>
+            <p className="text-muted-foreground text-sm font-body leading-relaxed mb-4">
+              이름만 쓰면 그림이 하나로 정해지지 않아요. 이름 옆에 <strong>눈에 바로 보이는 색</strong>과{' '}
+              <strong>모양</strong>을 한 가지씩만 붙여도 훨씬 좋아져요. 어려운 재질이나 만진 느낌은
+              아직 안 써도 괜찮아요.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-3 text-sm font-body">
+              {BASIC_EXAMPLES.map((ex) => (
+                <div key={ex.name} className="rounded-xl border bg-card/60 p-4">
+                  <p className="text-xs text-muted-foreground">이름만</p>
+                  <p className="mb-2">{ex.nameOnly}</p>
+                  <p className="text-xs text-muted-foreground">이름 + 색 · 모양</p>
+                  <p className="font-semibold text-primary">{ex.withColorShape}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2 text-sm">
+              <p className="rounded-md bg-muted px-3 py-2 text-muted-foreground">
+                쓸 수 있는 색 · 빨강, 주황, 노랑, 초록, 파랑, 보라, 갈색, 검정, 흰색, 회색, 은색
+              </p>
+              <p className="rounded-md bg-muted px-3 py-2 text-muted-foreground">
+                쓸 수 있는 모양 · 동그란, 네모난, 세모난, 길쭉한, 납작한, 두꺼운, 접힌, 큰, 작은
+              </p>
+            </div>
+            <p className="mt-4 text-xs text-muted-foreground">
+              점수도 이 두 가지를 함께 봐요. 무엇이 있는지(축 1)와 어떻게 생겼는지(축 2)를 따로
+              봅니다. 1단계에서는 눈에 보이는 기본 색과 형태까지면 충분해요.
+            </p>
+          </Card>
+
           <div className="text-center mb-6">
             <h2 className="text-3xl font-headline font-bold">여섯 단계로 나아가요</h2>
             <p className="mt-2 text-muted-foreground">
-              한 단계에 여섯 문항이에요. 여섯 문항을 모두 마치면 다음 단계가 열려요.
+              한 단계에 여섯 문항이에요. 다음 단계는 선생님이 열어 주세요. 여섯 문항을 다 하지
+              않아도 괜찮고, 못 한 문항은 0점이 아니라 아직 하지 않은 것으로 남아요.
             </p>
           </div>
 
@@ -257,7 +303,7 @@ export default function GuidePage() {
             </p>
             <Link href="/practice" passHref>
               <Button size="lg" className="font-bold text-lg">
-                1단계 시작하기
+                연습하러 가기
                 <ArrowRight className="ml-2" />
               </Button>
             </Link>

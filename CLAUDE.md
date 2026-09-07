@@ -1,41 +1,60 @@
 # PromptGrader (reverse-prompt) — 개발 메모
 
-초등학생용 AI 프롬프트 엔지니어링 학습 웹앱. 그림을 보고 한국어로 설명을 적으면 Gemini가 채점·피드백.
+초등학생용 AI 프롬프트 엔지니어링 학습 웹앱. 그림을 보고 한국어로 설명을 적으면 Gemini가 축별로 채점하고 피드백을 준다.
+석사 학위논문(역프롬프트, v7 계획서)의 연구 도구를 겸한다.
+
+**이 문서는 실제 코드와 맞춘 기술 메모다. 연구 승인·전문가 확정·실데이터 검증을 마쳤다는 뜻이 아니다.**
+현재 저장소는 `researchReady=false` 상태이며 그대로는 본연구 검사·채점을 시작할 수 없다(아래 "연구 시작을 막는 값" 참고).
 
 ## 실행
 
 ```bash
 npm install
 npm run dev           # http://localhost:9002 (Turbopack)
-npm run build         # 프로덕션 빌드 (Vercel과 동일 환경 검증용)
+npm run build         # 프로덕션 빌드
 npm run typecheck     # tsc --noEmit
+npm test              # node --import tsx --test "tests/**/*.test.ts" (순수 함수·모의 모델)
+npm run manifest      # 연구용 manifest 생성 (scripts/research-manifest.mjs)
 npm run genkit:dev    # Genkit 플로우 격리 실행 (선택)
 ```
+
+`npm test`는 실제 모델을 호출하지 않는다. 모델 호출은 주입 가능한 함수로 두고 테스트에서 가짜 구현을 넣는다.
+Firebase Emulator 권한 시험(`tests/rules/`)은 에뮬레이터가 없으면 skip 된다. **skip은 통과가 아니다.**
 
 ## 배포
 
 - **호스팅**: Vercel (자동 배포 — `main` 푸시하면 빌드)
 - **GitHub**: https://github.com/kwonjungu/reverse-prompt
-- **Firebase 프로젝트**: `promptgrader` (NOT `promptgrader-jun` — 옛 config.ts 잔재였음)
-- **Firestore**: 프로덕션 모드 + 학교 내부용 임시 규칙 (`allow read, write: if true`)
-- **Firestore 리전**: asia-northeast3 (서울)
+- **Firebase 프로젝트**: CLAUDE.md는 `promptgrader`를, `.firebaserc`는 `promptgrader-jun`을 가리킨다. **서로 다르다 — 배포 전에 확인할 것.**
+- **Firestore 리전**: asia-northeast3 (서울). 리전만으로 모든 처리가 국내라고 문서화하지 않는다.
+  처리 리전·로그·백업·재위탁·학습 사용 여부는 **실제 계약과 콘솔 설정으로 확인할 항목**이다.
+- **Firestore 규칙**: `firestore.rules`가 저장소에 있다(기본 거부). **콘솔에 실제로 배포했는지는 별도 확인이 필요하다.**
+  이 파일이 있다는 것만으로 운영 콘솔이 같은 상태라고 단정하지 않는다.
 
-## 환경 변수 (Vercel 대시보드에서 등록)
+## 환경 변수
+
+`.env.example`이 템플릿이다. `.env*`는 gitignore.
 
 | 키 | 용도 | 비고 |
 |---|---|---|
 | `GOOGLE_GENAI_API_KEY` | Genkit Gemini 호출 (서버) | 누락 시 `genkit.ts`에서 throw |
-| `GEMINI_API_KEY`, `GEMINI_API_KEYS` | 대체/풀 키 (현재 미사용) | `.env` 잔재 |
-| `NEXT_PUBLIC_FIREBASE_*` 6개 | Firebase 클라이언트 SDK | apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId |
-| `NEIS_API_KEY` | 학교 검색 호출 한도 ↑ | 선택. 없어도 동작하지만 throttle 됨. 키 발급: https://open.neis.go.kr/portal/myPage/actKeyPage.do |
-
-`.env`는 gitignore. `.env.example`이 템플릿.
+| `NEXT_PUBLIC_FIREBASE_*` 6개 | Firebase 클라이언트 SDK | |
+| `NEIS_API_KEY` | 학교 검색 호출 한도 ↑ | 선택 |
+| `EVALUATION_MODEL_ID` | 채점 모델 | 비우면 기본 `googleai/gemini-3.8-flash` |
+| `EVALUATION_TEMPERATURE` | 채점 온도 | 기본 0.2 |
+| `EVALUATION_MODEL_VERIFIED` | 운영자가 모델 접근·출력 스키마를 확인함 | `true`가 아니면 연구 시작 차단 |
+| `RESEARCH_ASSET_DIR` | 비공개 연구 자산 경로 | 검사 이미지 + `cue-pack.json` |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | 서버 Admin SDK 자격 | 없으면 서버 인증이 우회 없이 실패 |
+| `STUDENT_SESSION_SECRET` | 학생 세션 토큰 서명 키 | |
+| `PARTICIPANT_CODE_PEPPER` | 참가자 코드 pepper | |
+| `CONSENT_VERSION` | 유효한 동의서 버전 | 비면 연구 동의 불가 |
+| `IRB_APPROVAL` | IRB 승인 번호 | 비면 연구 시작 차단 |
 
 ## 아키텍처
 
 - **Next.js 15.3.8** App Router + Turbopack + React 18.3
-- **Genkit 1.27** + `@genkit-ai/google-genai` (서버 액션)
-- **Firebase 11.9** 클라이언트 SDK만 (Anonymous Auth는 코드상 호출 X, Firestore만 사용)
+- **Genkit 1.27** + `@genkit-ai/google-genai`
+- **Firebase**: 클라이언트 SDK(읽기 위주) + **서버 `firebase-admin`**(권한 검증을 거친 쓰기)
 - **shadcn/ui** + Tailwind CSS
 
 ### 디렉토리
@@ -43,203 +62,219 @@ npm run genkit:dev    # Genkit 플로우 격리 실행 (선택)
 ```
 src/
   app/
-    page.tsx              # 학교 검색 + 학년/반/번호 입장 폼
-    practice/page.tsx     # 연습 모드 (Firestore 저장 O)
-    game/page.tsx         # 5문제 게임 (한 세션 결과 일괄 저장)
-    time-attack/page.tsx  # 시간 제한 (한 세션 결과 일괄 저장)
-    teacher/page.tsx      # 학급 코드로 결과 조회 (탭: 연습/시험)
-    guide/page.tsx        # 설명 모드 (정적 콘텐츠)
+    page.tsx                    # 입장. 서버가 허용한 모드만 보여 준다
+    guide/page.tsx              # 설명 모드
+    practice/page.tsx           # 연습 모드 (처치)
+    assessment/page.tsx         # 사전·사후 검사 수집 (AI 호출 없음)
+    game/, time-attack/         # 일반 체험 전용. 연구 세션에서는 진입 거부
+    teacher/page.tsx            # 교사 대시보드 (로그인 + 배정 학급만)
+    admin/page.tsx              # 감수 (연구자 역할 + 명시적 승인 필요)
+    api/
+      auth/{session,refresh,staff}      # 세션 토큰 발급·갱신·교직원 로그인
+      lessons/{,open,close,mode}        # 차시 개방·폐쇄·모드 판정
+      assessment/{state,start,submit,failure}
+      research/asset/[questionId]       # 검사 이미지 인증 스트리밍
+  middleware.ts                 # route 층 모드 차단
   ai/
-    genkit.ts             # Genkit 초기화 (기본 모델: gemini-3.8-flash)
-    flows/
-      evaluate-prompt.ts  # 학생 프롬프트 채점 (gemini-3.8-flash, temp 0.2, 축별 5수준)
-      generate-image.ts   # 이미지 생성 (gemini-2.5-flash-image)
-      suggest-prompt-improvements.ts
-    tools/translate.ts
-  firebase/               # 클라이언트 Firestore 훅 (useFirestore, useCollection, useDoc)
+    genkit.ts                   # 모델 ID는 src/server/config.ts 경유
+    flows/evaluate-prompt.ts    # 연습 화면용 얇은 서버 액션 (실채점은 server/grading)
+    flows/audit-agent.ts        # 기본 합성 자료. 실데이터는 승인 기록 필요
   lib/
-    image-prompt.ts       # buildImagePrompt() — 게임·시간제한 모드 전용
-    scoring.ts            # 밴드·배점·수준 환산·결합 규칙 (논문 <표 Ⅲ-4>·<표 Ⅲ-5>·<표 Ⅲ-7>)
-    school-search.ts      # NEIS Open API (서버 액션)
-    utils.ts              # cn() 등
-  components/
-    school-picker.tsx     # 디바운스 typeahead 학교 검색
-    ui/                   # shadcn 컴포넌트
+    rubric.ts                   # 공통 5수준 문언의 단일 버전 리소스
+    evaluation-prompt.ts        # 공통 문언 + 문항별 단서로 지시문 조립
+    scoring.ts                  # 밴드·배점·환산·결합. 엄격 검증
+    feedback.ts                 # 피드백 형식·인용 검증 (점수와 분리)
+    questions.ts                # 연습 36문항의 공개 정보만
+    research/                   # 공통 도메인 타입, 세션별 허용 모드
+  server/                       # 서버 전용. 클라이언트 번들에 실리지 않는다
+    config.ts                   # 모델 ID·자산 경로·동의 버전 등 단일 지점
+    auth/                       # 역할·학급 범위·동의·세션 토큰·비식별
+    privacy/                    # 전송 전 개인정보 점검
+    registry/                   # 문항 레지스트리, 비공개 단서 팩, 제작 프롬프트
+    grading/                    # 운영 채점 1회(2+1 호출)
+    lessons/                    # 차시 개방 판정·저장
+    assessment/                 # 검사 세션·제출·사후 일괄 채점
+    export/                     # CSV 내보내기, 중복·완전성 점검
+research-assets/                # 형식과 절차만. 실제 단서·이미지는 커밋하지 않는다
+firestore.rules                 # 기본 거부
 ```
+
+## 채점 (설계서 §2·§3)
+
+### 공통 루브릭은 하나의 리소스에서만 나온다
+`src/lib/rubric.ts`가 논문 공통 루브릭 v7의 문언을 그대로 담고, AI 지시문·교사 화면·내보내기 문서를
+`renderForModel/renderForTeacher/renderForExport`로 **같은 원본에서 생성**한다. 사본을 손으로 동기화하지 않는다.
+
+### 밴드와 배점 (<표 Ⅲ-5>)
+- **A** Lv.1~12 — 대상 50 / 구체성 50, 맥락 축 미적용(`contextLevel`은 **반드시 null**)
+- **B** Lv.13~24 — 대상 35 / 구체성 35 / 배경·행동 30
+- **C** Lv.25~36 — 대상 35 / 구체성 35 / 맥락·분위기 30
+- 축 점수 = `(수준 − 1) / 4 × 축 배점`. **중간 계산은 반올림하지 않는다.**
+
+### 형식 오류를 유효 값으로 바꾸지 않는다
+`clampLevel`은 **제거되었다.** 개별 호출의 적용 축은 정수 1~5여야 하며 6·0·2.5·문자열·NaN·Infinity·
+B/C밴드의 null은 모두 형식 오류(`schema_error`)다. 결측은 0점이 아니라 `score: null`이다.
+
+```ts
+type OperationalResult =
+  | { status: 'scored';  levels; score; axisScores; feedbackStatus }
+  | { status: 'missing'; levels: null; score: null; axisScores: null;
+      reason: 'model_error' | 'schema_error' | 'required_call_failed' }
+```
+
+### 운영 채점 1회 (<표 Ⅲ-7>)
+1. 같은 고정 입력으로 **독립 2회**. **실패한 호출만 1회 재시도.**
+2. 두 유효 호출의 모든 적용 축 차이가 1 이하 → 축별 평균(반수준 유지).
+3. 하나라도 1 초과 → **세 번째 유효 호출** 후 축별 중앙값. 세 번째도 실패하면 운영 결측.
+4. 일부 성공 값만으로 정상 결과를 반환하지 않는다.
+5. 점수가 확정되면 **피드백 실패 때문에 재채점하거나 점수를 바꾸지 않는다.**
+
+호출별 `callId`·`retryIndex`·검증된 levels·`failureReason`·시각을 모두 남긴다.
+호출 기록에 학생 개인정보·비밀키·원시 인증토큰을 남기지 않는다.
+
+### 문항별 단서
+채점에는 실제 이미지와 그 문항의 필수 단서·경계·앵커를 함께 쓴다. 단서는 **비공개 자산**이며
+`RESEARCH_ASSET_DIR/cue-pack.json`에서 읽는다. 단서가 없으면 연구 세션 채점을 거부한다(`cues_missing`).
+일반 체험은 사전 확정 단서가 없으면 공통 문언만으로 채점하고 **그 점수는 연구 자료로 쓰지 않는다.**
+이미지 제작 프롬프트(`sourcePrompt`)는 정답 문장이 아니므로 채점 지시문에 넣지 않으며,
+`src/server/registry/practice-source-prompts.ts`(서버 전용)로 옮겼다.
+
+### 학생 입력은 데이터이지 지시가 아니다
+지시문이 학생 응답을 `<<<학생응답 시작>>> … <<<학생응답 끝>>>`으로 감싸고, 그 안의 명령·점수 요구를
+실행하지 않는다. 그런 문장만 제출되면 유효한 과제 단서가 없으므로 적용 축을 수준 1로 판정한다.
+
+### 피드백은 4줄, 점수와 분리
+Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참고한 배열이다.
+
+1. 목표 — 이 문항에서 무엇을 하려는지
+2. 현재 수행 — 학생이 실제로 쓴 표현에 근거한 장점 또는 현재 상태
+3. 다음 행동 — 필요한 수정 단서 하나. 없으면 중립적 확인
+4. 활용할 수 있는 표현 제안. 고칠 것이 없으면 자기 점검
+
+**네 줄 형식과 제안 수는 아동의 처리 부담을 고려한 설계 선택이며 효과가 검증된 최적값이 아니다.**
+모든 응답에 누락 지적을 강제하지 않는다. 인용은 문장에 섞지 않고 구조화된 `quote` 필드로 받아
+**코드가 원문 포함 여부를 확인**한다(한 글자도 허용). 인용이 없는 중립 안내와 인용 검증 실패는 다른 상태다.
+검증에 실패하면 **피드백만 1회 재생성**하고, 다시 실패하면 고정 안내 `표현을 선생님과 함께 확인해 보세요`를
+쓰고 `feedbackStatus='fallback'`으로 남긴다. **점수는 그대로다.**
+형식 검사를 통과한 것이 그림 부합이나 내용 정확성을 뜻하지 않는다.
+
+## 차시와 모드 (설계서 §4)
+
+- 차시는 **교사가 서버에서 연다**(`LessonSession`: classResearchId, currentLesson, allowedLessons,
+  openedAt, closedAt, openedBy, reason). **점수나 6문항 완료는 개방 조건이 아니다.**
+  1차시를 2문항만 한 학생도 교사가 2차시를 열면 입장한다. 완료 수는 정보로만 보여 준다.
+- 옛 `REQUIRED_PER_CHASI = 6` 잠금과 localStorage 기반 진행 잠금은 **제거되었다.**
+  `localStorage`는 캐시일 뿐 접근 권한·동의·완료의 권위 있는 원천이 아니다.
+- 옛 홈 화면의 `extended` 토글도 **제거되었다.** 모드 차단은 화면 숨김이 아니라
+  `src/lib/research/session-modes.ts`를 근거로 **middleware·화면 가드·server action·API 네 층**에서 이루어진다.
+  edge middleware는 힌트 쿠키만 읽으므로 나머지 세 층이 `@/server/auth`로 다시 판정한다.
+- 연구 세션에서는 게임·타임어택·감수·임의 이미지 생성의 직접 경로와 관련 서버 액션을 모두 거부한다.
+- 적어도 한 문항에서 피드백 검토 → 수정 또는 **수정하지 않은 이유**를 남길 수 있다.
+
+## 검사 (설계서 §5)
+
+- 검사 문항은 **T1 → T2_v7 → T3**, 밴드 A/B/C, 제한시간 **420 / 480 / 600초**.
+  안내 5분 + 7/8/10분 + 마무리 3분 = 33분.
+- 단색 배경의 **이전 T2는 레지스트리에 없다.**
+- 검사 화면은 **AI를 호출하지 않는다.** 점수·피드백·힌트·모범답이 없고 제출 후 재도전이 없다.
+- 문항 시작·마감은 **서버 시간 기준**이며 새로고침으로 초기화되지 않는다.
+- 제출은 `submissionId` 기준 **idempotent**. 최초 유효 제출은 불변이고 이후는 `rejected_duplicate` 기록.
+- 시간 종료 미제출은 `timeout_unsubmitted`. 장애·철회·미동의는 **서로 다른 상태**이며 빈 응답을 최저 점수로 만들지 않는다.
+- 채점은 수집이 끝난 뒤 **사전·사후를 섞어** 별도 작업(`scripts/score-assessments.mjs`)으로 한다.
+  채점자 payload에 **시점·학생·학급·자동 점수가 없다.**
+- **최초 운영 점수(`repeatIndex: 1`)가 주 자료로 잠긴다.** 반복 2·3은 신뢰도 분석용으로 따로 저장하며
+  3회 평균이 주 자료를 덮어쓰지 않는다. 시점 혼합 순서는 시드로 재현한다.
+- 검사 이미지는 `public/`에 두지 않는다. `/api/research/asset/[questionId]`가 인증을 확인하고
+  `private, no-store`로 스트리밍한다. **학생이 화면의 이미지를 복사하는 것까지 막았다고 주장하지 않는다.**
+
+## 인증·동의·권한 (설계서 §6)
+
+- 학교 담당자가 실명 대응표를 저장소 밖에서 관리하고 **무작위 수업ID**를 발급한다.
+  **수업ID 자체를 비밀번호로 보지 않는다.**
+- 교사는 인증된 계정으로 **배정된 학급만** 본다. 학생은 서버가 발급·검증한 세션 토큰으로 허용된 활동만 한다.
+  옛 sessionStorage(학교코드·학년반·출석번호) 신원은 연구 세션의 권위 있는 신원이 아니다.
+- Admin SDK가 보안 규칙을 우회하므로 **서버에서도 역할과 대상 범위를 검증**한다.
+- 보호자 동의 + 학생 승낙이 모두 활성일 때만 연구 수집이 가능하다. 미동의자는 수집 단계에서 차단하고
+  외부 전송 없는 대체 활동으로 연결한다. 비연구 수업 기록은 연구 저장소와 분리한다.
+- 철회 뒤에는 새 전송·추가 채점을 차단한다. **자료 파기는 기록만 남기고 자동 전체 삭제를 하지 않는다.**
+- 외부 전송 전에 개인정보를 점검하고 의심되면 멈춰 교사 확인을 받는다.
+  **필터를 통과했다고 개인정보가 완전히 제거되었다고 표시하지 않는다.**
+- 연구자가 받는 자료에 학교 실명 대응표·출석번호·학교명이 없다. AI payload에 신원 ID가 없다.
 
 ## Firestore 스키마
 
-학급 코드 포맷: **`{NEIS_schoolCode}_{grade}-{class}`** (예: `7531234_3-2`)
+기존 `classes/` 트리(비연구 수업 기록)는 **그대로 두고 건드리지 않는다.** 연구 자료는 별도 컬렉션에
+`schemaVersion`(현재 `v7.0`)으로 구분해 저장한다. 강제 이관을 하지 않는다.
 
-```
-classes/
-  {classCode}/
-    submissions/{auto}            # 게임·시간제한 결과 (세션당 1 doc)
-      attendanceNumber: string
-      nickname: string
-      mode: "game" | "time-attack"
-      averageScore: number
-      createdAt: serverTimestamp
-      results: Array<{
-        questionIndex: number
-        originalPrompt: string    # buildImagePrompt 풀 텍스트
-        studentPrompt: string
-        score: number
-        feedback: string
-      }>
+`src/server/firebase-admin.ts`의 `COLLECTIONS` 참고:
+`users`, `researchClasses`, `consents`, `consentEvents`, `studentSessions`,
+`researchSubmissions`, `scoringRuns`, `teacherBlindScores`, `auditApprovals`, `classes`.
 
-    practice_attempts/{auto}      # 연습 모드 (도전 1회당 1 doc)
-      attendanceNumber: string
-      questionIndex: number
-      originalPrompt: string      # buildImagePrompt 풀 텍스트
-      studentPrompt: string
-      score: number
-      feedback: string
-      createdAt: serverTimestamp
-```
+저장 문서의 필수 필드는 `src/lib/research/types.ts`의 `SubmissionRecord`·`ScoringRun`이 정의한다.
+CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 기준 버전을 포함한다. 수식 주입을 막고 UTF-8 BOM을 붙인다.
 
-교사 페이지는 `practice_attempts`를 학생→문제→시간순으로 그룹화해서 차수별 변화 표시 (점수 변화량 뱃지 +N/-N).
+## 연구 시작을 막는 값 (미확정 운영값)
 
-## 중요한 결정과 함정
+`registry.readiness()`가 아래를 확인한다. 하나라도 걸리면 `researchReady=false`이고 연구 등록·검사·채점이 막힌다.
+**코드가 만들어 낼 수 없는 값을 자동으로 채우지 않는다.**
 
-### 1) "원본 프롬프트"는 wrapper 포함한 풀 텍스트
-`questions[].dataAiHint`는 주제(`"a cute puppy, white background"`)일 뿐, 실제로 Gemini에 전송되는 건 `buildImagePrompt()`가 만드는 `"Generate a high-quality, detailed image of: ${subject}"`. Firestore `originalPrompt`에는 후자 저장 — 교사 대시보드에 진짜 프롬프트가 보이게.
+- 검사 문항 3개가 모두 `status: 'candidate'`, `approvedAt: null` — 전문가 검토·예비 채점 전
+- 비공개 단서 팩(`RESEARCH_ASSET_DIR/cue-pack.json`) 미적재
+- `CONSENT_VERSION` / `IRB_APPROVAL` / `EVALUATION_MODEL_VERIFIED` 미설정
+- 검사 이미지 SHA-256 불일치
 
-### 2) 평가 프롬프트 (evaluate-prompt.ts) — 축별 5수준 판정
+`candidate`를 코드가 `frozen`으로 올리는 경로는 만들지 않았다.
 
-논문 개정(수정본 v6)에 맞추어 **0~100 직접 채점에서 축별 5수준 판정으로 바뀌었다.**
+## 학교 검색은 NEIS Open API
 
-- 모델 `gemini-3.8-flash`, `temperature 0.2`.
-- 채점자(AI)는 **수준만 판정**하고 점수 환산은 `src/lib/scoring.ts`가 일괄 수행한다.
-- 밴드별 적용 축과 배점 (<표 Ⅲ-5>)
-  - **A** Lv.1~12 (1·2차시) — 대상 50 / 구체성 50, 맥락 축 미적용(`contextLevel: null`)
-  - **B** Lv.13~24 (3·4차시) — 대상 35 / 구체성 35 / 배경·행동 30
-  - **C** Lv.25~36 (5·6차시) — 대상 35 / 구체성 35 / 맥락·분위기 30
-- 축 점수 = `(수준 − 1) / 4 × 축 배점`. **중간 계산은 반올림하지 않는다.**
-- 운영 채점 1회 = **독립 2회 병렬 호출** (<표 Ⅲ-7>)
-  - 모든 적용 축 차이가 1수준 이하 → 축별 산술평균(반수준 유지)
-  - 한 축이라도 1수준 초과 → 3차 호출 후 축별 중앙값
-  - 실패 호출은 1회 재시도, 그래도 실패하면 `missing: true`로 **결측 처리**(0점 아님)
-- 피드백은 2줄 고정. 학생 글을 실제로 인용한 호출을 우선 채택한다.
-- Firestore에 `band`, `levels`, `axisScores`, `rawCalls`, `extraCall`, `missing`, `chasi`를 함께 남긴다.
-- 게임화 요소(리더보드·경험치·칭호·콤보·보스전·플래시 라운드·뱃지)는 **제거하였다.**
-  IRB 제출자료가 리더보드를 처치 오염 요인으로 명시하고 있고, 뱃지와 경험치가 처치 모드인
-  연습 모드에까지 들어가 있었기 때문이다. 후속 연구에서 별도 설계로 검증할 대상이다.
-
-### 3) 학교 검색은 NEIS Open API
 - `https://open.neis.go.kr/hub/schoolInfo` (`SCHUL_KND_SC_NM=초등학교` 필터)
-- 키 없어도 동작하지만 한 교실(~30명) 동시 입장 시 throttle 가능 → `NEIS_API_KEY` 환경 변수 권장
-- 학교 코드는 `SD_SCHUL_CODE` 사용 (시도별 변경 가능성 낮음)
+- 키 없어도 동작하지만 한 교실(~30명) 동시 입장 시 throttle 가능 → `NEIS_API_KEY` 권장
+- 학교 코드는 `SD_SCHUL_CODE` 사용
 
-### 4) 인증 없음
-- Firebase Auth(Anonymous, Google, 무엇이든) **사용 안 함**. `useUser` 훅은 있지만 어디서도 `signIn*()` 호출 X.
-- 학생 식별은 sessionStorage(`classCode`, `school`, `grade`, `classNumber`, `attendanceNumber`)만으로.
-- 따라서 Firebase 콘솔의 "승인된 도메인" 등록 불필요.
+## 연습 모드의 정적 이미지
 
-### 5) Firestore 보안 규칙
-현재 `allow read, write: if true` — 학교 내부망용 임시 규칙. 일반 공개 서비스로 돌릴 거면 학교코드+학년+반 기반 토큰 검증 등 필요. 콘솔: https://console.firebase.google.com/project/promptgrader/firestore/rules
+연습 모드는 사전 제작·검수한 정적 이미지 36장(`public/questions/L01.jpg ~ L36.jpg`)을 쓴다.
+실행 중 생성을 하지 않으므로 프롬프트에 없는 요소가 끼어들지 않는다.
+1차시 안내는 **이름과 눈에 보이는 기본 색·모양을 함께** 쓰게 한다(A밴드가 대상·구체성 두 축을 함께 채점하므로).
+전문 질감·재질은 1차시에서 요구하지 않는다. 2차시가 크기·개수로 좁히는 역할을 맡는다.
 
-### 6) Next 15 호환
-- `next.config.ts`의 `serverActions`은 `experimental.serverActions`로 위치 이동 완료.
-- 이미지 도메인: `placehold.co` 만 허용 중 — 다른 외부 이미지 추가 시 `remotePatterns` 확장.
+게임·시간 제한 모드의 문항(`game-01`~`game-10`, `ta-01`~`ta-08`)도 `public/questions/`의 정적 이미지를 쓰며
+레지스트리에 `allowedSessionTypes: ['experience']`로만 등록되어 있다. 문항별 단서가 없으므로
+공통 문언만으로 채점되고 **그 점수는 연구 자료가 아니다.**
 
 ## 알려진 한계
 
-- 연습 모드 차수 카운트는 `questionIndex` 기준 — 학생이 "다음 문제"로 넘어갔다 돌아와도 같은 questionIndex면 N차로 누적. 의도된 동작이지만 UI상 명시 X.
-- Firestore 규칙이 완전 개방이라 누구나 다른 학급 데이터 조회 가능 (학급 코드만 알면).
+- Firebase Emulator 권한 시험과 브라우저 통합 시험은 **작성만 하고 실행하지 않았다.**
+- 배포 번들·소스맵에 대한 노출 점검은 정적 소스 스캔까지만 했다.
+- edge middleware는 힌트 쿠키만 읽는다. 실제 판정은 server action·API 층에서 다시 한다.
+- `.firebaserc`와 이 문서의 Firebase 프로젝트명이 다르다.
 - NEIS API는 가끔 한국 외 리전에서 응답 느림.
-- 게임/시간제한 모드는 평가 실패해도 0점으로 결과 저장됨 (Firestore에 들어감).
-- `package-lock.json` 커밋됨 — npm 사용 가정. yarn/pnpm 쓰면 lockfile 충돌.
-
-## 해결됨: 이미지 모델이 프롬프트에 없는 요소를 추가하던 문제
-
-**증상이었던 것**: 연습 모드에서 프롬프트에 없는 빨간 스카프를 두른 강아지가 매번 생성되었다.
-학생이 정확히 묘사해도 평가 모델이 "스카프를 빠뜨렸다"고 감점할 수 있어 교육적으로 부당했다.
-
-**해결**: 연습 모드를 **사전 제작·검수한 정적 이미지 36장**으로 전환하였다
-(`public/questions/L01.jpg ~ L36.jpg`, 문항 정의는 `src/lib/questions.ts`). 실행 중 생성을 하지 않으므로 예측 불가능한 요소가
-끼어들 여지가 없다. 이는 논문과 IRB 제출자료가 "학생에게 제시되는 그림은 사전에 검토·선별한
-고정 이미지이며 인공지능이 그 자리에서 새로 만들지 아니한다"고 진술한 내용과도 일치한다.
-
-각 문항의 `sourcePrompt`에 그 이미지를 생성할 때 쓴 원 프롬프트를 남겨 두었다. 연구 자료로만
-쓰며 학습자에게 노출하지 않는다. 다만 **원 프롬프트는 정답 문장이 아니다.** 이미지에 실제로
-구현되지 않은 요구는 채점 기준에서 제외한다.
-
-**남은 것**: 게임 모드와 시간제한 모드는 아직 `dataAiHint` 기반 실행 중 생성을 쓴다.
-처치 기간에는 두 모드의 접근을 차단하므로 학습자 노출은 없으나, 두 모드를 유지한다면
-같은 방식으로 정적 전환해야 문서와 일치한다.
-
-## 모드 구성 — 기본은 설명·연습 둘뿐
-
-홈 화면은 기본으로 **설명 모드와 연습 모드만** 보여 준다. 게임 모드와 시간 제한 모드는
-오른쪽 위 **확장 버전** 버튼을 눌러야 나타난다.
-
-처치(6차시 수업)는 연습 모드로 단일화한다는 논문의 규정을 화면 기본값으로 옮긴 것이다.
-수업 중에는 확장 버전을 꺼 두면 학생이 다른 모드로 새어 나갈 수 없다. 토글은 페이지 상태일
-뿐이라 새로 고치면 다시 꺼진 상태로 돌아온다.
-
-## 설명 모드는 논문의 문언을 따른다
-
-`src/app/guide/page.tsx`는 처치의 설계와 문언을 그대로 옮긴 화면이다. 고칠 때
-`src/lib/evaluation-prompt.ts`의 축별 판정 기준과 어긋나지 않게 할 것.
-
-- **활동의 방향이 역방향임을 먼저 밝힌다.** 상상한 것을 그리게 하는 것이 아니라 이미 있는
-  그림을 되짚는 것이다.
-- **"그림에 없는 것은 쓰지 않는다"를 가장 크게 알린다.** 예전 안내는 "창의적으로 상상하기 —
-  나만의 이야기를 상상해서 더해보세요"를 네 번째 원칙으로 두고 있었는데, 이는 없는 요소의
-  진술에 감점하는 루브릭과 정면으로 어긋났다.
-- 세 축(무엇이 있나 / 어떻게 생겼나 / 어디에서 언제)을 채점 축과 같은 이름으로 소개하고,
-  축마다 좋은 예와 아쉬운 예를 함께 보인다.
-- 1단계 첫 문항의 실제 이미지로 예시 해설을 보인다. 부록 공통 운영 지침이 각 차시 도입에
-  두도록 한 예시 해설과 같은 성격이다.
-- 인공지능의 원리·한계·윤리를 1차시 설계안의 취지대로 담는다. 기계가 색·모양·질감을 잘게
-  나누어 견준다는 것, 사람의 마음을 읽지 못한다는 것, 채점이 완전하지 않아 두 번 채점한다는
-  것, 점수가 성적에 들어가지 않는다는 것, 개인정보를 쓰지 않는다는 것.
-
-## 연습 모드의 단계 구조와 잠금
-
-연습 모드는 논문의 6차시 구성을 그대로 **1~6단계**로 보여 준다. 각 단계는 6문항이며,
-**그 단계의 6문항을 모두 제출해야 다음 단계가 열린다.**
-
-- 단계와 문항 구간은 `src/lib/questions.ts`의 `CHASI_RANGE`가 단일 진실이다.
-- 완료로 세는 것은 **채점이 정상으로 끝난 제출**뿐이다. `missing: true`인 결측은 세지 않는다.
-- 점수는 잠금 조건이 아니다. 낮은 점수로도 다음 단계로 갈 수 있다. 처치의 목적이
-  통과가 아니라 반복 수정이므로, 점수 문턱을 두면 낮은 점수의 학생이 갇힌다.
-- 진행 상황은 `localStorage`에 `practice-progress:{classCode}:{attendanceNumber}` 키로
-  저장하여 다음 차시에도 이어진다. 기기를 바꾸면 초기화된다.
-- 잠긴 단계는 자물쇠, 마친 단계는 체크 표시로 구분한다.
-
-**설계상 남은 것**: 지금은 학생이 한 차시 안에서 여러 단계를 연달아 열 수 있다.
-논문은 주 1회 6주에 걸쳐 한 차시씩 운영하도록 규정하므로, 교사가 단계를 여닫는
-장치가 필요하면 별도로 만들어야 한다.
+- `package-lock.json` 커밋됨 — npm 사용 가정.
 
 ## 자주 손볼 만한 곳
 
 | 원하는 변경 | 건드릴 파일 |
 |---|---|
-| 채점 문언 조정 | `src/lib/evaluation-prompt.ts` (채점·감수가 공유하는 단일 진실) |
+| 공통 5수준 문언 | `src/lib/rubric.ts` (여기 하나뿐) |
+| 지시문 조립·입력 취급 규칙 | `src/lib/evaluation-prompt.ts` |
+| 밴드·배점·환산·형식 검증 | `src/lib/scoring.ts` |
+| 운영 채점 결합 규칙 | `src/server/grading/operational.ts` |
+| 피드백 형식·인용 검증 | `src/lib/feedback.ts` |
+| 문항 등록·검사 메타데이터 | `src/server/registry/entries.ts` |
+| 문항별 단서 | `RESEARCH_ASSET_DIR/cue-pack.json` (저장소 밖) |
 | 연습 문항 추가/수정 | `src/lib/questions.ts` + `public/questions/L01~L36.jpg` |
-| 밴드·배점·환산 규칙 | `src/lib/scoring.ts` |
-| 단계 구간·잠금 조건 | `src/lib/questions.ts`의 `CHASI_RANGE`, `src/app/practice/page.tsx`의 `REQUIRED_PER_CHASI` |
-| 게임 문제 변경 | `src/app/game/page.tsx` 상단 `questions` 배열 |
-| 이미지 생성 프롬프트 wrapper | `src/lib/image-prompt.ts` |
-| 모델 교체 | `src/ai/genkit.ts` + `src/ai/flows/*.ts` 각 `model:` |
-| 축별 판정 문언 | `src/lib/evaluation-prompt.ts` 의 `AXIS_*` 상수 |
-| 설명 모드 안내문 | `src/app/guide/page.tsx` (채점 축 문언과 함께 고칠 것) |
-| 확장 버전 토글 | `src/app/page.tsx` 의 `extended` 상태 |
-| 교사 대시보드 컬럼 | `src/app/teacher/page.tsx` 의 `<Table>` |
+| 차시 개방 판정 | `src/server/lessons/policy.ts` |
+| 세션별 허용 모드 | `src/lib/research/session-modes.ts` |
+| 검사 시간 계획 | `src/server/assessment/timing.ts` |
+| 권한·역할 판정 | `src/server/auth/access.ts` |
+| 보안 규칙 | `firestore.rules` |
+| 모델 교체 | `src/server/config.ts`의 `EVALUATION_MODEL_ID` |
 
 ## 복구 기록
 
-이 프로젝트는 Firebase Studio 다운로드 중간에 잘린 zip 12개를 Python `zipfile`로 local-file-header 단위 복구해서 만든 거. `_recover/merged/`가 원본 머지본. 이후 `C:/Users/권준구/projects/promptgrader/`로 정리.
-
-복구 후 추가로 손본 핵심 변경:
-- API 키 코드 하드코딩 → 환경 변수
-- `gemini-1.5-flash` (deprecated) → `gemini-2.5-flash`
-- `.idx/`, `gemini-canvas-prompt.md`, 중복 src 트리 정리
-- 학급 코드 → 학교+학년+반+번호 (NEIS 연동)
-- 연습 모드 차수별 데이터 수집
-- 원본 프롬프트 풀 텍스트 저장
+이 프로젝트는 Firebase Studio 다운로드 중간에 잘린 zip 12개를 Python `zipfile`로 local-file-header 단위
+복구해서 만들었다. 이후 손본 핵심 변경: API 키 하드코딩 → 환경 변수, 학급 코드 → 학교+학년+반+번호(NEIS 연동),
+연습 모드 차수별 자료 수집, 0~100 직접 채점 → 축별 5수준 판정(v6), 그리고 이번 v7 반영.
 
 ## 자주 쓰는 콘솔 URL
 

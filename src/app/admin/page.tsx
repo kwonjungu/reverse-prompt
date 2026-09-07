@@ -1,30 +1,32 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+/**
+ * 감수 에이전트 화면.
+ *
+ * 바뀐 점
+ *  - 인증·역할 확인을 붙였다. 연구자 계정만 감수를 실행한다.
+ *  - 문항 제작 프롬프트(sourcePrompt)와 채점 시스템 프롬프트를 클라이언트에서
+ *    직접 import 하지 않는다. 서버 액션이 서버에서 읽어 감수 입력에 넣는다.
+ *  - 실데이터는 기본으로 보내지 않는다. 승인 기록(수업ID + 승인번호)이 있어야만
+ *    서버가 실데이터를 넣는다. 학급코드를 적어 클라이언트가 자료를 내려받던
+ *    경로는 없앴다.
+ *
+ * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §1 P1, §6
+ */
+
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { runAuditAgent, type AuditOutput, type AuditInput } from '@/ai/flows/audit-agent';
-import { getEvaluationPromptForAudit } from '@/lib/evaluation-prompt';
-import { buildImagePrompt } from '@/lib/image-prompt';
-import { PRACTICE_QUESTIONS } from '@/lib/questions';
-import { useFirestore, useCollection } from '@/firebase';
-import { collection, query, orderBy, limit } from 'firebase/firestore';
+import type { AuditOutput } from '@/ai/flows/audit-agent';
+import { runAuditFromServer } from '@/server/auth/audit-actions';
+import { loadStaffContext } from '@/server/auth/class-data-actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ArrowLeft, Bot, AlertTriangle, CheckCircle2, Info, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
-
-// 현재 시스템 설정 — 감수 에이전트에 전달할 snapshot (실제 사용 중인 문제 목록 그대로)
-const CURRENT_QUESTIONS = PRACTICE_QUESTIONS.map(({ level, chasi, koreanTitle, sourcePrompt, rubric }) => ({
-  level, chasi, koreanTitle, sourcePrompt, rubric,
-}));
-
-// 요약 사본이 아니라 실제 채점·이미지 프롬프트를 그대로 감수 대상으로 전달
-// (예전엔 손으로 쓴 요약이 실제 점수 밴드와 어긋나 있었음)
-const EVALUATION_SYSTEM_PROMPT = getEvaluationPromptForAudit();
-
-const IMAGE_PROMPT_TEMPLATE = buildImagePrompt('{subject}');
 
 const severityIcon = {
   '즉시수정': <AlertTriangle className="h-4 w-4 text-destructive" />,
@@ -46,65 +48,77 @@ const gradeColor = {
 };
 
 export default function AdminPage() {
+  const [role, setRole] = useState<string | null>(null);
+  const [checking, setChecking] = useState(true);
   const [auditResult, setAuditResult] = useState<AuditOutput | null>(null);
   const [isRunning, setIsRunning] = useState(false);
-  const [includeData, setIncludeData] = useState(true);
-  const db = useFirestore();
+  const [error, setError] = useState<string | null>(null);
 
-  const practiceQuery = useMemo(() => {
-    if (!db) return null;
-    // 최근 50건만 샘플링
-    return query(
-      collection(db, 'classes', '__audit_sample__', 'practice_attempts'),
-      orderBy('createdAt', 'desc'),
-      limit(50)
-    );
-  }, [db]);
+  const [useRealData, setUseRealData] = useState(false);
+  const [classResearchId, setClassResearchId] = useState('');
+  const [approvalId, setApprovalId] = useState('');
 
-  // 실제 데이터는 특정 classCode가 아닌 전체를 읽을 수 없으므로
-  // 교사가 classCode를 입력하면 로드하는 방식 대신
-  // sessionStorage의 classCode 사용
-  const [classCodeForAudit, setClassCodeForAudit] = useState('');
+  const check = useCallback(async () => {
+    setChecking(true);
+    try {
+      const ctx = await loadStaffContext();
+      setRole(ctx.role);
+    } catch {
+      setRole(null);
+    } finally {
+      setChecking(false);
+    }
+  }, []);
 
-  const auditDataQuery = useMemo(() => {
-    if (!db || !classCodeForAudit) return null;
-    return query(
-      collection(db, 'classes', classCodeForAudit, 'practice_attempts'),
-      orderBy('createdAt', 'desc'),
-      limit(30)
-    );
-  }, [db, classCodeForAudit]);
-
-  const { data: auditData } = useCollection(auditDataQuery);
+  useEffect(() => {
+    void check();
+  }, [check]);
 
   const handleRunAudit = async () => {
     setIsRunning(true);
     setAuditResult(null);
-
-    const recentEvaluations = (auditData as any[])?.map(d => ({
-      questionLevel: d.questionLevel,
-      studentPrompt: d.studentPrompt,
-      score: d.score,
-      feedback: d.feedback,
-      originalPrompt: d.originalPrompt,
-    }));
-
-    const input: AuditInput = {
-      questions: CURRENT_QUESTIONS,
-      evaluationPrompt: EVALUATION_SYSTEM_PROMPT,
-      imagePromptTemplate: IMAGE_PROMPT_TEMPLATE,
-      recentEvaluations: includeData && recentEvaluations?.length ? recentEvaluations : undefined,
-    };
-
+    setError(null);
     try {
-      const result = await runAuditAgent(input);
+      const result = await runAuditFromServer(
+        useRealData && classResearchId && approvalId
+          ? { realData: { classResearchId: classResearchId.trim(), approvalId: approvalId.trim() } }
+          : undefined
+      );
       setAuditResult(result);
-    } catch (e: any) {
-      console.error('Audit failed:', e);
+    } catch (e) {
+      setError(String((e as Error)?.message ?? '감수를 실행하지 못했습니다.'));
     } finally {
       setIsRunning(false);
     }
   };
+
+  if (checking) {
+    return (
+      <div className="min-h-screen bg-background p-8">
+        <Skeleton className="h-40 w-full max-w-2xl mx-auto rounded-2xl" />
+      </div>
+    );
+  }
+
+  if (role !== 'researcher') {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <Card className="max-w-md w-full border-2">
+          <CardHeader>
+            <CardTitle className="text-xl">접근할 수 없습니다</CardTitle>
+            <CardDescription>
+              감수는 승인된 연구자 작업입니다. 교사 화면에서 연구자 계정으로 로그인한 뒤 다시 열어 주세요.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Link href="/teacher">
+              <Button variant="outline" className="w-full">로그인 화면으로</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-8">
@@ -115,73 +129,90 @@ export default function AdminPage() {
               <ShieldCheck className="h-8 w-8 text-primary" />
               <h1 className="text-3xl font-black font-headline">감수 에이전트</h1>
             </div>
-            <p className="text-muted-foreground">AI가 이 프로젝트의 교육적 품질을 자동으로 검토합니다.</p>
+            <p className="text-muted-foreground">설정(문항·채점 문언·이미지 프롬프트)을 검토합니다.</p>
           </div>
           <Link href="/">
             <Button variant="outline" size="sm"><ArrowLeft className="mr-2 h-4 w-4" />홈</Button>
           </Link>
         </header>
 
-        {/* 실행 설정 */}
+        <Alert className="mb-6">
+          <Info className="h-5 w-5" />
+          <AlertTitle>기본은 합성 자료 감수</AlertTitle>
+          <AlertDescription>
+            학생 응답을 다른 AI에 보내는 일은 승인이 있어야 합니다. 승인 기록이 없으면 서버가 실데이터를 거부합니다.
+          </AlertDescription>
+        </Alert>
+
         <Card className="mb-6 border-2 border-primary/20">
           <CardHeader>
             <CardTitle className="text-lg">감수 설정</CardTitle>
-            <CardDescription>실제 학생 데이터를 포함하면 패턴 분석까지 수행합니다.</CardDescription>
+            <CardDescription>실데이터를 넣으려면 수업ID와 승인번호가 모두 필요합니다.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center gap-3">
               <input
                 type="checkbox"
-                id="includeData"
-                checked={includeData}
-                onChange={e => setIncludeData(e.target.checked)}
+                id="useRealData"
+                checked={useRealData}
+                onChange={(e) => setUseRealData(e.target.checked)}
                 className="h-4 w-4"
               />
-              <label htmlFor="includeData" className="text-sm font-medium">
-                실제 학생 데이터 포함 (학급 코드 입력 필요)
+              <label htmlFor="useRealData" className="text-sm font-medium">
+                승인된 실데이터 포함
               </label>
             </div>
-            {includeData && (
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="학급 코드 (예: 7531234_3-2)"
-                  value={classCodeForAudit}
-                  onChange={e => setClassCodeForAudit(e.target.value)}
-                  className="flex-1 h-10 px-3 rounded-md border bg-background text-sm"
-                />
-                <span className="text-xs text-muted-foreground self-center">
-                  {auditData ? `${(auditData as any[]).length}건 로드됨` : '미로드'}
-                </span>
+            {useRealData && (
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="classResearchId">수업ID</Label>
+                  <Input
+                    id="classResearchId"
+                    value={classResearchId}
+                    onChange={(e) => setClassResearchId(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="approvalId">승인번호</Label>
+                  <Input
+                    id="approvalId"
+                    value={approvalId}
+                    onChange={(e) => setApprovalId(e.target.value)}
+                  />
+                </div>
               </div>
             )}
             <Button
-              onClick={handleRunAudit}
+              onClick={() => void handleRunAudit()}
               disabled={isRunning}
               className="w-full font-bold h-12 text-lg"
               size="lg"
             >
               {isRunning
-                ? <><Loader2 className="mr-2 h-5 w-5 animate-spin" />감수 중... (30~60초 소요)</>
+                ? <><Loader2 className="mr-2 h-5 w-5 animate-spin" />감수 중...</>
                 : <><Bot className="mr-2 h-5 w-5" />감수 시작</>
               }
             </Button>
           </CardContent>
         </Card>
 
-        {/* 로딩 상태 */}
+        {error && (
+          <Alert className="mb-6 border-2 border-destructive/30 bg-destructive/5">
+            <AlertTriangle className="h-5 w-5 text-destructive" />
+            <AlertTitle className="font-bold text-destructive">실행하지 못했습니다</AlertTitle>
+            <AlertDescription className="mt-1">{error}</AlertDescription>
+          </Alert>
+        )}
+
         {isRunning && (
           <div className="space-y-4">
             <Skeleton className="h-32 w-full rounded-2xl" />
             <Skeleton className="h-24 w-full rounded-2xl" />
-            <Skeleton className="h-24 w-full rounded-2xl" />
           </div>
         )}
 
-        {/* 감수 결과 */}
         {auditResult && !isRunning && (
-          <div className="space-y-6 animate-in fade-in-50 duration-500">
-            {/* 종합 등급 */}
+          <div className="space-y-6">
             <Card className="border-2 border-primary/20">
               <CardContent className="pt-6">
                 <div className="flex items-center gap-6">
@@ -196,23 +227,20 @@ export default function AdminPage() {
               </CardContent>
             </Card>
 
-            {/* 최우선 개선사항 */}
             <Alert className="border-2 border-destructive/30 bg-destructive/5">
               <AlertTriangle className="h-5 w-5 text-destructive" />
               <AlertTitle className="font-bold text-destructive">최우선 개선 과제</AlertTitle>
               <AlertDescription className="text-base mt-1">{auditResult.topPriority}</AlertDescription>
             </Alert>
 
-            {/* 데이터 인사이트 */}
             {auditResult.dataInsights && (
               <Alert className="border-2 border-blue-200 bg-blue-50/50">
                 <Info className="h-5 w-5 text-blue-600" />
-                <AlertTitle className="font-bold text-blue-700">학생 데이터 패턴</AlertTitle>
+                <AlertTitle className="font-bold text-blue-700">자료에서 본 패턴</AlertTitle>
                 <AlertDescription className="text-base mt-1 text-blue-800">{auditResult.dataInsights}</AlertDescription>
               </Alert>
             )}
 
-            {/* 발견 사항 목록 */}
             <div className="space-y-3">
               <h2 className="text-xl font-bold">발견 사항 ({auditResult.findings.length}건)</h2>
               {auditResult.findings.map((f, i) => (
@@ -237,8 +265,7 @@ export default function AdminPage() {
               ))}
             </div>
 
-            {/* 재실행 버튼 */}
-            <Button variant="outline" onClick={handleRunAudit} className="w-full">
+            <Button variant="outline" onClick={() => void handleRunAudit()} className="w-full">
               <RefreshCw className="mr-2 h-4 w-4" />다시 감수하기
             </Button>
           </div>

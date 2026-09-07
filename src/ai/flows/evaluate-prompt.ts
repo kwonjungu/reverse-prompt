@@ -1,170 +1,91 @@
 'use server';
 
 /**
- * @fileOverview 학생 프롬프트 평가 — 축별 5수준 판정과 운영 채점 결합
+ * @fileOverview 연습 화면이 쓰는 얇은 서버 액션. 실제 채점은 서버 채점기에 위임한다.
  *
  * 논문 대응:
  *  <표 Ⅲ-4> AI·교사 공통 5수준 루브릭과 환산 규칙
  *  <표 Ⅲ-5> 밴드 전환의 확정 명세
  *  <표 Ⅲ-7> 운영 채점 1회의 결합 규칙
  *
- * 채점자는 수준만 판정하고 점수 환산은 코드가 일괄 수행한다.
- * 모델: gemini-3.8-flash (단가는 착수 시점에 재확인)
+ * 클라이언트는 questionId만 보낸다. 밴드·이미지·문항별 단서는 서버가 questionId로
+ * 확정한다. 클라이언트가 보낸 밴드·이미지 데이터 URI·문항 레벨은 신뢰하지 않는다.
+ * 누락되었거나 등록되지 않은 questionId는 거부한다.
+ *
+ * 반환 타입(연습 화면이 그대로 쓰는 형):
+ *
+ *   type EvaluatePromptOutput = {
+ *     questionId: string;
+ *     band: 'A' | 'B' | 'C';
+ *     result:
+ *       | { status: 'scored'; levels: AxisLevels; score: number;
+ *           axisScores: AxisScores; feedbackStatus: 'verified'|'fallback'|'not_requested' }
+ *       | { status: 'missing'; levels: null; score: null; axisScores: null;
+ *           reason: 'model_error'|'schema_error'|'required_call_failed' };
+ *     feedback: { status; text; quote; regenerated } | null;
+ *     extraCall: boolean;
+ *   }
+ *
+ * status가 'missing'이면 점수는 0이 아니라 null이다. 화면은 결측을 최저 수행처럼
+ * 보여 주지 않는다. 호출 이력·지시문 해시·모델 ID는 연구 자료로만 남기고 이 반환값에
+ * 담지 않는다.
  */
 
-import { ai } from '@/ai/genkit';
-import { z } from 'genkit';
-import {
-  bandOf, toScores, clampLevel, withinOneLevel, combine,
-  type Band, type AxisLevels,
-} from '@/lib/scoring';
-import { buildEvaluationPrompt } from '@/lib/evaluation-prompt';
+import { randomUUID } from 'node:crypto';
+import { auth } from '@/server/auth';
+import { registry } from '@/server/registry';
+import { grading } from '@/server/grading';
+import type { Band } from '@/lib/scoring';
+import type { FeedbackPresentation, OperationalResult } from '@/lib/research/types';
 
-const EvaluatePromptInputSchema = z.object({
-  photoDataUri: z.string().describe('이미지 데이터 URI'),
-  studentPrompt: z.string().describe('학생이 작성한 한국어 프롬프트'),
-  questionLevel: z.number().optional().describe('문항 레벨 1~36'),
-});
-export type EvaluatePromptInput = z.infer<typeof EvaluatePromptInputSchema>;
+export interface EvaluatePromptInput {
+  /** 서버 레지스트리에 등록된 문항 ID. 밴드·이미지·단서의 유일한 근거다. */
+  questionId: string;
+  /** 학생이 작성한 한국어 프롬프트. 평가 대상 데이터이며 채점 지시가 아니다. */
+  studentPrompt: string;
+}
 
-/** 축별 수준(1~5). 맥락 축은 A밴드에서 적용하지 않으므로 null이 될 수 있다. */
-const AxisLevelsSchema = z.object({
-  objectLevel: z.number().describe('대상 완전성 수준 1~5'),
-  specificityLevel: z.number().describe('시각적 구체성 수준 1~5'),
-  contextLevel: z.number().nullable().describe('맥락 축 수준 1~5. A밴드에서는 null'),
-});
-
-/** 채점 모형 1회 호출의 산출 */
-const SingleCallSchema = AxisLevelsSchema.extend({
-  feedback: z.string().describe('확인 1줄 + 개선 1줄'),
-});
-
-const EvaluatePromptOutputSchema = z.object({
-  score: z.number().describe('환산 총점 0~100'),
-  feedback: z.string().describe('확인 1줄 + 개선 1줄'),
-  band: z.string().describe('적용 밴드 A/B/C'),
-  levels: AxisLevelsSchema.describe('결합된 축별 수준. 반수준을 유지한다'),
-  axisScores: z.object({
-    object: z.number(),
-    specificity: z.number(),
-    context: z.number().nullable(),
-  }).describe('축별 환산 점수'),
-  calls: z.array(AxisLevelsSchema).describe('호출별 원 수준. 연구 자료로 저장한다'),
-  extraCall: z.boolean().describe('세 번째 호출을 추가하였는지'),
-  missing: z.boolean().describe('결측 처리 여부'),
-});
-export type EvaluatePromptOutput = z.infer<typeof EvaluatePromptOutputSchema>;
+export interface EvaluatePromptOutput {
+  questionId: string;
+  band: Band;
+  result: OperationalResult;
+  feedback: FeedbackPresentation | null;
+  extraCall: boolean;
+}
 
 export async function evaluatePrompt(input: EvaluatePromptInput): Promise<EvaluatePromptOutput> {
-  return evaluatePromptFlow(input);
-}
+  const questionId = typeof input?.questionId === 'string' ? input.questionId.trim() : '';
+  if (!questionId) {
+    throw new Error('questionId가 없습니다. 문항을 확정할 수 없어 채점하지 않습니다.');
+  }
+  const studentText = typeof input?.studentPrompt === 'string' ? input.studentPrompt.trim() : '';
+  if (!studentText) {
+    // 무응답은 모델 실패가 아니라 제출 단계의 결측이다. 여기서 최저 점수를 만들지 않는다.
+    throw new Error('응답이 비어 있습니다. 제출 단계에서 결측으로 기록합니다.');
+  }
 
-type SingleCall = AxisLevels & { feedback: string };
+  // 세션 성격·권한은 서버가 확정한다.
+  const principal = await auth.requirePrincipal();
 
-async function runEvaluation(input: EvaluatePromptInput, band: Band): Promise<SingleCall> {
-  const contentType = input.photoDataUri.split(';')[0].split(':')[1] || 'image/jpeg';
-  const prompt = buildEvaluationPrompt(band, input.studentPrompt);
+  // 등록되지 않았거나 이 세션에서 쓸 수 없는 문항이면 여기서 거부된다.
+  const entry = registry.requireEntry(questionId, principal.sessionType);
 
-  const response = await ai.generate({
-    model: 'googleai/gemini-3.8-flash',
-    output: { schema: SingleCallSchema },
-    prompt: [{ media: { url: input.photoDataUri, contentType } }, { text: prompt }],
-    config: { temperature: 0.2 },
+  const run = await grading.runOperationalScoring({
+    questionId: entry.questionId,
+    band: entry.band,
+    studentText,
+    operationId: randomUUID(),
+    // 연습 즉시 채점은 주 자료 1회분이다. 신뢰도 반복은 별도 작업에서 수행한다.
+    repeatIndex: 1,
+    sessionType: principal.sessionType,
+    wantFeedback: true,
   });
 
-  const out = response.output;
-  if (!out || !out.feedback) {
-    throw new Error(`AI 응답 형식 오류: ${JSON.stringify(out)?.slice(0, 200)}`);
-  }
   return {
-    objectLevel: clampLevel(out.objectLevel),
-    specificityLevel: clampLevel(out.specificityLevel),
-    contextLevel: band === 'A' ? null : clampLevel(out.contextLevel),
-    feedback: out.feedback,
+    questionId: entry.questionId,
+    band: run.band,
+    result: run.result,
+    feedback: run.feedback,
+    extraCall: run.extraCall,
   };
 }
-
-/** 피드백에 학생 글의 실제 표현이 인용되었는지 확인한다(자기검증). */
-function hasConcreteCitation(feedback: string, studentPrompt: string): boolean {
-  const matches = [...feedback.matchAll(/['"]([^'"]{2,})['"]/g)];
-  return matches.some((m) => studentPrompt.includes(m[1]));
-}
-
-const evaluatePromptFlow = ai.defineFlow(
-  {
-    name: 'evaluatePromptFlow',
-    inputSchema: EvaluatePromptInputSchema,
-    outputSchema: EvaluatePromptOutputSchema,
-  },
-  async (input): Promise<EvaluatePromptOutput> => {
-    const band = bandOf(input.questionLevel ?? 1);
-    const missingResult = (msg: string): EvaluatePromptOutput => ({
-      score: 0,
-      feedback: msg,
-      band,
-      levels: { objectLevel: 1, specificityLevel: 1, contextLevel: null },
-      axisScores: { object: 0, specificity: 0, context: null },
-      calls: [],
-      extraCall: false,
-      missing: true,
-    });
-
-    // 실패한 호출에 한하여 1회 재시도한다.
-    const callOnce = async (): Promise<SingleCall> => {
-      try {
-        return await runEvaluation(input, band);
-      } catch {
-        return await runEvaluation(input, band);
-      }
-    };
-
-    try {
-      // 운영 채점 1회 = 독립 2회 병렬 호출
-      const settled = await Promise.allSettled([callOnce(), callOnce()]);
-      const ok = settled
-        .filter((s): s is PromiseFulfilledResult<SingleCall> => s.status === 'fulfilled')
-        .map((s) => s.value);
-      if (ok.length < 2) {
-        return missingResult('(채점 실패: 필수 호출이 완료되지 않았습니다)');
-      }
-
-      const calls: AxisLevels[] = ok.map(({ feedback, ...lv }) => lv);
-      let extraCall = false;
-
-      if (!withinOneLevel(calls[0], calls[1])) {
-        // 한 축이라도 1수준을 넘게 벌어지면 세 번째 호출 후 축별 중앙값
-        try {
-          const third = await callOnce();
-          const { feedback: _unused, ...lv } = third;
-          calls.push(lv);
-          ok.push(third);
-          extraCall = true;
-        } catch {
-          return missingResult('(채점 실패: 추가 호출이 완료되지 않았습니다)');
-        }
-      }
-
-      const levels = combine(calls, extraCall);
-      const s = toScores(levels, band);
-
-      // 피드백은 학생 글을 실제로 인용한 호출을 우선 채택한다.
-      const cited = ok.find((c) => hasConcreteCitation(c.feedback, input.studentPrompt));
-      const feedback = (cited ?? ok[0]).feedback;
-
-      return {
-        score: s.total,
-        feedback,
-        band,
-        levels,
-        axisScores: { object: s.object, specificity: s.specificity, context: s.context },
-        calls,
-        extraCall,
-        missing: false,
-      };
-    } catch (error: any) {
-      const msg = error?.message ?? String(error);
-      console.error('[evaluatePromptFlow] 실패:', msg);
-      return missingResult(`(AI 평가 실패: ${msg.slice(0, 120)})`);
-    }
-  }
-);
