@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { DEFAULT_LECTURE_CODE } from '@/server/lecture/core';
+
 /**
  * 서버 전용 운영 설정의 단일 지점.
  *
@@ -39,6 +41,13 @@ export const CONSENT_VERSION = process.env.CONSENT_VERSION?.trim() || '';
 
 /** IRB 승인 번호. 코드가 만들어 낼 수 없는 값이므로 누락 상태를 그대로 노출한다. */
 export const IRB_APPROVAL = process.env.IRB_APPROVAL?.trim() || '';
+
+/**
+ * 연수(강의) 모드 입장 번호. 연수장에서 공유하는 값이며 비밀번호가 아니다.
+ * 비워 두어도 기본값으로 동작한다 — 이 값이 막는 것은 URL이 퍼졌을 때의 무작위
+ * 접근이지 인증이 아니다. 연구 경로의 권한 판정에는 쓰이지 않는다.
+ */
+export const LECTURE_CODE = process.env.LECTURE_CODE?.trim() || DEFAULT_LECTURE_CODE;
 
 /** 서버 Firebase Admin 자격. 없으면 서버 권한 검증을 할 수 없다. */
 export const FIREBASE_ADMIN_CREDENTIAL = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim() || '';

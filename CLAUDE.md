@@ -61,6 +61,7 @@ Firebase Emulator 권한 시험(`tests/rules/`)은 에뮬레이터가 없으면 
 | `PARTICIPANT_CODE_PEPPER` | 참가자 코드 pepper | |
 | `CONSENT_VERSION` | 유효한 동의서 버전 | 비면 연구 동의 불가 |
 | `IRB_APPROVAL` | IRB 승인 번호 | 비면 연구 시작 차단 |
+| `LECTURE_CODE` | 연수 모드 입장 번호 | 비우면 `1111`. 인증이 아니다 |
 
 ## 아키텍처
 
@@ -77,6 +78,7 @@ src/
     page.tsx                    # 입장. 서버가 허용한 모드만 보여 준다
     guide/page.tsx              # 설명 모드
     practice/page.tsx           # 연습 모드 (처치)
+    lecture/page.tsx            # 연수 체험판 (세션 없이 고정 20문항, 저장 안 함)
     assessment/page.tsx         # 사전·사후 검사 수집 (AI 호출 없음)
     game/, time-attack/         # 일반 체험 전용. 연구 세션에서는 진입 거부
     teacher/page.tsx            # 교사 대시보드 (로그인 + 배정 학급만)
@@ -99,6 +101,7 @@ src/
     questions.ts                # 연습 36문항의 공개 정보만
     research/                   # 공통 도메인 타입, 세션별 허용 모드
   server/                       # 서버 전용. 클라이언트 번들에 실리지 않는다
+    lecture/                    # 연수 체험판 배선. 연구 저장소를 열지 않는다
     config.ts                   # 모델 ID·자산 경로·동의 버전 등 단일 지점
     auth/                       # 역할·학급 범위·동의·세션 토큰·비식별
     privacy/                    # 전송 전 개인정보 점검
@@ -182,6 +185,25 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   edge middleware는 힌트 쿠키만 읽으므로 나머지 세 층이 `@/server/auth`로 다시 판정한다.
 - 연구 세션에서는 게임·타임어택·감수·임의 이미지 생성의 직접 경로와 관련 서버 액션을 모두 거부한다.
 - 적어도 한 문항에서 피드백 검토 → 수정 또는 **수정하지 않은 이유**를 남길 수 있다.
+
+## 연수 모드 (`/lecture`) — 연구 경로가 아니다
+
+교사 연수에서 앱을 바로 보여 주기 위한 시연용 경로다. 설계서에 없는 운영 편의 기능이며
+연구 절차의 일부가 아니다. 무엇인지와 무엇이 아닌지를 분명히 해 둔다.
+
+- 수업 번호·교사 로그인·차시 개방·동의 절차를 **거치지 않는다.** `LECTURE_CODE`(기본 `1111`)를
+  한 번 입력하면 HttpOnly 쿠키(`rp_lecture`)를 심고 그 쿠키가 있을 때만 채점을 받는다.
+  이 번호는 연수장에서 공유하는 값이므로 **비밀번호로 보지 않는다.** 막으려는 것은 URL이
+  밖으로 퍼졌을 때의 무작위 모델 호출이지 인증이 아니다.
+- **아무것도 저장하지 않는다.** Firestore를 열지 않고 연구 컬렉션을 건드리지 않는다.
+  여기 점수는 연구 자료가 아니며 교사 화면·내보내기에 나타나지 않는다. 화면에도 그렇게 적는다.
+- 문항은 연습 36개에서 뽑은 **고정 20개**(`src/lib/lecture-questions.ts`)뿐이다. 목록 밖 ID는
+  서버가 거절한다. 검사 문항은 레지스트리가 `research_assessment`에만 허용하므로 애초에 열리지 않는다.
+- 채점은 일반 체험과 같은 `sessionType: 'experience'` 규칙이다. 문항별 비공개 단서가 없으므로
+  **공통 루브릭 문언만으로** 채점된다.
+- 이 쿠키로는 연구 화면(`/practice`·`/assessment`·`/admin`)에 들어갈 수 없다. `middleware.ts`의
+  matcher와 `session-modes.ts`는 손대지 않았고, 그쪽은 그대로 서버 세션을 요구한다.
+  `/lecture`는 matcher 밖이라 통과하는 것이며, 우회로를 뚫어 준 것이 아니다.
 
 ## 검사 (설계서 §5)
 
@@ -302,6 +324,7 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 | 연습 문항 추가/수정 | `src/lib/questions.ts` + `public/questions/L01~L36.jpg` |
 | 차시 개방 판정 | `src/server/lessons/policy.ts` |
 | 세션별 허용 모드 | `src/lib/research/session-modes.ts` |
+| 연수 모드 문항 20개·입장 번호 | `src/lib/lecture-questions.ts` · `LECTURE_CODE` |
 | 검사 시간 계획 | `src/server/assessment/timing.ts` |
 | 권한·역할 판정 | `src/server/auth/access.ts` |
 | 보안 규칙 | `firestore.rules` (경로 이름은 `src/server/firebase-admin.ts`와 맞출 것) |
