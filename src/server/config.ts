@@ -14,7 +14,7 @@ import { DEFAULT_LECTURE_CODE } from '@/server/lecture/core';
 
 /** 착수 검수에서 접근·출력 스키마를 확인한 뒤 고정한다. */
 export const EVALUATION_MODEL_ID =
-  process.env.EVALUATION_MODEL_ID?.trim() || 'googleai/gemini-3.8-flash';
+  process.env.EVALUATION_MODEL_ID?.trim() || 'googleai/gemini-2.5-flash';
 
 export const EVALUATION_MODEL_CONFIG = {
   temperature: Number(process.env.EVALUATION_TEMPERATURE ?? 0.2),
