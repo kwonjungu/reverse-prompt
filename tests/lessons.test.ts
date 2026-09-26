@@ -730,7 +730,7 @@ test('실제로 있는 제한 경로가 모두 모드 표에 있다', () => {
   const restricted: Record<string, AppMode> = {
     game: 'game',
     'time-attack': 'time-attack',
-    admin: 'audit',
+    'admin/audit': 'audit',
     assessment: 'assessment',
     practice: 'practice',
     guide: 'guide',
@@ -748,9 +748,12 @@ test('실제로 있는 제한 경로가 모두 모드 표에 있다', () => {
     assert.equal(modeForPath(`/${dir}/anything`), mode);
   }
   assert.equal(modeForPath('/teacher'), null);
+  // /admin은 학생 활동이 아니라 통합 관리 화면이다. 관리자 비밀번호 세션이 막는다.
+  assert.equal(modeForPath('/admin'), null);
+  assert.equal(modeForPath('/administrator'), null);
 
   // 연구 수업에서 막혀야 하는 경로는 실제로 막힌다.
-  for (const p of ['/game', '/time-attack', '/admin']) {
+  for (const p of ['/game', '/time-attack', '/admin/audit']) {
     const mode = modeForPath(p);
     assert.ok(mode);
     assert.equal(isModeAllowed('research_practice', mode as AppMode), false);

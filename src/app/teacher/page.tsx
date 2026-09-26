@@ -10,6 +10,9 @@
  * 연구자에게는 비식별 읽기만 준다. 삭제 단추는 교사에게만 보이며, 보이지 않는 것과
  * 별개로 서버가 다시 거부한다.
  *
+ * 학생 현황(LMS): 관리자(/admin)가 만들어 배정한 반의 학생 진행을 번호별로 본다.
+ * 일반 수업은 점수·최근 답안까지, 연구 수업은 블라인드 채점을 위해 진행 수만 보인다.
+ *
  * 차시 개방·폐쇄와 검사 세션 열기·닫기도 여기서 한다(설계서 §4·§5, 수용시험 6).
  * 점수나 완료 문항 수는 개방 조건이 아니다. 완료 수는 정보로만 보여 준다.
  * 공통 루브릭은 사본을 만들지 않고 단일 버전 리소스(src/lib/rubric.ts)에서 그대로 낸다(설계서 §2).
@@ -17,7 +20,7 @@
  * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §2·§4·§5·§6, 수용시험 6·11
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { useAuth } from '@/firebase';
@@ -27,7 +30,10 @@ import {
   loadLessonRecords,
   deleteLessonRecord,
   loadResearchRecords,
+  loadClassProgress,
+  type ClassProgressView,
 } from '@/server/auth/class-data-actions';
+import { PRACTICE_QUESTIONS } from '@/lib/questions';
 import {
   openLessonAction,
   closeLessonAction,
@@ -51,7 +57,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Textarea } from '@/components/ui/textarea';
-import { GraduationCap, ArrowLeft, Printer, Trash2, ClipboardList, TrendingUp, ShieldCheck, LogOut, CalendarClock, BookOpenCheck } from 'lucide-react';
+import { GraduationCap, ArrowLeft, Printer, Trash2, ClipboardList, TrendingUp, ShieldCheck, LogOut, CalendarClock, BookOpenCheck, Users, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -59,6 +65,24 @@ import { Skeleton } from '@/components/ui/skeleton';
 type StaffContext = Awaited<ReturnType<typeof loadStaffContext>>;
 type LessonRecords = Awaited<ReturnType<typeof loadLessonRecords>>;
 type ResearchRecords = Awaited<ReturnType<typeof loadResearchRecords>>;
+
+const PROGRESS_REFRESH_MS = 30_000;
+const LESSON_COLUMNS = [1, 2, 3, 4, 5, 6] as const;
+
+/** 'L03' → '3. 빨간 사과' 처럼 공개 문항 제목으로 바꾼다. 모르는 ID는 그대로 둔다. */
+function questionTitle(questionId: string): string {
+  const m = /^L(\d{2})$/.exec(questionId);
+  if (!m) return questionId;
+  const q = PRACTICE_QUESTIONS.find((p) => p.level === Number(m[1]));
+  return q ? `${q.level}. ${q.koreanTitle}` : questionId;
+}
+
+function shortTime(iso: string | null | undefined): string {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '-';
+  return d.toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
 
 type PracticeAttempt = {
   id: string;
@@ -103,6 +127,11 @@ export default function TeacherPage() {
   /* 공통 루브릭 — 사본이 아니라 단일 버전 리소스에서 낸다. */
   const [rubricBand, setRubricBand] = useState<Band>('A');
 
+  /* 학생 현황(LMS) — 서버 기록을 다시 읽은 값이다. */
+  const [progress, setProgress] = useState<ClassProgressView | null>(null);
+  const [progressLoading, setProgressLoading] = useState(false);
+  const [expandedStudent, setExpandedStudent] = useState<string | null>(null);
+
   const refreshContext = useCallback(async () => {
     setChecking(true);
     try {
@@ -142,6 +171,7 @@ export default function TeacherPage() {
     setContext(null);
     setLesson(null);
     setResearch(null);
+    setProgress(null);
     setActiveClassCode('');
     setActiveResearchClass('');
   };
@@ -159,8 +189,27 @@ export default function TeacherPage() {
     }
   };
 
+  const loadProgress = useCallback(
+    async (classResearchId: string, quiet = false) => {
+      if (!quiet) setProgressLoading(true);
+      try {
+        setProgress(await loadClassProgress(classResearchId));
+      } catch (err) {
+        if (!quiet) {
+          setProgress(null);
+          toast({ variant: 'destructive', title: '학생 현황을 불러오지 못했습니다', description: String((err as Error)?.message ?? '') });
+        }
+      } finally {
+        if (!quiet) setProgressLoading(false);
+      }
+    },
+    [toast]
+  );
+
   const openResearchClass = async (classResearchId: string) => {
     setActiveResearchClass(classResearchId);
+    setExpandedStudent(null);
+    if (context?.role === 'teacher') void loadProgress(classResearchId);
     setLoadingData(true);
     try {
       setResearch(await loadResearchRecords(classResearchId));
@@ -204,8 +253,8 @@ export default function TeacherPage() {
     if (!activeResearchClass) {
       toast({
         variant: 'destructive',
-        title: '수업ID를 먼저 고르세요',
-        description: '위에서 연구 학급(수업ID)을 선택해 주세요.',
+        title: '반을 먼저 고르세요',
+        description: '위에서 반(수업 번호)을 선택해 주세요.',
       });
       return null;
     }
@@ -223,6 +272,7 @@ export default function TeacherPage() {
         reason: lessonReason.trim() || null,
       });
       setLessonResult(res);
+      if (res.ok) void loadProgress(classResearchId, true);
       toast(
         res.ok
           ? { title: `${lessonNumber}차시를 열었습니다` }
@@ -247,6 +297,7 @@ export default function TeacherPage() {
         reason: lessonReason.trim() || null,
       });
       setLessonResult(res);
+      if (res.ok) void loadProgress(classResearchId, true);
       toast(
         res.ok
           ? { title: scope === 'one' ? `${lessonNumber}차시를 닫았습니다` : '수업을 닫았습니다' }
@@ -318,6 +369,15 @@ export default function TeacherPage() {
       setAssessmentBusy(false);
     }
   };
+
+  // 수업 중에는 학생 현황을 주기적으로 다시 읽는다. 화면이 가려져 있으면 건너뛴다.
+  useEffect(() => {
+    if (!activeResearchClass || context?.role !== 'teacher') return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') void loadProgress(activeResearchClass, true);
+    }, PROGRESS_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [activeResearchClass, context?.role, loadProgress]);
 
   // 연습 기록을 학생 → 문제 → 시간순으로 묶는다.
   const practiceGrouped = useMemo(() => {
@@ -474,14 +534,16 @@ export default function TeacherPage() {
               </div>
             )}
             <div className="space-y-2">
-              <Label>연구 학급(수업ID)</Label>
+              <Label>반(수업 번호)</Label>
               <Select value={activeResearchClass} onValueChange={(v) => void openResearchClass(v)}>
                 <SelectTrigger className="h-12">
-                  <SelectValue placeholder={context.classResearchIds.length ? '수업ID 선택' : '배정된 수업ID 없음'} />
+                  <SelectValue placeholder={context.classResearchIds.length ? '반 선택' : '배정된 반 없음 (관리자에게 요청)'} />
                 </SelectTrigger>
                 <SelectContent>
                   {context.classResearchIds.map((id) => (
-                    <SelectItem key={id} value={id}>{id}</SelectItem>
+                    <SelectItem key={id} value={id}>
+                      {context.classLabels?.[id] ? `${context.classLabels[id]} · ${id}` : id}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -489,14 +551,218 @@ export default function TeacherPage() {
           </CardContent>
         </Card>
 
-        <Tabs defaultValue="schedule" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2 max-w-3xl no-print sm:grid-cols-5">
+        <Tabs defaultValue={isTeacher ? 'progress' : 'research'} className="space-y-6">
+          <TabsList className="grid h-auto w-full grid-cols-2 max-w-4xl no-print sm:grid-cols-6">
+            <TabsTrigger value="progress"><Users className="mr-2 h-4 w-4" /> 학생 현황</TabsTrigger>
             <TabsTrigger value="schedule"><CalendarClock className="mr-2 h-4 w-4" /> 수업 운영</TabsTrigger>
             <TabsTrigger value="rubric"><BookOpenCheck className="mr-2 h-4 w-4" /> 채점 기준</TabsTrigger>
             <TabsTrigger value="practice"><TrendingUp className="mr-2 h-4 w-4" /> 연습 기록</TabsTrigger>
             <TabsTrigger value="exam"><ClipboardList className="mr-2 h-4 w-4" /> 시험 결과</TabsTrigger>
             <TabsTrigger value="research"><ShieldCheck className="mr-2 h-4 w-4" /> 연구 자료</TabsTrigger>
           </TabsList>
+
+          {/* 학생 현황(LMS). 담당 반의 서버 기록을 다시 읽어 번호별로 보여 준다. */}
+          <TabsContent value="progress" className="space-y-6">
+            {!isTeacher ? (
+              <Alert>
+                <AlertTitle>연구자 계정</AlertTitle>
+                <AlertDescription>학생 현황은 담당 교사 계정에서 봅니다.</AlertDescription>
+              </Alert>
+            ) : !activeResearchClass ? (
+              <Card className="p-12 text-center text-muted-foreground rounded-2xl border-2 border-dashed">
+                위에서 반을 고르면 학생 진행이 보입니다.
+              </Card>
+            ) : progressLoading && !progress ? (
+              <Skeleton className="h-64 w-full rounded-2xl" />
+            ) : !progress ? (
+              <Card className="p-12 text-center text-muted-foreground rounded-2xl border-2 border-dashed">
+                학생 현황을 불러오지 못했습니다.
+              </Card>
+            ) : (
+              <>
+                <Card className="rounded-2xl">
+                  <CardHeader className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <CardTitle className="text-xl">
+                        {progress.label ?? '반'}{' '}
+                        <span className="font-mono text-base text-muted-foreground">{progress.classResearchId}</span>
+                      </CardTitle>
+                      <CardDescription className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <Badge variant="outline">
+                          {progress.sessionType === 'experience'
+                            ? '일반 수업'
+                            : progress.sessionType === 'research_practice'
+                              ? '연구 수업'
+                              : '연구 검사'}
+                        </Badge>
+                        {progress.lesson?.closedAt ? (
+                          <Badge variant="secondary">수업 종료 · {shortTime(progress.lesson.closedAt)}</Badge>
+                        ) : (
+                          <Badge variant={progress.active ? 'default' : 'secondary'}>
+                            {progress.active ? '입장 열림' : '입장 닫힘'}
+                          </Badge>
+                        )}
+                        <span className="text-sm">
+                          열린 차시:{' '}
+                          {progress.lesson?.allowedLessons.length
+                            ? progress.lesson.allowedLessons.map((n) => `${n}차시`).join(', ')
+                            : '없음'}
+                          {progress.lesson?.currentLesson ? ` · 지금 ${progress.lesson.currentLesson}차시` : ''}
+                        </span>
+                      </CardDescription>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="no-print"
+                      onClick={() => void loadProgress(progress.classResearchId)}
+                      disabled={progressLoading}
+                    >
+                      <RefreshCw className={`mr-2 h-4 w-4 ${progressLoading ? 'animate-spin' : ''}`} /> 새로 고침
+                    </Button>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                      {[
+                        { label: '지금 들어와 있음', value: `${progress.totals.online}명` },
+                        { label: '학생', value: `${progress.totals.students}명` },
+                        { label: '제출', value: `${progress.totals.submissions}건` },
+                        {
+                          label: '평균 점수',
+                          value: progress.detailVisible
+                            ? progress.totals.averageScore === null
+                              ? '-'
+                              : `${progress.totals.averageScore}점`
+                            : '표시 안 함',
+                        },
+                      ].map((tile) => (
+                        <div key={tile.label} className="rounded-xl bg-muted/50 p-4">
+                          <div className="text-xs text-muted-foreground">{tile.label}</div>
+                          <div className="text-2xl font-black tabular-nums">{tile.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {progress.notice && <p className="mt-3 text-sm text-amber-700">{progress.notice}</p>}
+                    {!progress.detailVisible && (
+                      <p className="mt-3 text-sm text-muted-foreground">
+                        연구 수업은 교사 블라인드 채점을 흐리지 않도록 AI 점수·답안·제출 시각을 이 화면에
+                        보여 주지 않습니다. 참가자별 진행 수만 봅니다.
+                      </p>
+                    )}
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {shortTime(progress.loadedAt)} 기준 · 30초마다 새로 읽습니다. 제출 수는 진행 정보일 뿐
+                      차시를 여는 조건이 아닙니다. 점수가 없는 칸은 0점이 아니라 채점 결측입니다.
+                    </p>
+                  </CardContent>
+                </Card>
+
+                <Card className="rounded-2xl">
+                  <CardContent className="overflow-x-auto p-4">
+                    {progress.students.length === 0 ? (
+                      <p className="p-8 text-center text-sm text-muted-foreground">
+                        아직 들어온 학생이 없습니다. 칠판에 수업 번호와 비밀번호를 알려 주세요.
+                      </p>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-[120px]">학생</TableHead>
+                            <TableHead className="w-[80px]">상태</TableHead>
+                            {LESSON_COLUMNS.map((n) => (
+                              <TableHead key={n} className="text-center">{n}차시</TableHead>
+                            ))}
+                            <TableHead className="text-right">제출</TableHead>
+                            {progress.detailVisible && <TableHead className="text-right">평균</TableHead>}
+                            {progress.detailVisible && <TableHead className="text-right">최근</TableHead>}
+                            {progress.detailVisible && <TableHead>마지막 활동</TableHead>}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {progress.students.map((st) => {
+                            const expandable = progress.detailVisible && st.recent.length > 0;
+                            const expanded = expandable && expandedStudent === st.key;
+                            return (
+                              <Fragment key={st.key}>
+                                <TableRow
+                                  className={expandable ? 'cursor-pointer' : ''}
+                                  onClick={() => {
+                                    if (expandable) setExpandedStudent(expanded ? null : st.key);
+                                  }}
+                                >
+                                  <TableCell className="font-bold">
+                                    <span className="inline-flex items-center gap-1">
+                                      {expandable &&
+                                        (expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />)}
+                                      {st.label}
+                                    </span>
+                                  </TableCell>
+                                  <TableCell>
+                                    {st.online ? (
+                                      <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-emerald-700">
+                                        <span className="h-2 w-2 rounded-full bg-emerald-500" /> 입장 중
+                                      </span>
+                                    ) : (
+                                      <span className="text-xs text-muted-foreground">나감</span>
+                                    )}
+                                  </TableCell>
+                                  {LESSON_COLUMNS.map((n) => {
+                                    const done = st.attemptedByLesson[n] ?? 0;
+                                    return (
+                                      <TableCell key={n} className="text-center tabular-nums">
+                                        {done ? (
+                                          <span className={done >= 6 ? 'font-bold text-emerald-700' : ''}>{done}/6</span>
+                                        ) : (
+                                          <span className="text-muted-foreground">·</span>
+                                        )}
+                                      </TableCell>
+                                    );
+                                  })}
+                                  <TableCell className="text-right tabular-nums">{st.submissions}</TableCell>
+                                  {progress.detailVisible && (
+                                    <TableCell className="text-right tabular-nums">{st.averageScore ?? '-'}</TableCell>
+                                  )}
+                                  {progress.detailVisible && (
+                                    <TableCell className="text-right font-bold tabular-nums text-primary">
+                                      {st.latestScore ?? '-'}
+                                    </TableCell>
+                                  )}
+                                  {progress.detailVisible && (
+                                    <TableCell className="text-xs text-muted-foreground">{shortTime(st.lastActivityAt)}</TableCell>
+                                  )}
+                                </TableRow>
+                                {expanded && (
+                                  <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                    <TableCell colSpan={12} className="p-4">
+                                      <div className="space-y-2">
+                                        {st.recent.map((a, i) => (
+                                          <div key={i} className="rounded-lg border bg-background p-3">
+                                            <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                              <span className="font-medium text-foreground">{questionTitle(a.questionId)}</span>
+                                              {a.attemptNo ? <span>{a.attemptNo}번째</span> : null}
+                                              <span>{shortTime(a.submittedAt)}</span>
+                                              {a.reviewed && <Badge variant="outline">피드백 검토함</Badge>}
+                                              <span className="ml-auto font-bold text-primary">
+                                                {a.score === null ? '채점 결측' : `${a.score}점`}
+                                              </span>
+                                            </div>
+                                            <p className="whitespace-pre-wrap text-sm">{a.text}</p>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
+                                )}
+                              </Fragment>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </CardContent>
+                </Card>
+              </>
+            )}
+          </TabsContent>
 
           {/* 차시 개방·폐쇄와 검사 세션. 수용시험 6을 교사가 실제로 수행하는 자리다. */}
           <TabsContent value="schedule" className="space-y-6">
@@ -584,8 +850,15 @@ export default function TeacherPage() {
                       </Alert>
                     )}
                     <p className="text-xs text-muted-foreground">
-                      이 칸은 방금 처리한 결과를 보여 줍니다. 다른 기기에서 바꾼 상태를 다시 읽어
-                      오려면 차시를 한 번 더 열어 확인해 주세요.
+                      서버에 저장된 지금 상태:{' '}
+                      {progress && progress.classResearchId === activeResearchClass
+                        ? progress.lesson?.closedAt
+                          ? '수업 종료'
+                          : progress.lesson?.allowedLessons.length
+                            ? progress.lesson.allowedLessons.map((n) => `${n}차시`).join(', ') + ' 열림'
+                            : '연 차시 없음'
+                        : '반을 고르면 표시합니다'}
+                      . 관리 화면(/admin)이나 다른 기기에서 바꾼 상태도 학생 현황 탭에서 다시 읽어 옵니다.
                     </p>
                   </CardContent>
                 </Card>

@@ -97,6 +97,10 @@ export const COLLECTIONS = {
   auditApprovals: 'audit_approvals',
   /** 비연구 수업 기록(기존 구조 유지) */
   classes: 'classes',
+  /** 통합 관리 화면 설정. 관리자 비밀번호는 scrypt 해시로만 둔다. */
+  adminConfig: 'admin_config',
+  /** 통합 관리 화면의 조작 기록(반 개설·차시·교사 계정). 비밀번호 원문은 남기지 않는다. */
+  adminEvents: 'admin_events',
 } as const;
 
 /** research/{schemaVersion} 아래의 연구 자료 컬렉션 이름 */

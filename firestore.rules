@@ -125,6 +125,16 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // 통합 관리 화면(/admin)의 설정·조작 기록. 서버(Admin SDK)만 읽고 쓴다.
+    // 관리자 비밀번호는 여기에 scrypt 해시로만 있다.
+    match /admin_config/{docId} {
+      allow read, write: if false;
+    }
+
+    match /admin_events/{eventId} {
+      allow read, write: if false;
+    }
+
     // ── 기본 거부 ────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

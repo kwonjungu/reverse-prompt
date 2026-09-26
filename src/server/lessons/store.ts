@@ -42,6 +42,7 @@ export {
 } from './store-core';
 export type {
   FeedbackReview,
+  LessonPacing,
   LessonSessionRecord,
   LessonStore,
   PracticeScoringRecord,
@@ -59,11 +60,23 @@ export type {
  */
 const EXPERIENCE_SUBMISSIONS = 'experience_practice_submissions';
 
+/**
+ * 일반 체험 제출이 놓이는 컬렉션 경로. 교사 학생 현황(LMS)이 같은 경로를 읽는다.
+ * 쓰기와 읽기가 다른 경로를 쓰지 않도록 이 함수 하나로 만든다.
+ */
+export function experienceSubmissionsPath(classCode: string): string {
+  return `${COLLECTIONS.classes}/${assertSafeDocId(classCode, '학급')}/${EXPERIENCE_SUBMISSIONS}`;
+}
+
+/** 연구 연습 제출 컬렉션 경로. */
+export const RESEARCH_PRACTICE_SUBMISSIONS_PATH = researchPath(
+  RESEARCH_COLLECTIONS.practiceSubmissions
+);
+
 const PATHS: LessonPaths = {
   lessonSessions: researchPath(RESEARCH_COLLECTIONS.lessonSessions),
-  researchPracticeSubmissions: researchPath(RESEARCH_COLLECTIONS.practiceSubmissions),
-  experienceSubmissions: (classCode: string) =>
-    `${COLLECTIONS.classes}/${assertSafeDocId(classCode, '학급')}/${EXPERIENCE_SUBMISSIONS}`,
+  researchPracticeSubmissions: RESEARCH_PRACTICE_SUBMISSIONS_PATH,
+  experienceSubmissions: experienceSubmissionsPath,
 };
 
 /** Firestore를 문서 단위 계약으로 감싼다. 규칙 판정은 store-core가 한다. */

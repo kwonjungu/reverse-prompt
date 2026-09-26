@@ -84,6 +84,12 @@ export default function Home() {
   /** 선생님이 알려 준 수업 번호와 참가 번호. 연구 세션의 신원은 서버가 확정한다. */
   const [classResearchId, setClassResearchId] = useState('');
   const [participantCode, setParticipantCode] = useState('');
+  /** 반 입장 비밀번호. 서버가 해시로 대조하며 화면·저장소 어디에도 남기지 않는다. */
+  const [entryPassword, setEntryPassword] = useState('');
+  /** 반 안에서 나를 구분하는 번호(출석 번호). 선생님 화면에서 진행을 볼 때 쓴다. */
+  const [studentNumber, setStudentNumber] = useState('');
+  /** 수업으로 들어온 뒤 머리에 보일 이름(반 이름 + 번호). 신원이 아니라 표시용이다. */
+  const [entryLabel, setEntryLabel] = useState<string | null>(null);
   const [isIssuing, setIsIssuing] = useState(false);
   const [entryNotice, setEntryNotice] = useState<string | null>(null);
   /** 허용 모드가 비어 있을 때 서버가 준 안내. 구현 용어 없이 그대로 보여 준다. */
@@ -91,6 +97,14 @@ export default function Home() {
   const { toast } = useToast();
 
   useEffect(() => {
+    // 수업 번호로 들어온 뒤 새로 고침한 경우. 세션 자체는 HttpOnly 쿠키가 들고 있고,
+    // 무엇을 할 수 있는지는 아래에서 서버에 다시 묻는다.
+    const savedEntryLabel = sessionStorage.getItem('entryLabel');
+    if (savedEntryLabel) {
+      setEntryLabel(savedEntryLabel);
+      setIsEntered(true);
+      return;
+    }
     const savedSchool = sessionStorage.getItem('school');
     const savedGrade = sessionStorage.getItem('grade');
     const savedClass = sessionStorage.getItem('classNumber');
@@ -121,6 +135,15 @@ export default function Home() {
       try {
         const res = await getAllowedModesAction();
         if (!alive) return;
+        // 수업 번호로 들어왔는데 서버에 세션이 없다: 수업이 끝났거나 선생님이 내보냈다.
+        // 옛 표시를 지우고 입장 화면으로 돌려보낸다.
+        if (!res.verified && sessionStorage.getItem('entryLabel')) {
+          sessionStorage.removeItem('entryLabel');
+          setEntryLabel(null);
+          setIsEntered(false);
+          setEntryNotice('수업이 끝났거나 연결이 끊겼어요. 다시 들어오려면 선생님께 여쭤보세요.');
+          return;
+        }
         setModes(res.modes);
         setSessionType(res.sessionType);
         setModeNotice(res.modes.length ? null : res.message ?? null);
@@ -187,19 +210,37 @@ export default function Home() {
         // 학급·신원·세션 성격은 서버가 수업 번호와 참가 번호로 확정한다.
         body: JSON.stringify({
           classResearchId: classResearchId.trim(),
+          entryPassword: entryPassword || null,
+          studentNumber: studentNumber.trim() || null,
           participantCode: participantCode.trim() || null,
         }),
       });
       if (!res.ok) {
-        setEntryNotice('열려 있는 수업이 아니에요. 번호를 다시 확인해 주세요.');
+        // 403은 서버가 학생에게 보여 줄 문구를 담아 준다. 그 밖(설정 오류 등)은 일반 안내만.
+        const body = (await res.json().catch(() => ({}))) as { message?: string };
+        setEntryNotice(
+          res.status === 403 && body.message
+            ? body.message
+            : '지금 들어가지 못했어요. 잠시 뒤 다시 해 볼까요?'
+        );
         return;
       }
-      const data = (await res.json()) as { route?: string };
+      const data = (await res.json()) as {
+        route?: string;
+        classLabel?: string | null;
+        studentNumber?: number | null;
+      };
       if (data.route === 'offline_alternative') {
         setEntryNotice(
           '지금은 이 수업에서 기록을 남기지 않는 활동으로 참여해요. 선생님께 여쭤보세요.'
         );
       }
+      const label = [data.classLabel || '우리 반 수업', data.studentNumber ? `${data.studentNumber}번` : '']
+        .filter(Boolean)
+        .join(' ');
+      sessionStorage.setItem('entryLabel', label);
+      setEntryLabel(label);
+      setEntryPassword('');
       setIsEntered(true);
       const modeRes = await getAllowedModesAction();
       setModes(modeRes.modes);
@@ -219,6 +260,8 @@ export default function Home() {
     sessionStorage.removeItem('grade');
     sessionStorage.removeItem('classNumber');
     sessionStorage.removeItem('attendanceNumber');
+    sessionStorage.removeItem('entryLabel');
+    setEntryLabel(null);
     setIsEntered(false);
     setSchool(null);
     setGrade('');
@@ -235,7 +278,7 @@ export default function Home() {
             <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary via-purple-400 to-pink-500 font-headline mb-4">
               나는 프롬프트 마스터
             </h1>
-            <p className="text-muted-foreground">우리 학교를 찾고 입장해요!</p>
+            <p className="text-muted-foreground">선생님이 연 수업으로 들어가요!</p>
           </div>
 
           {blockedNotice && (
@@ -246,9 +289,90 @@ export default function Home() {
             </Alert>
           )}
 
-          <Card className="shadow-2xl shadow-primary/10 rounded-2xl bg-card/80 backdrop-blur-sm border-2 border-primary/20">
+          {/*
+            선생님(관리자)이 연 반으로 들어가는 경로. 신원과 세션 성격은 서버가 확정한다.
+            수업 번호 + 반 비밀번호가 맞아야 들어가고, 들어간 학생은 그 반의 활동만 한다.
+          */}
+          <Card className="shadow-2xl shadow-primary/10 rounded-2xl bg-card/80 backdrop-blur-sm border-2 border-primary/30">
             <CardHeader>
-              <CardTitle className="text-center font-headline">학생 입장</CardTitle>
+              <CardTitle className="text-center font-headline">수업 들어가기</CardTitle>
+              <CardDescription className="text-center">
+                선생님이 알려 준 수업 번호와 비밀번호를 적어요.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {entryNotice && (
+                <Alert className="mb-4 border-primary/40 bg-primary/5">
+                  <Info className="h-4 w-4" />
+                  <AlertDescription>{entryNotice}</AlertDescription>
+                </Alert>
+              )}
+              <form onSubmit={handleClassEntry} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="classResearchId">수업 번호</Label>
+                  <Input
+                    id="classResearchId"
+                    value={classResearchId}
+                    onChange={(e) => setClassResearchId(e.target.value)}
+                    placeholder="예: 482913"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    className="h-12 text-lg tracking-widest"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="entryPassword">비밀번호</Label>
+                    <Input
+                      id="entryPassword"
+                      type="password"
+                      value={entryPassword}
+                      onChange={(e) => setEntryPassword(e.target.value)}
+                      placeholder="반 비밀번호"
+                      autoComplete="off"
+                      className="h-12 text-lg"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="studentNumber">내 번호</Label>
+                    <Input
+                      id="studentNumber"
+                      type="number"
+                      min={1}
+                      max={99}
+                      value={studentNumber}
+                      onChange={(e) => setStudentNumber(e.target.value)}
+                      placeholder="출석 번호"
+                      className="h-12 text-lg"
+                    />
+                  </div>
+                </div>
+                <details className="text-sm">
+                  <summary className="cursor-pointer text-muted-foreground">참가 번호를 받았어요</summary>
+                  <div className="mt-2 space-y-2">
+                    <Label htmlFor="participantCode">참가 번호</Label>
+                    <Input
+                      id="participantCode"
+                      value={participantCode}
+                      onChange={(e) => setParticipantCode(e.target.value)}
+                      placeholder="받은 참가 번호"
+                      autoComplete="off"
+                    />
+                  </div>
+                </details>
+                <Button type="submit" className="w-full font-bold" size="lg" disabled={isIssuing}>
+                  {isIssuing ? '들어가는 중이에요' : '수업으로 들어가기'} <ArrowRight className="ml-2" />
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+
+          <Card className="mt-6 rounded-2xl bg-card/60 backdrop-blur-sm border border-primary/20">
+            <CardHeader>
+              <CardTitle className="text-center text-lg font-headline">수업 번호가 없을 때</CardTitle>
+              <CardDescription className="text-center text-xs">
+                학교를 찾아 둘러볼 수 있어요. 활동은 선생님이 수업을 열어 줘야 할 수 있어요.
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleEntry} className="space-y-4">
@@ -311,51 +435,6 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          {/* 선생님이 연 수업으로 들어가는 경로. 신원과 세션 성격은 서버가 확정한다. */}
-          <Card className="mt-6 rounded-2xl bg-card/60 backdrop-blur-sm border border-primary/20">
-            <CardHeader>
-              <CardTitle className="text-center text-lg font-headline">
-                선생님이 연 수업으로 들어가기
-              </CardTitle>
-              <CardDescription className="text-center text-xs">
-                수업 번호가 있을 때만 쓰세요. 없으면 위에서 그냥 입장해도 돼요.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {entryNotice && (
-                <Alert className="mb-4 border-primary/40 bg-primary/5">
-                  <Info className="h-4 w-4" />
-                  <AlertDescription>{entryNotice}</AlertDescription>
-                </Alert>
-              )}
-              <form onSubmit={handleClassEntry} className="space-y-3">
-                <div className="space-y-2">
-                  <Label htmlFor="classResearchId">수업 번호</Label>
-                  <Input
-                    id="classResearchId"
-                    value={classResearchId}
-                    onChange={(e) => setClassResearchId(e.target.value)}
-                    placeholder="선생님이 알려 준 번호"
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="participantCode">참가 번호 (있을 때만)</Label>
-                  <Input
-                    id="participantCode"
-                    value={participantCode}
-                    onChange={(e) => setParticipantCode(e.target.value)}
-                    placeholder="받은 참가 번호"
-                    autoComplete="off"
-                  />
-                </div>
-                <Button type="submit" variant="secondary" className="w-full" disabled={isIssuing}>
-                  {isIssuing ? '들어가는 중이에요' : '수업으로 들어가기'}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-
           <div className="mt-8 text-center flex flex-col items-center gap-2">
             <Link href="/teacher">
               <Button variant="link" className="text-muted-foreground hover:text-primary">
@@ -378,7 +457,7 @@ export default function Home() {
           <div className="flex items-center gap-2 text-sm font-medium">
             <User className="h-4 w-4 text-primary shrink-0" />
             <span className="max-w-[260px] truncate">
-              {school?.name} {grade}-{classNumber} {attendanceNumber}번
+              {entryLabel ?? `${school?.name ?? ''} ${grade}-${classNumber} ${attendanceNumber}번`}
             </span>
           </div>
           <Button variant="ghost" size="sm" onClick={handleLogout} className="text-xs">

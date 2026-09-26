@@ -37,6 +37,7 @@ import { checkMode, parseAppMode } from './mode-policy';
 import {
   decideLessonAccess,
   isScheduleControlled,
+  isStateScheduleControlled,
   isValidLessonNumber,
   resolveEntryLesson,
   visibleLessons,
@@ -156,7 +157,8 @@ export async function getLessonStateAction(
   return {
     sessionType: ctx.sessionType,
     verified: true,
-    scheduleControlled: isScheduleControlled(ctx.sessionType),
+    // 관리 화면에서 만든 반은 체험이어도 교사가 연 차시만 보인다.
+    scheduleControlled: isStateScheduleControlled(state),
     currentLesson: state.currentLesson,
     allowedLessons: visibleLessons(state),
     entryLesson,
