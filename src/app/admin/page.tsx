@@ -20,6 +20,7 @@ import {
   changeAdminPasswordAction,
   createClassAction,
   createTeacherAction,
+  enableTeacherLoginAction,
   endClassAction,
   getAdminStatusAction,
   loadConsoleAction,
@@ -149,13 +150,14 @@ export default function AdminConsolePage() {
         setup: { firebase: false, sessionSecret: false, credential: 'unknown' },
         signedIn: false,
         research: null,
+        firebase: null,
       });
     }
   }, []);
 
   const markSignedOut = useCallback(() => {
     setData(null);
-    setStatus((prev) => (prev ? { ...prev, signedIn: false, research: null } : prev));
+    setStatus((prev) => (prev ? { ...prev, signedIn: false, research: null, firebase: null } : prev));
   }, []);
 
   const refresh = useCallback(
@@ -255,8 +257,10 @@ export default function AdminConsolePage() {
     if (!status.setup.firebase) {
       setupProblems.push('서버 자격증명 FIREBASE_SERVICE_ACCOUNT_JSON이 없습니다.');
     }
-    if (!status.setup.sessionSecret) {
-      setupProblems.push('세션 서명 키 STUDENT_SESSION_SECRET이 없습니다.');
+    // 서명 키는 STUDENT_SESSION_SECRET이 없으면 서버 자격증명에서 만든다. 자격증명이 있는데도
+    // 없다고 나오는 경우(형식이 틀린 JSON)만 따로 알린다.
+    if (status.setup.firebase && !status.setup.sessionSecret) {
+      setupProblems.push('서버 자격증명 JSON에서 서명 키를 만들지 못했습니다. 내려받은 파일 내용을 그대로 다시 붙여 넣어 주세요.');
     }
     if (status.setup.firebase && status.setup.credential !== 'env' && status.setup.credential !== 'stored') {
       setupProblems.push(CREDENTIAL_HINT[status.setup.credential] ?? CREDENTIAL_HINT.unknown);
@@ -343,6 +347,17 @@ export default function AdminConsolePage() {
           </div>
         </header>
 
+        {status.firebase && (
+          <FirebaseSetupAlerts
+            check={status.firebase}
+            busy={busy}
+            onEnable={async () => {
+              const check = await act(() => enableTeacherLoginAction(), '교사 로그인(이메일/비밀번호)을 켰습니다');
+              if (check) setStatus((prev) => (prev ? { ...prev, firebase: check } : prev));
+            }}
+          />
+        )}
+
         <Tabs defaultValue="classes" className="space-y-6">
           <TabsList className="grid w-full max-w-lg grid-cols-3">
             <TabsTrigger value="classes"><School className="mr-2 h-4 w-4" />수업 운영</TabsTrigger>
@@ -405,6 +420,67 @@ export default function AdminConsolePage() {
 }
 
 type Act = <T>(fn: () => Promise<AdminResult<T>>, success?: string) => Promise<T | null>;
+
+/* ────────────────────────── Firebase 설정 점검 ────────────────────────── */
+
+/**
+ * 관리 화면이 직접 확인한 Firebase 설정 문제만 보여 준다. 문제가 없으면 아무것도 그리지 않는다.
+ * 확인하지 못한 항목(unknown)은 '문제'로 단정하지 않는다.
+ */
+function FirebaseSetupAlerts(props: {
+  check: NonNullable<AdminStatus['firebase']>;
+  busy: boolean;
+  onEnable: () => Promise<void>;
+}) {
+  const { check } = props;
+  const mismatch = check.projectMatch === false;
+  const loginOff = check.teacherLogin === 'disabled';
+  if (!mismatch && !loginOff) return null;
+  return (
+    <div className="space-y-3">
+      {mismatch && (
+        <Alert className="border-destructive/40 bg-destructive/5">
+          <AlertTriangle className="h-4 w-4 text-destructive" />
+          <AlertTitle>Firebase 프로젝트가 서로 다릅니다</AlertTitle>
+          <AlertDescription className="space-y-1 text-sm">
+            <p>
+              서버 키는 <code>{check.serverProjectId}</code>, 웹 설정은 <code>{check.clientProjectId}</code>입니다.
+              이대로면 여기서 만든 교사 계정으로 교사가 로그인하지 못합니다.
+            </p>
+            <p>
+              <code>{check.clientProjectId}</code> 프로젝트의 서비스 계정 키를 내려받아
+              Vercel의 FIREBASE_SERVICE_ACCOUNT_JSON을 바꿔 주세요.
+            </p>
+          </AlertDescription>
+        </Alert>
+      )}
+      {loginOff && (
+        <Alert className="border-amber-400 bg-amber-50/60 dark:bg-amber-950/20">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <AlertTitle>교사 로그인(이메일/비밀번호)이 꺼져 있습니다</AlertTitle>
+          <AlertDescription className="space-y-2 text-sm">
+            <p>교사 계정을 만들어도 교사 화면에 로그인할 수 없습니다. 아래 단추로 켤 수 있습니다.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" disabled={props.busy} onClick={() => void props.onEnable()}>
+                지금 켜기
+              </Button>
+              {check.providersUrl && (
+                <a
+                  href={check.providersUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs underline underline-offset-2"
+                >
+                  또는 Firebase 콘솔에서 직접 켜기
+                </a>
+              )}
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
+    </div>
+  );
+}
 
 /* ────────────────────────── 반 만들기 ────────────────────────── */
 

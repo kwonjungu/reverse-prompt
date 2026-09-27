@@ -49,6 +49,11 @@ import {
   type AdminSetupStatus,
 } from './auth';
 import {
+  checkFirebaseSetup,
+  enableEmailPasswordSignIn,
+  type FirebaseSetupCheck,
+} from './firebase-setup';
+import {
   generateClassId,
   hashPassword,
   normalizeClassLabel,
@@ -112,6 +117,8 @@ export interface AdminStatus {
   signedIn: boolean;
   /** 연구 성격의 반을 만들 수 있는가와 그 까닭. 로그인한 뒤에만 채운다. */
   research: { ready: boolean; blockers: string[] } | null;
+  /** Firebase 프로젝트 일치·교사 로그인 방식 점검. 로그인한 뒤에만 채운다. */
+  firebase: FirebaseSetupCheck | null;
 }
 
 export async function getAdminStatusAction(): Promise<AdminStatus> {
@@ -124,7 +131,9 @@ export async function getAdminStatusAction(): Promise<AdminStatus> {
     signedIn = false;
   }
   let research: AdminStatus['research'] = null;
+  let firebase: AdminStatus['firebase'] = null;
   if (signedIn) {
+    firebase = await checkFirebaseSetup().catch(() => null);
     try {
       const r = registry.readiness();
       research = { ready: r.researchReady, blockers: r.blockers };
@@ -132,7 +141,26 @@ export async function getAdminStatusAction(): Promise<AdminStatus> {
       research = { ready: false, blockers: ['연구 준비 상태를 확인하지 못했습니다.'] };
     }
   }
-  return { setup, signedIn, research };
+  return { setup, signedIn, research, firebase };
+}
+
+/**
+ * 교사 로그인(이메일/비밀번호) 방식을 켠다. 켠 뒤 다시 점검한 결과를 돌려준다.
+ * 켜지 못했으면 Firebase 콘솔에서 켜 달라고 안내한다.
+ */
+export async function enableTeacherLoginAction(): Promise<AdminResult<FirebaseSetupCheck>> {
+  return run(async () => {
+    await requireAdmin();
+    const enabled = await enableEmailPasswordSignIn();
+    const check = await checkFirebaseSetup();
+    if (!enabled && check.teacherLogin !== 'enabled') {
+      throw new AdminInputError(
+        '자동으로 켜지 못했습니다. 아래 링크의 Firebase 콘솔에서 “이메일/비밀번호”를 사용 설정해 주세요.'
+      );
+    }
+    await recordAdminEvent('enable_teacher_login', null, null);
+    return check;
+  });
 }
 
 export async function adminSignInAction(password: string): Promise<AdminResult> {

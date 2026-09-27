@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { DEFAULT_LECTURE_CODE } from '@/server/lecture/core';
+import { deriveServerSessionSecret } from '@/server/auth/session-token';
 
 /**
  * 서버 전용 운영 설정의 단일 지점.
@@ -59,5 +60,11 @@ export const FIREBASE_ADMIN_CREDENTIAL = process.env.FIREBASE_SERVICE_ACCOUNT_JS
  */
 export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD?.trim() || '';
 
-/** 서버 서명 비밀키. 학생 세션 토큰과 관리자 세션 토큰이 용도 문자열로 갈라 함께 쓴다. */
-export const SERVER_SESSION_SECRET = process.env.STUDENT_SESSION_SECRET?.trim() || '';
+/**
+ * 서버 서명 비밀키. 학생 세션 토큰과 관리자 세션 토큰이 용도 문자열로 갈라 함께 쓴다.
+ * STUDENT_SESSION_SECRET이 없으면 서버 자격증명의 비공개 키에서 만든다(session-token.ts).
+ */
+export const SERVER_SESSION_SECRET = deriveServerSessionSecret(
+  process.env.STUDENT_SESSION_SECRET,
+  FIREBASE_ADMIN_CREDENTIAL
+);

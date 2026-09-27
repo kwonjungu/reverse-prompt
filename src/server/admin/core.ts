@@ -214,7 +214,8 @@ export type AdminTokenFailure =
   | 'unsupported_version';
 
 /**
- * 서명 키를 만든다. 서버 비밀키(STUDENT_SESSION_SECRET)와 자격 지문을 함께 쓴다.
+ * 서명 키를 만든다. 서버 비밀키(STUDENT_SESSION_SECRET, 없으면 서버 자격증명에서 만든 값)와
+ * 자격 지문을 함께 쓴다.
  * 학생 토큰과 같은 비밀키를 쓰되 용도 문자열로 갈라, 학생 토큰을 관리자 토큰으로
  * 쓸 수 없게 한다.
  */
@@ -331,4 +332,40 @@ export function sanitizeClassAssignments(requested: unknown, existing: readonly 
     if (typeof value === 'string' && known.has(value)) out.add(value);
   }
   return [...out].sort();
+}
+
+/* ────────────────────────── Firebase 설정 점검 ────────────────────────── */
+
+/** 교사 로그인(이메일/비밀번호) 방식이 Firebase 프로젝트에서 켜져 있는가. */
+export type TeacherLoginState = 'enabled' | 'disabled' | 'unknown';
+
+/**
+ * 없는 계정으로 로그인을 시도해 받은 오류 코드로 로그인 방식이 켜져 있는지 판정한다.
+ *  - 켜져 있으면 '계정 없음/자격 틀림' 계열이 온다.
+ *  - 꺼져 있으면 PASSWORD_LOGIN_DISABLED 또는 OPERATION_NOT_ALLOWED가 온다.
+ *  - 그 밖(키 제한·과다 요청·네트워크)은 알 수 없음으로 둔다. 추측으로 '꺼짐'이라 하지 않는다.
+ */
+export function classifyPasswordSignInProbe(errorMessage: unknown): TeacherLoginState {
+  if (typeof errorMessage !== 'string') return 'unknown';
+  const code = errorMessage.trim().split(/[\s:]/)[0];
+  if (code === 'PASSWORD_LOGIN_DISABLED' || code === 'OPERATION_NOT_ALLOWED') return 'disabled';
+  if (
+    code === 'EMAIL_NOT_FOUND' ||
+    code === 'INVALID_PASSWORD' ||
+    code === 'INVALID_LOGIN_CREDENTIALS' ||
+    code === 'USER_DISABLED'
+  ) {
+    return 'enabled';
+  }
+  return 'unknown';
+}
+
+/** 서비스 계정 JSON의 project_id. 형식이 틀리면 null. 비공개 키는 읽지 않는다. */
+export function projectIdOfCredential(credentialJson: string | null | undefined): string | null {
+  try {
+    const id = (JSON.parse(credentialJson ?? '') as { project_id?: unknown }).project_id;
+    return typeof id === 'string' && id ? id : null;
+  } catch {
+    return null;
+  }
 }

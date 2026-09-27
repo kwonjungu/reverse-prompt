@@ -40,7 +40,7 @@ import {
   SESSION_TOKEN_COOKIE,
   serializeSessionHint,
 } from '@/server/lessons/session-cookie';
-import { CONSENT_VERSION } from '@/server/config';
+import { CONSENT_VERSION, SERVER_SESSION_SECRET } from '@/server/config';
 import { parseStudentNumber, verifyPassword } from '@/server/admin/core';
 import {
   COLLECTIONS,
@@ -61,8 +61,9 @@ export const STAFF_COOKIE = 'rp_staff';
 
 const STAFF_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
+/** STUDENT_SESSION_SECRET, 없으면 서버 자격증명에서 만든 값(config.ts). */
 function sessionSecret(): string {
-  return process.env.STUDENT_SESSION_SECRET?.trim() || '';
+  return SERVER_SESSION_SECRET;
 }
 
 function isProduction(): boolean {

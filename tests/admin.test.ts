@@ -15,8 +15,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 
+import { generateKeyPairSync } from 'node:crypto';
+import { deriveServerSessionSecret } from '../src/server/auth/session-token';
 import {
   ADMIN_SESSION_TTL_MS,
+  classifyPasswordSignInProbe,
+  projectIdOfCredential,
   credentialFingerprint,
   deriveAdminKey,
   generateClassId,
@@ -293,4 +297,46 @@ test('반 입장 비밀번호와 관리자 비밀번호를 원문으로 저장�
   assert.match(auth, /passwordHash:\s*await hashPassword\(/);
   const studentAuth = readSource('src/server/auth/index.ts');
   assert.match(studentAuth, /verifyPassword\(/, '학생 입장이 해시로 대조한다');
+});
+
+/* ────────────────── 설정 단순화 ────────────────── */
+
+const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  .privateKey.export({ type: 'pkcs8', format: 'pem' })
+  .toString();
+const credentialJson = JSON.stringify({ project_id: 'demo-project', client_email: 'x@demo', private_key: privateKey });
+
+test('STUDENT_SESSION_SECRET이 있으면 그 값을 쓴다', () => {
+  assert.equal(deriveServerSessionSecret('  explicit-secret  ', credentialJson), 'explicit-secret');
+});
+
+test('STUDENT_SESSION_SECRET이 없으면 서버 자격증명에서 서명 키를 만든다', () => {
+  const a = deriveServerSessionSecret('', credentialJson);
+  assert.match(a, /^[0-9a-f]{64}$/);
+  assert.equal(deriveServerSessionSecret(undefined, credentialJson), a, '같은 키면 같은 값');
+  assert.equal(a.includes('PRIVATE'), false, '비공개 키 원문이 드러나지 않는다');
+  const other = JSON.stringify({ project_id: 'demo-project', private_key: privateKey.replace('A', 'B') });
+  assert.notEqual(deriveServerSessionSecret('', other), a, '키가 바뀌면 값도 바뀐다');
+});
+
+test('자격증명도 없으면 서명 키를 만들지 않는다(우회 없음)', () => {
+  assert.equal(deriveServerSessionSecret('', ''), '');
+  assert.equal(deriveServerSessionSecret('', 'not-json'), '');
+  assert.equal(deriveServerSessionSecret('', JSON.stringify({ private_key: 'short' })), '');
+});
+
+test('교사 로그인 점검은 오류 코드로만 판정하고 모르면 단정하지 않는다', () => {
+  assert.equal(classifyPasswordSignInProbe('PASSWORD_LOGIN_DISABLED'), 'disabled');
+  assert.equal(classifyPasswordSignInProbe('OPERATION_NOT_ALLOWED : Password sign-in is disabled'), 'disabled');
+  assert.equal(classifyPasswordSignInProbe('EMAIL_NOT_FOUND'), 'enabled');
+  assert.equal(classifyPasswordSignInProbe('INVALID_LOGIN_CREDENTIALS'), 'enabled');
+  assert.equal(classifyPasswordSignInProbe('API_KEY_HTTP_REFERRER_BLOCKED'), 'unknown');
+  assert.equal(classifyPasswordSignInProbe('TOO_MANY_ATTEMPTS_TRY_LATER'), 'unknown');
+  assert.equal(classifyPasswordSignInProbe(undefined), 'unknown');
+});
+
+test('서비스 계정 JSON에서 프로젝트만 읽는다', () => {
+  assert.equal(projectIdOfCredential(credentialJson), 'demo-project');
+  assert.equal(projectIdOfCredential(''), null);
+  assert.equal(projectIdOfCredential('{"project_id": 3}'), null);
 });

@@ -60,6 +60,31 @@ function sign(body: string, secret: string): string {
   return b64url(createHmac('sha256', secret).update(body).digest());
 }
 
+/**
+ * 서버 서명 비밀키를 정한다.
+ *
+ * STUDENT_SESSION_SECRET이 있으면 그 값을 쓴다. 없으면 서버 자격증명
+ * (FIREBASE_SERVICE_ACCOUNT_JSON)의 비공개 키에서 용도 문자열로 갈라 만든다.
+ * 비공개 키는 서버에만 있는 강한 비밀이므로 운영자가 난수를 따로 만들어 넣지 않아도 된다.
+ * 둘 다 없으면 빈 문자열이고, 발급·검증이 모두 실패한다(우회로 없음).
+ * 서비스 계정 키를 새로 바꾸면 이 값도 바뀌어 기존 학생·관리자 세션이 끊긴다.
+ */
+export function deriveServerSessionSecret(
+  explicit: string | null | undefined,
+  credentialJson: string | null | undefined
+): string {
+  const given = (explicit ?? '').trim();
+  if (given) return given;
+  let privateKey: unknown;
+  try {
+    privateKey = (JSON.parse(credentialJson ?? '') as { private_key?: unknown }).private_key;
+  } catch {
+    return '';
+  }
+  if (typeof privateKey !== 'string' || privateKey.length < 100) return '';
+  return createHmac('sha256', privateKey).update('rp-server-session-secret-v1').digest('hex');
+}
+
 export function newSessionId(): string {
   return randomUUID();
 }

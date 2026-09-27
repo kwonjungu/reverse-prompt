@@ -57,7 +57,7 @@ Firebase Emulator 권한 시험(`tests/rules/`)은 에뮬레이터가 없으면 
 | `EVALUATION_MODEL_VERIFIED` | 운영자가 모델 접근·출력 스키마를 확인함 | `true`가 아니면 연구 시작 차단 |
 | `RESEARCH_ASSET_DIR` | 비공개 연구 자산 경로 | 검사 이미지 + `cue-pack.json` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | 서버 Admin SDK 자격 | 없으면 서버 인증이 우회 없이 실패 |
-| `STUDENT_SESSION_SECRET` | 학생 세션 토큰 서명 키 | |
+| `STUDENT_SESSION_SECRET` | 학생·관리자 세션 토큰 서명 키 | **선택.** 비우면 `FIREBASE_SERVICE_ACCOUNT_JSON`의 비공개 키에서 만든다. 서비스 계정 키를 바꾸면 세션이 끊긴다 |
 | `PARTICIPANT_CODE_PEPPER` | 참가자 코드 pepper | |
 | `CONSENT_VERSION` | 유효한 동의서 버전 | 비면 연구 동의 불가 |
 | `IRB_APPROVAL` | IRB 승인 번호 | 비면 연구 시작 차단 |
@@ -213,9 +213,15 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 - 해시는 `src/server/admin/core.ts`의 `hashPassword/verifyPassword`(scrypt N=2^14, 무작위 salt) 하나에서 만든다.
 
 ### 관리자 세션
-- HttpOnly·SameSite=Strict 쿠키 `rp_admin`, 8시간. 서명 키 = `STUDENT_SESSION_SECRET` + 용도 문자열 + **자격 지문**.
+- HttpOnly·SameSite=Strict 쿠키 `rp_admin`, 8시간. 서명 키 = 서버 서명 비밀키 + 용도 문자열 + **자격 지문**.
+  서버 서명 비밀키는 `STUDENT_SESSION_SECRET`, 없으면 서비스 계정 비공개 키에서 만든 값이다(`deriveServerSessionSecret`).
   비밀번호를 바꾸면 지문이 바뀌어 **다른 기기의 관리자 세션이 모두 끊긴다.**
-- `FIREBASE_SERVICE_ACCOUNT_JSON`·`STUDENT_SESSION_SECRET`·관리자 비밀번호 가운데 하나라도 없으면 우회 없이 실패한다.
+- `FIREBASE_SERVICE_ACCOUNT_JSON`과 관리자 비밀번호 가운데 하나라도 없으면 우회 없이 실패한다.
+- 로그인하면 **Firebase 설정 점검**을 한다(`src/server/admin/firebase-setup.ts`).
+  서비스 계정과 `NEXT_PUBLIC_FIREBASE_PROJECT_ID`가 다른 프로젝트면 경고한다. 교사 로그인(이메일/비밀번호)은
+  없는 계정으로 로그인을 시도해 오류 코드로 판정하며, 꺼져 있으면 **지금 켜기** 단추가
+  서비스 계정 권한으로 Identity Toolkit 설정(`signIn.email`)만 바꾼다. 실패하면 콘솔 링크를 안내한다.
+  확인하지 못한 경우(키 제한 등)는 문제로 단정하지 않고 아무것도 띄우지 않는다.
 - 모든 조작 action은 첫 줄에서 `requireAdmin()`을 부른다(`tests/admin.test.ts`가 정적으로 확인).
 - 교사·연구자 계정(`users` 역할)과 별개이며, 이 세션으로 학생 답안·점수를 읽지 않는다(access.ts의 관리 계정 원칙).
 - 조작은 `admin_events`에 남는다. 비밀번호 원문·해시·학생 답안은 담지 않는다.
@@ -366,6 +372,8 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
   학생 제출은 모델을 부르지 않고 문서를 직접 넣어 흉내 냈다.
 - 관리 화면에서 만들지 않은 옛 체험 학급은 `pacing`이 없어 차시를 열고 닫아도 학생 화면에 모든 차시가 보인다(화면에 표시).
 - 검사(사전·사후) 세션 열기·닫기는 아직 교사 화면에만 있다. 관리 화면에는 없다.
+- **지금 켜기**(교사 로그인 방식 자동 설정)는 실제 Google API에 대고 시험하지 않았다. 에뮬레이터는 설정 없이 모든
+  로그인을 받아 주므로 이 호출을 건너뛴다. 실패하면 화면이 콘솔 링크를 안내한다.
 - 게임·시간 제한 모드의 결과는 **어디에도 저장되지 않는다.** 화면에도 그렇게 표시한다.
 - `npm run lint`가 동작하지 않는다(위 참고).
 - **`.firebaserc`(`promptgrader-jun`)와 이 문서의 프로젝트명(`promptgrader`)이 다르다. 배포 전에 어느 쪽이 맞는지 확인할 것.**
