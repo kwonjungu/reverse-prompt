@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  isOutOfOrderSubmission,
   isReachable,
   landingQuestion,
   nextQuestionInOrder,
@@ -207,3 +208,21 @@ test('화면이 넘기는 index가 그대로 따라온다', () => {
   assert.ok(next);
   assert.equal(PRACTICE_QUESTIONS[next.index].level, 25);
 });
+
+test('99-1 B3: 제출이 제시 순서를 건너뛰었는가 — 진행 위치보다 뒤이면서 아직 내지 않은 문항', () => {
+  const all = [1, 2, 3, 4, 5, 6];
+  // 처음: 진행 위치는 L01
+  assert.equal(isOutOfOrderSubmission(ALL, all, ids(), 'L01'), false);
+  assert.equal(isOutOfOrderSubmission(ALL, all, ids(), 'L02'), true);
+  // L01–L12를 냈으면 다음은 L19(3단계) — L13(4단계)은 건너뛴 것
+  const firstTwelve = ids(...range(1, 12));
+  assert.equal(isOutOfOrderSubmission(ALL, all, firstTwelve, 'L19'), false);
+  assert.equal(isOutOfOrderSubmission(ALL, all, firstTwelve, 'L13'), true);
+  // 이미 낸 문항을 다시 내는 것(고쳐 쓰기)은 건너뛴 것이 아니다
+  assert.equal(isOutOfOrderSubmission(ALL, all, ids(1, 5), 'L05'), false);
+  // 열리지 않은 단계의 문항은 판정하지 않는다
+  assert.equal(isOutOfOrderSubmission(ALL, [1], ids(), 'L07'), false);
+  // 모두 냈으면 어느 문항도 건너뛴 것이 아니다
+  assert.equal(isOutOfOrderSubmission(ALL, all, ids(...range(1, 36)), 'L36'), false);
+});
+

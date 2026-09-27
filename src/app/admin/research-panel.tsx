@@ -343,13 +343,14 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
             <Skeleton className="h-40 w-full" />
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
                 {[
                   { label: '시도(v12-2)', value: `${overview.attemptCount}건` },
                   { label: '학생', value: `${overview.studentCount}명` },
                   { label: '동의 없음·철회로 뺀 학생', value: `${overview.consentExcludedStudents}명` },
                   { label: '옛 기록(v7)으로 뺀 시도', value: `${overview.legacyAttemptCount}건` },
                   { label: '개인정보 점검으로 멈춘 제출', value: `${overview.privacyHoldCount}건` },
+                  { label: '제시 순서를 건너뛴 제출', value: `${overview.outOfOrderCount}건` },
                   { label: '고른 문항', value: `${picked.length}/3` },
                 ].map((t) => (
                   <div key={t.label} className="rounded-xl bg-muted/50 p-4">

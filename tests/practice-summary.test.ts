@@ -718,3 +718,13 @@ test('보호자 동의와 학생 승낙이 모두 있고 철회하지 않은 학
   );
   assert.equal(isConsentDocActive('R-1', null), false);
 });
+
+test('99-1 B3: 시도에 제시 순서 기록(outOfOrder)을 읽고, 연구 자료 개요는 건너뛴 v12-2 시도 수만 센다', async () => {
+  assert.equal(toPracticeAttempt('x', doc({ outOfOrder: true }))?.outOfOrder, true);
+  assert.equal(toPracticeAttempt('x', doc({ outOfOrder: false }))?.outOfOrder, false);
+  assert.equal(toPracticeAttempt('x', doc())?.outOfOrder, null, '판정 전 옛 문서는 null');
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync('src/server/admin/research-actions.ts', 'utf8');
+  assert.match(src, /outOfOrderCount: current\.filter\(\(a\) => a\.outOfOrder === true\)\.length/);
+  assert.match(readFileSync('src/app/admin/research-panel.tsx', 'utf8'), /제시 순서를 건너뛴 제출/);
+});

@@ -118,6 +118,11 @@ export interface PracticeSubmissionRecord
   ownerKey: string;
   /** 클라이언트가 만들어 보낸 제출ID. 문서 경로에는 쓰지 않고 기록만 남긴다. */
   clientSubmissionId: string | null;
+  /**
+   * 제시 순서상 진행 위치보다 뒤이면서 아직 내지 않은 문항을 낸 제출인가(99-1 B3). 막지 않고 기록만 한다.
+   * 연구 세션만 판정하고 일반 수업은 null. 이 필드가 없는 옛 문서도 있다(판정 전 기록).
+   */
+  outOfOrder?: boolean | null;
   /** 채점 작업의 결과와 호출 이력. 결측이면 result.areas가 null이다(옛 v7 기록은 levels·score가 null). */
   scoring: PracticeScoringRecord;
   /** 피드백 검토 기록. 새 기록은 '고쳐서 다시 쓰기'(revised) 연결만 남는다. 옛 기록에는 kept가 있을 수 있다. */

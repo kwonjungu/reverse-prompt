@@ -228,6 +228,8 @@ export interface ResearchOverview {
   legacyAttemptCount: number;
   /** 전송 전 개인정보 점검으로 멈춘 제출 수(건수만. 글은 남기지 않는다) */
   privacyHoldCount: number;
+  /** 제시 순서를 건너뛰어 낸 v12-2 시도 수(99-1 B3, 건수만). 동의가 유효한 학생만 센다. */
+  outOfOrderCount: number;
   /** 대표 문항 설정값(RESEARCH_SAMPLE_QUESTIONS). 미정이면 빈 목록 */
   representativeQuestions: string[];
   /** 설정값이 올바르지 않으면 그 까닭 */
@@ -269,6 +271,7 @@ export async function loadResearchOverviewAction(input: {
       consentExcludedStudents: loaded.consentExcludedStudents,
       legacyAttemptCount: countLegacyAttempts(loaded.attempts),
       privacyHoldCount,
+      outOfOrderCount: current.filter((a) => a.outOfOrder === true).length,
       representativeQuestions: representative.questionIds,
       representativeProblem: representative.problem,
       questionSummary: summarizeQuestions(rows),

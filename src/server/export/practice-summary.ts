@@ -69,6 +69,8 @@ export interface PracticeAttempt {
   chasi: number | null;
   band: Band;
   attemptNo: number | null;
+  /** 제시 순서를 건너뛴 제출(99-1 B3). 판정 전 옛 문서·일반 수업은 null */
+  outOfOrder: boolean | null;
   text: string;
   feedbackText: string | null;
   feedbackStatus: string | null;
@@ -187,6 +189,7 @@ export function toPracticeAttempt(id: string, raw: Record<string, unknown>): Pra
     chasi: num(raw.lesson),
     band,
     attemptNo: num(raw.attemptNo),
+    outOfOrder: typeof raw.outOfOrder === 'boolean' ? raw.outOfOrder : null,
     text: typeof raw.text === 'string' ? raw.text : '',
     feedbackText: str(feedback?.text),
     feedbackStatus: str(feedback?.status),

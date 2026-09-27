@@ -106,3 +106,22 @@ export function nextQuestionInOrder<Q extends ProgressQuestion>(
   const next = sorted[(at + 1) % sorted.length];
   return isReachable(next, frontier) ? next : null;
 }
+
+/**
+ * 이 제출이 제시 순서를 건너뛴 것인가(99-1 B3). 서버가 제출을 받을 때 막지 않고 기록만 한다.
+ * 이미 낸 문항을 다시 내는 것(고쳐 쓰기)은 건너뛴 것이 아니다. 진행 위치보다 뒤이면서 아직 내지 않은 문항이면 true.
+ * 열린 단계에 없는 문항은 판정하지 않는다(false) — 그런 제출은 차시 판정에서 따로 막힌다.
+ */
+export function isOutOfOrderSubmission(
+  questions: readonly ProgressQuestion[],
+  allowedLessons: readonly number[],
+  submitted: ReadonlySet<string>,
+  questionId: string
+): boolean {
+  if (submitted.has(questionId)) return false;
+  const ordered = openQuestionsInOrder(questions, allowedLessons);
+  const q = ordered.find((x) => x.id === questionId);
+  if (!q) return false;
+  const frontier = progressFrontier(ordered, submitted);
+  return !isReachable(q, frontier);
+}

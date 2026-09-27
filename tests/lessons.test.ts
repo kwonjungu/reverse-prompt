@@ -918,6 +918,8 @@ test('F1 시도마다 저장하는 필드(논문 Ⅲ.3.다) — 문장·피드�
   assert.equal(row.classResearchId, 'CLS-AAA');
   assert.equal(row.questionId, SYNTH_ENTRY.questionId);
   assert.equal(row.attemptNo, 1);
+  // 제시 순서 기록(99-1 B3): 첫 문항(L01)을 먼저 냈으므로 건너뛰지 않았다.
+  assert.equal(row.outOfOrder, false);
   assert.ok('band' in row);
   // 결측(자료 없음)은 수준 1이 아니라 areas: null로 남는다.
   const m = await newResearchHarness({ gradeThrows: true });
@@ -1261,3 +1263,32 @@ function baseRecord(): PracticeSubmissionRecord {
     createdAt: '2026-09-07T00:10:00.000Z',
   };
 }
+
+/* ─────────────── 99-1 B3 제시 순서 기록 ─────────────── */
+
+test('99-1 B3: 연구 세션에서 제시 순서보다 뒤 문항을 내면 막지 않고 outOfOrder=true로 기록한다', async () => {
+  const h = await newResearchHarness();
+  // 1단계(L01–L06) 문항을 모두 받는 레지스트리
+  const deps: SubmitDeps = { ...h.deps, requireEntry: (questionId) => ({ ...SYNTH_ENTRY, questionId }) };
+  const at = (n: number) => `2026-09-07T00:0${n}:00.000Z`;
+  // L03을 먼저 낸다 — 진행 위치(L01)보다 뒤: 막지 않고 기록
+  const r1 = await submitPracticeCore(deps, researchCtx, { ...baseInput, questionId: 'L03', startedAt: at(1) });
+  assert.equal(r1.status, 'done');
+  // L01은 진행 위치 — 순서대로
+  await submitPracticeCore(deps, researchCtx, { ...baseInput, questionId: 'L01', startedAt: at(2) });
+  // L03 고쳐 쓰기 — 이미 낸 문항이므로 건너뛴 것이 아니다
+  await submitPracticeCore(deps, researchCtx, { ...baseInput, questionId: 'L03', startedAt: at(3), text: `${SYNTH_TEXT} 고쳐 씀` });
+  const rows = submissionRows(h).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  assert.deepEqual(
+    rows.map((r) => [r.questionId, r.outOfOrder]),
+    [['L03', true], ['L01', false], ['L03', false]]
+  );
+});
+
+test('99-1 B3: 일반 수업은 제시 순서를 판정하지 않는다(outOfOrder=null)', async () => {
+  const h = newHarness();
+  await submitPracticeCore(h.deps, experienceCtx, baseInput);
+  const [row] = submissionRows(h);
+  assert.equal(row.outOfOrder, null);
+});
+
