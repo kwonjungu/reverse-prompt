@@ -34,7 +34,7 @@ export type PasswordKind = 'admin' | 'teacher' | 'class';
  *    개인 계정 비밀번호가 아니다.
  */
 export const PASSWORD_MIN_LENGTH: Record<PasswordKind, number> = {
-  admin: 12,
+  admin: 10,
   teacher: 8,
   class: 4,
 };

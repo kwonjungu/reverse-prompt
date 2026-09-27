@@ -97,8 +97,8 @@ const SESSION_TYPE_LABEL: Record<SessionType, string> = {
 };
 
 const CREDENTIAL_HINT: Record<string, string> = {
-  unset: 'Vercel 환경 변수에 ADMIN_PASSWORD(12자 이상)를 넣고 다시 배포해 주세요.',
-  env_too_short: 'ADMIN_PASSWORD가 12자보다 짧아 쓰지 않습니다. 더 긴 값으로 바꿔 주세요.',
+  unset: 'Vercel 환경 변수에 ADMIN_PASSWORD(10자 이상)를 넣고 다시 배포해 주세요.',
+  env_too_short: 'ADMIN_PASSWORD가 10자보다 짧아 쓰지 않습니다. 더 긴 값으로 바꿔 주세요.',
   stored_malformed: 'Firestore admin_config/console 문서의 passwordHash가 올바르지 않습니다.',
   unknown: '관리자 비밀번호 설정을 확인하지 못했습니다.',
 };
@@ -1060,7 +1060,7 @@ function SettingsPanel(props: { status: AdminStatus; busy: boolean; act: Act }) 
               <Input id="cur-pw" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="next-pw">새 비밀번호 (12자 이상)</Label>
+              <Label htmlFor="next-pw">새 비밀번호 (10자 이상)</Label>
               <Input id="next-pw" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
             </div>
             <div className="space-y-2">

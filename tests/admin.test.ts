@@ -75,7 +75,8 @@ test('형식이 틀린 해시는 어떤 입력으로도 통과하지 않는다',
 });
 
 test('비밀번호 길이 규칙은 종류별로 다르다', () => {
-  assert.match(passwordProblem('short-pass1', 'admin') ?? '', /12자/);
+  assert.match(passwordProblem('short-pw9', 'admin') ?? '', /10자/);
+  assert.equal(passwordProblem('tenchars10', 'admin'), null, '10자는 통과한다');
   assert.equal(passwordProblem('long-enough-admin', 'admin'), null);
   assert.match(passwordProblem('1234567', 'teacher') ?? '', /8자/);
   assert.equal(passwordProblem('12345678', 'teacher'), null);

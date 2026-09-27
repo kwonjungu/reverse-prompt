@@ -6,7 +6,7 @@ import 'server-only';
  * 판정 규칙(해시·토큰·자격 선택)은 core.ts에 있고, 여기서는 쿠키와 Firestore를 붙인다.
  *
  * 무엇을 지키는가
- *   - 관리자 비밀번호는 처음에는 ADMIN_PASSWORD(12자 이상)로 들어온다. 화면에서 바꾸면
+ *   - 관리자 비밀번호는 처음에는 ADMIN_PASSWORD(10자 이상)로 들어온다. 화면에서 바꾸면
  *     Firestore admin_config/console에 scrypt 해시만 남고, 그 뒤로는 저장된 해시만 통한다.
  *   - 세션은 HttpOnly·SameSite=Strict 쿠키(rp_admin)로만 다룬다. 서명 키에 자격 지문이
  *     섞여 있어 비밀번호를 바꾸면 다른 기기의 관리자 세션이 모두 끊긴다.
@@ -16,7 +16,7 @@ import 'server-only';
  *   - 교사·연구자 계정(Firebase 로그인, users 문서의 역할)과 별개다. 이 세션으로 교사
  *     화면의 학생 자료를 읽지 않는다. access.ts가 정한 대로 관리 계정은 반·계정 관리만 한다.
  *   - 로그인 시도 횟수를 서버 전체에서 세어 잠그지는 않는다. 실패마다 지연을 두고
- *     12자 이상을 요구하는 것으로 무작위 대입을 늦출 뿐이다(CLAUDE.md 알려진 한계).
+ *     10자 이상을 요구하는 것으로 무작위 대입을 늦출 뿐이다(CLAUDE.md 알려진 한계).
  */
 
 import { cookies } from 'next/headers';
@@ -48,7 +48,7 @@ const FAILED_SIGN_IN_DELAY_MS = 700;
 
 const CREDENTIAL_MESSAGES = {
   unset: 'ADMIN_PASSWORD가 설정되지 않아 관리 화면을 열 수 없습니다.',
-  env_too_short: 'ADMIN_PASSWORD가 12자보다 짧아 쓰지 않습니다. 더 긴 값으로 바꿔 주세요.',
+  env_too_short: 'ADMIN_PASSWORD가 10자보다 짧아 쓰지 않습니다. 더 긴 값으로 바꿔 주세요.',
   stored_malformed:
     '저장된 관리자 비밀번호 형식이 올바르지 않습니다. Firestore의 admin_config/console 문서를 확인해 주세요.',
 } as const;

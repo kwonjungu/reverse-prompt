@@ -53,7 +53,7 @@ export const LECTURE_CODE = process.env.LECTURE_CODE?.trim() || DEFAULT_LECTURE_
 export const FIREBASE_ADMIN_CREDENTIAL = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim() || '';
 
 /**
- * 통합 관리 화면(/admin)의 첫 비밀번호. 12자 이상이어야 쓰인다.
+ * 통합 관리 화면(/admin)의 첫 비밀번호. 10자 이상이어야 쓰인다.
  * 관리 화면에서 비밀번호를 바꾸면 Firestore(admin_config)에 scrypt 해시가 남고,
  * 그때부터는 이 값이 아니라 저장된 해시만 통한다. 원문을 저장하지 않는다.
  */
