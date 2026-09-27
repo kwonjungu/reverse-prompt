@@ -20,6 +20,7 @@ import { deriveServerSessionSecret } from '../src/server/auth/session-token';
 import {
   ADMIN_SESSION_TTL_MS,
   classifyPasswordSignInProbe,
+  describeFirebaseError,
   projectIdOfCredential,
   credentialFingerprint,
   deriveAdminKey,
@@ -343,6 +344,28 @@ test('교사 로그인 점검은 오류 코드로만 판정하고 모르면 단�
   assert.equal(classifyPasswordSignInProbe('API_KEY_HTTP_REFERRER_BLOCKED'), 'unknown');
   assert.equal(classifyPasswordSignInProbe('TOO_MANY_ATTEMPTS_TRY_LATER'), 'unknown');
   assert.equal(classifyPasswordSignInProbe(undefined), 'unknown');
+  // Authentication을 한 번도 시작하지 않은 프로젝트. 계정을 만들 수 없으므로 따로 알린다.
+  assert.equal(classifyPasswordSignInProbe('CONFIGURATION_NOT_FOUND'), 'not_initialized');
+});
+
+test('Firebase 오류를 관리자가 할 일이 보이는 문구로 바꾼다', () => {
+  // 운영에서 실제로 난 오류: Authentication 미시작
+  assert.match(describeFirebaseError('auth/configuration-not-found', 'There is no configuration')!, /시작하기/);
+  assert.match(describeFirebaseError('auth/internal-error', 'CONFIGURATION_NOT_FOUND')!, /시작하기/);
+  assert.match(describeFirebaseError('auth/operation-not-allowed', '')!, /이메일\/비밀번호/);
+  assert.match(describeFirebaseError('auth/email-already-exists', '')!, /이미 있는 계정/);
+  assert.match(
+    describeFirebaseError(
+      'auth/internal-error',
+      'Identity Toolkit API has not been used in project 123 before or it is disabled.'
+    )!,
+    /Identity Toolkit/
+  );
+  // 모르는 오류도 코드는 보여 준다. 코드가 없으면 호출부의 일반 안내로 넘긴다.
+  assert.match(describeFirebaseError('auth/some-new-error', 'x')!, /auth\/some-new-error/);
+  assert.match(describeFirebaseError(7, 'PERMISSION_DENIED')!, /오류 코드: 7/);
+  assert.equal(describeFirebaseError(undefined, 'boom'), null);
+  assert.equal(describeFirebaseError('', undefined), null);
 });
 
 test('서비스 계정 JSON에서 프로젝트만 읽는다', () => {

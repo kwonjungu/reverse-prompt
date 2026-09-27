@@ -336,8 +336,12 @@ export function sanitizeClassAssignments(requested: unknown, existing: readonly 
 
 /* ────────────────────────── Firebase 설정 점검 ────────────────────────── */
 
-/** 교사 로그인(이메일/비밀번호) 방식이 Firebase 프로젝트에서 켜져 있는가. */
-export type TeacherLoginState = 'enabled' | 'disabled' | 'unknown';
+/**
+ * 교사 로그인(이메일/비밀번호) 방식이 Firebase 프로젝트에서 켜져 있는가.
+ * not_initialized는 Firebase 콘솔에서 Authentication을 한 번도 '시작하기' 하지 않은 상태다.
+ * 이때는 로그인 방식을 켜기 전에 Authentication부터 시작해야 한다.
+ */
+export type TeacherLoginState = 'enabled' | 'disabled' | 'not_initialized' | 'unknown';
 
 /**
  * 없는 계정으로 로그인을 시도해 받은 오류 코드로 로그인 방식이 켜져 있는지 판정한다.
@@ -349,6 +353,7 @@ export function classifyPasswordSignInProbe(errorMessage: unknown): TeacherLogin
   if (typeof errorMessage !== 'string') return 'unknown';
   const code = errorMessage.trim().split(/[\s:]/)[0];
   if (code === 'PASSWORD_LOGIN_DISABLED' || code === 'OPERATION_NOT_ALLOWED') return 'disabled';
+  if (code === 'CONFIGURATION_NOT_FOUND') return 'not_initialized';
   if (
     code === 'EMAIL_NOT_FOUND' ||
     code === 'INVALID_PASSWORD' ||
@@ -368,4 +373,44 @@ export function projectIdOfCredential(credentialJson: string | null | undefined)
   } catch {
     return null;
   }
+}
+
+/* ────────────────────────── Firebase 오류 문구 ────────────────────────── */
+
+const FIREBASE_ERROR_MESSAGES: Record<string, string> = {
+  'auth/configuration-not-found':
+    'Firebase Authentication이 아직 시작되지 않았습니다. Firebase 콘솔 → Authentication → "시작하기"를 누르고, 로그인 방법에서 이메일/비밀번호를 사용 설정한 뒤 다시 해 주세요.',
+  'auth/operation-not-allowed':
+    'Firebase 콘솔에서 이메일/비밀번호 로그인이 꺼져 있습니다. Authentication → 로그인 방법에서 켜 주세요.',
+  'auth/email-already-exists': '이미 있는 계정입니다. 목록에서 담당 반을 바꾸거나 비밀번호를 다시 정해 주세요.',
+  'auth/invalid-email': '계정(이메일) 형식이 올바르지 않습니다.',
+  'auth/invalid-password': '비밀번호 형식이 올바르지 않습니다(6자 이상).',
+  'auth/invalid-display-name': '표시 이름을 다시 확인해 주세요.',
+  'auth/user-not-found': '계정을 찾지 못했습니다.',
+  'auth/insufficient-permission':
+    '서버 키(서비스 계정)에 계정을 관리할 권한이 없습니다. Firebase 콘솔 → 프로젝트 설정 → 서비스 계정에서 받은 firebase-adminsdk 키인지 확인해 주세요.',
+  'auth/project-not-found':
+    '서버 키의 Firebase 프로젝트를 찾지 못했습니다. FIREBASE_SERVICE_ACCOUNT_JSON이 이 앱이 쓰는 프로젝트의 키인지 확인해 주세요.',
+  'auth/invalid-credential':
+    '서버 키(FIREBASE_SERVICE_ACCOUNT_JSON)로 인증하지 못했습니다. 키가 지워졌거나 일부만 붙여 넣었을 수 있습니다. 새 키를 받아 다시 넣어 주세요.',
+  'auth/too-many-requests': '요청이 너무 많습니다. 잠시 뒤 다시 해 주세요.',
+  'auth/quota-exceeded': 'Firebase 사용 한도를 넘었습니다. 잠시 뒤 다시 해 주세요.',
+};
+
+/**
+ * Firebase Admin SDK 오류를 관리자 화면에 보여 줄 문구로 바꾼다.
+ * 모르는 오류도 코드를 함께 보여 준다(코드는 비밀이 아니며, 없으면 원인을 찾을 수 없다).
+ * 코드도 알아볼 문구도 없으면 null을 돌려준다(호출부가 일반 안내를 쓴다).
+ */
+export function describeFirebaseError(code: unknown, message: unknown): string | null {
+  const text = typeof message === 'string' ? message : '';
+  if (typeof code === 'string' && FIREBASE_ERROR_MESSAGES[code]) return FIREBASE_ERROR_MESSAGES[code];
+  if (/identitytoolkit|identity toolkit/i.test(text) && /disabled|not been used|has not been enabled/i.test(text)) {
+    return 'Google Cloud에서 Identity Toolkit API가 꺼져 있습니다. Firebase 콘솔 → Authentication → "시작하기"를 누르면 켜집니다.';
+  }
+  if (/CONFIGURATION_NOT_FOUND/.test(text)) return FIREBASE_ERROR_MESSAGES['auth/configuration-not-found'];
+  if ((typeof code === 'string' && code) || typeof code === 'number') {
+    return `처리하지 못했습니다(오류 코드: ${code}). 이 코드를 알려 주시면 원인을 찾을 수 있습니다.`;
+  }
+  return null;
 }

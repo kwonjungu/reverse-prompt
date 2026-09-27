@@ -441,8 +441,9 @@ function FirebaseSetupAlerts(props: {
 }) {
   const { check } = props;
   const mismatch = check.projectMatch === false;
+  const authNotStarted = check.teacherLogin === 'not_initialized';
   const loginOff = check.teacherLogin === 'disabled';
-  if (!mismatch && !loginOff) return null;
+  if (!mismatch && !authNotStarted && !loginOff) return null;
   return (
     <div className="space-y-3">
       {mismatch && (
@@ -458,6 +459,30 @@ function FirebaseSetupAlerts(props: {
               <code>{check.clientProjectId}</code> 프로젝트의 서비스 계정 키를 내려받아
               Vercel의 FIREBASE_SERVICE_ACCOUNT_JSON을 바꿔 주세요.
             </p>
+          </AlertDescription>
+        </Alert>
+      )}
+      {authNotStarted && (
+        <Alert className="border-destructive/40 bg-destructive/5">
+          <AlertTriangle className="h-4 w-4 text-destructive" />
+          <AlertTitle>Firebase Authentication이 아직 시작되지 않았습니다</AlertTitle>
+          <AlertDescription className="space-y-2 text-sm">
+            <p>이 상태에서는 교사 계정을 만들 수 없습니다. Firebase 콘솔에서 한 번만 해 주세요.</p>
+            <ol className="list-decimal space-y-0.5 pl-5">
+              <li>아래 링크 → <strong>시작하기</strong></li>
+              <li>로그인 방법 → <strong>이메일/비밀번호</strong> → 사용 설정 → 저장</li>
+              <li>이 화면을 새로고침</li>
+            </ol>
+            {check.authStartUrl && (
+              <a
+                href={check.authStartUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-block text-xs underline underline-offset-2"
+              >
+                Firebase 콘솔 Authentication 열기
+              </a>
+            )}
           </AlertDescription>
         </Alert>
       )}
@@ -939,7 +964,10 @@ function TeachersPanel(props: { data: AdminConsoleData | null; busy: boolean; ac
             <div className="grid gap-4 md:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="t-email">계정(이메일)</Label>
-                <Input id="t-email" type="email" autoComplete="off" value={email} onChange={(e) => setEmail(e.target.value)} />
+                <Input id="t-email" type="email" autoComplete="off" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="예: teacher53@school.kr" />
+                <p className="text-xs text-muted-foreground">
+                  이메일 형식이면 됩니다. 실제로 받는 메일이 아니어도 로그인에 쓸 수 있습니다.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="t-name">표시 이름 (선택)</Label>
