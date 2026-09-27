@@ -21,11 +21,19 @@
  * 문항을 고치면 public/questions/ 이미지와 서버의 제작 프롬프트 목록도 함께 갱신할 것.
  */
 
+import { reviewedHintOf } from './practice-hints';
+
 export type PracticeQuestion = {
   level: number;
   chasi: number;
   koreanTitle: string;
+  /** 차시 공통 안내. 게임·시간 제한·연수 화면은 이것을 그대로 쓴다. */
   rubric: string;
+  /**
+   * 이 문항만의 힌트(논문 v12). 연구자 검수를 마친 것만 들어가고, 아니면 null이다.
+   * 연습 화면은 이것을 먼저 쓰고 null이면 rubric(차시 공통 안내)으로 대신한다.
+   */
+  hint: string | null;
   imageUrl: string;
 };
 
@@ -102,6 +110,7 @@ export const PRACTICE_QUESTIONS: PracticeQuestion[] = raw.map((q) => ({
   chasi: q.chasi,
   koreanTitle: q.koreanTitle,
   rubric: GUIDE[q.chasi],
+  hint: reviewedHintOf(`L${String(q.level).padStart(2, '0')}`),
   imageUrl: `/questions/L${String(q.level).padStart(2, '0')}.jpg`,
 }));
 

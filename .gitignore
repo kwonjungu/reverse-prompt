@@ -54,3 +54,7 @@ research-assets/*.xlsx
 
 # 연구용 manifest 산출물(생성 시각·자산 상태가 들어가므로 저장소에 두지 않는다)
 research-manifest.json
+
+# 연구 자료 내보내기(관리 화면 CSV)와 명단은 커밋하지 않는다.
+rp_*.csv
+/exports/

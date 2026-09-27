@@ -11,7 +11,9 @@
  *   - 제출은 서버 액션이 저장한다. 클라이언트가 Firestore에 직접 쓰지 않는다.
  *   - 같은 제출ID로 다시 보내도 이중 저장되지 않는다. 저장 실패를 완료로 표시하지 않는다.
  *   - 채점 결측은 0점·수준1로 보이게 하지 않는다.
- *   - 적어도 한 문항에서 피드백을 검토하고 수정 또는 고치지 않은 까닭을 남긴다.
+ *   - 연구 세션에서는 고치지 않은 까닭을 묻지 않는다(논문 v12). 수정 과정은 제출할 때마다
+ *     자동으로 남는 시도 기록으로만 본다. 일반 체험에서는 예전처럼 까닭을 남길 수 있다.
+ *   - 힌트는 문항별 힌트(검수를 마친 것만)를 먼저 쓰고, 없으면 차시 공통 안내를 쓴다.
  *   - 학급·신원은 서버 세션이 정한다. 화면이 sessionStorage의 학급코드·출석번호를 보내지 않는다.
  */
 
@@ -354,6 +356,8 @@ export default function PracticePage() {
   }
 
   const doneInChasi = attemptedCount(currentChasi);
+  /** 연구 세션이면 고치지 않은 까닭을 묻지 않는다. 세션 성격은 서버가 정한 값이다. */
+  const asksReviewNote = lessonState.sessionType === 'experience';
 
   return (
     <div className="min-h-screen bg-background font-sans">
@@ -437,7 +441,7 @@ export default function PracticePage() {
             지금까지 이 단계에서 {doneInChasi}/{QUESTIONS_PER_CHASI} 문항을 냈어요. 다 하지 않아도
             괜찮아요.
           </p>
-          {lessonState.reviewedQuestionCount === 0 && (
+          {asksReviewNote && lessonState.reviewedQuestionCount === 0 && (
             <p className="mt-1 text-sm text-primary">
               한 문항은 피드백을 읽고 고쳐 쓰거나, 고치지 않은 까닭을 적어 보세요.
             </p>
@@ -465,7 +469,7 @@ export default function PracticePage() {
                   <BookOpen className="h-4 w-4 text-accent-foreground" />
                   <AlertTitle className="font-semibold text-accent-foreground">힌트</AlertTitle>
                   <AlertDescription className="text-accent-foreground/90 font-body whitespace-pre-line text-sm">
-                    {currentQuestion.rubric}
+                    {currentQuestion.hint ?? currentQuestion.rubric}
                   </AlertDescription>
                 </Alert>
 
@@ -583,7 +587,8 @@ export default function PracticePage() {
                   </div>
                 </CardContent>
 
-                {/* 피드백 검토 — 고쳐 쓰거나, 고치지 않은 까닭을 남긴다. */}
+                {/* 피드백 검토 — 일반 체험에서만 고치지 않은 까닭을 남긴다. */}
+                {asksReviewNote && (
                 <CardContent className="border-t pt-4">
                   {reviewSaved ? (
                     <p className="text-sm text-muted-foreground">
@@ -613,6 +618,7 @@ export default function PracticePage() {
                     </div>
                   )}
                 </CardContent>
+                )}
 
                 <CardFooter className="flex flex-col sm:flex-row gap-3">
                   <Button onClick={handleRevise} variant="outline" className="w-full sm:w-auto">

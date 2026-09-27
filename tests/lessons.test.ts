@@ -38,6 +38,7 @@ import {
 } from '@/server/lessons/store-core';
 import {
   NOT_OWNER_MESSAGE,
+  REVIEW_NOTE_NOT_COLLECTED_MESSAGE,
   deriveSubmissionId,
   recordFeedbackReviewCore,
   resolveClassKey,
@@ -484,11 +485,12 @@ test('A-6 다른 학생의 제출에는 피드백 검토를 기록하지 못한�
   const submissionId = submitted.status === 'done' ? submitted.submissionId : '';
 
   // 같은 학급의 다른 학생이 같은 문서에 기록을 시도한다.
+  // 연구 세션은 '고쳐 쓰기' 연결만 남기므로(v12) revised로 확인한다.
   const intruder: SubmitSessionContext = { ...researchCtx, researchId: 'R-002', ownerKey: 'R-002' };
   const denied = await recordFeedbackReviewCore(
     { store: h.deps.store, now: h.deps.now },
     intruder,
-    { submissionId, kind: 'kept', note: '고치지 않았어요' }
+    { submissionId, kind: 'revised' }
   );
   assert.equal(denied.ok, false);
   assert.equal(denied.message, NOT_OWNER_MESSAGE);
@@ -497,9 +499,34 @@ test('A-6 다른 학생의 제출에는 피드백 검토를 기록하지 못한�
   const mine = await recordFeedbackReviewCore(
     { store: h.deps.store, now: h.deps.now },
     researchCtx,
-    { submissionId, kind: 'kept', note: '이미 색을 적어서 그대로 두었어요' }
+    { submissionId, kind: 'revised' }
   );
   assert.equal(mine.ok, true);
+});
+
+test('v12 연구 세션에서는 고치지 않은 까닭을 받지 않는다', async () => {
+  const h = await newResearchHarness();
+  const submitted = await submitPracticeCore(h.deps, researchCtx, baseInput);
+  const submissionId = submitted.status === 'done' ? submitted.submissionId : '';
+
+  const kept = await recordFeedbackReviewCore(
+    { store: h.deps.store, now: h.deps.now },
+    researchCtx,
+    { submissionId, kind: 'kept', note: '이미 색을 적어서 그대로 두었어요' }
+  );
+  assert.equal(kept.ok, false);
+  assert.equal(kept.message, REVIEW_NOTE_NOT_COLLECTED_MESSAGE);
+
+  // 고쳐 쓰기 연결은 남지만, 함께 온 글은 저장하지 않는다.
+  const revised = await recordFeedbackReviewCore(
+    { store: h.deps.store, now: h.deps.now },
+    researchCtx,
+    { submissionId, kind: 'revised', note: '몰래 적은 까닭' }
+  );
+  assert.equal(revised.ok, true);
+  const row = submissionRows(h).find((r) => r.submissionId === submissionId);
+  assert.equal(row?.feedbackReview?.kind, 'revised');
+  assert.equal(row?.feedbackReview?.note, null);
 });
 
 test('A-6 피드백 검토의 학급도 서버 세션이 정한다', async () => {

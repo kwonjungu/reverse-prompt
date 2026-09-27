@@ -276,18 +276,28 @@ test('차시 기록의 pacing이 판정 상태로 옮겨진다', async () => {
 const readSource = (relative: string) => readFileSync(path.join(ROOT, relative), 'utf8');
 
 test('관리 server action은 모두 관리자 세션을 먼저 확인한다', () => {
-  const src = readSource('src/server/admin/actions.ts');
-  const exported = [...src.matchAll(/export async function (\w+)\(/g)].map((m) => m[1]);
-  assert.ok(exported.length > 5);
   // 로그인·상태 조회·로그아웃만 세션 없이 부를 수 있다.
   const open = new Set(['getAdminStatusAction', 'adminSignInAction', 'adminSignOutAction']);
-  for (const name of exported) {
-    if (open.has(name)) continue;
-    const start = src.indexOf(`export async function ${name}(`);
-    const next = src.indexOf('export async function', start + 10);
-    const body = src.slice(start, next === -1 ? undefined : next);
-    assert.match(body, /await requireAdmin\(\)/, `${name}이 관리자 세션을 확인하지 않는다`);
+  for (const file of ['src/server/admin/actions.ts', 'src/server/admin/research-actions.ts']) {
+    const src = readSource(file);
+    const exported = [...src.matchAll(/export async function (\w+)\(/g)].map((m) => m[1]);
+    assert.ok(exported.length > 5, file);
+    for (const name of exported) {
+      if (open.has(name)) continue;
+      const start = src.indexOf(`export async function ${name}(`);
+      const next = src.indexOf('export async function', start + 10);
+      const body = src.slice(start, next === -1 ? undefined : next);
+      assert.match(body, /await requireAdmin\(\)/, `${file}의 ${name}이 관리자 세션을 확인하지 않는다`);
+    }
   }
+});
+
+test('연구 자료는 동의가 유효한 학생만 읽고 조회·내보내기를 기록한다', () => {
+  const src = readSource('src/server/admin/research-actions.ts');
+  assert.match(src, /isConsentDocActive\(/, '동의를 지금 기준으로 다시 확인한다');
+  assert.match(src, /RESEARCH_PRACTICE_SUBMISSIONS_PATH/, '연구 연습 제출만 읽는다');
+  assert.match(src, /recordAdminEvent\('research_export'/);
+  assert.equal(/\.delete\(\)/.test(src), false, '제외 표시·추출 기록을 지우지 않는다');
 });
 
 test('반 입장 비밀번호와 관리자 비밀번호를 원문으로 저장하지 않는다', () => {

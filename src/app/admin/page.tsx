@@ -38,6 +38,7 @@ import {
   type AdminTeacherRow,
 } from '@/server/admin/actions';
 import type { SessionType } from '@/lib/research/types';
+import { ResearchPanel } from './research-panel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -72,6 +73,7 @@ import {
   AlertTriangle,
   Copy,
   DoorClosed,
+  FlaskConical,
   DoorOpen,
   GraduationCap,
   KeyRound,
@@ -359,9 +361,10 @@ export default function AdminConsolePage() {
         )}
 
         <Tabs defaultValue="classes" className="space-y-6">
-          <TabsList className="grid w-full max-w-lg grid-cols-3">
+          <TabsList className="grid h-auto w-full max-w-2xl grid-cols-2 sm:grid-cols-4">
             <TabsTrigger value="classes"><School className="mr-2 h-4 w-4" />수업 운영</TabsTrigger>
             <TabsTrigger value="teachers"><Users className="mr-2 h-4 w-4" />교사 계정</TabsTrigger>
+            <TabsTrigger value="research"><FlaskConical className="mr-2 h-4 w-4" />연구 자료</TabsTrigger>
             <TabsTrigger value="settings"><Settings className="mr-2 h-4 w-4" />설정</TabsTrigger>
           </TabsList>
 
@@ -408,6 +411,10 @@ export default function AdminConsolePage() {
 
           <TabsContent value="teachers" className="space-y-6">
             <TeachersPanel data={data} busy={busy} act={act} />
+          </TabsContent>
+
+          <TabsContent value="research" className="space-y-6">
+            <ResearchPanel onSignedOut={markSignedOut} />
           </TabsContent>
 
           <TabsContent value="settings" className="space-y-6">
