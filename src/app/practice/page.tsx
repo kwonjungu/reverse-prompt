@@ -12,7 +12,9 @@
  *   - 같은 제출ID로 다시 보내도 이중 저장되지 않는다. 저장 실패를 완료로 표시하지 않는다.
  *   - 채점 결측은 0점·수준1로 보이게 하지 않는다.
  *   - 연구 세션에서는 고치지 않은 까닭을 묻지 않는다(논문 v12). 수정 과정은 제출할 때마다
- *     자동으로 남는 시도 기록으로만 본다. 일반 체험에서는 예전처럼 까닭을 남길 수 있다.
+ *     자동으로 남는 시도 기록으로만 본다. 일반 체험에서는 '다음 문제'를 누를 때 까닭을 적거나
+ *     건너뛸 수 있다. 적지 않아도 넘어갈 수 있다.
+ *   - 제출 뒤 완료 수를 새로 받아 와도 보고 있는 문항과 결과는 그대로 둔다.
  *   - 힌트는 문항별 힌트(검수를 마친 것만)를 먼저 쓰고, 없으면 차시 공통 안내를 쓴다.
  *   - 학급·신원은 서버 세션이 정한다. 화면이 sessionStorage의 학급코드·출석번호를 보내지 않는다.
  */
@@ -128,7 +130,9 @@ export default function PracticePage() {
   /** 저장에 실패하면 같은 제출ID로 다시 보낸다. 새 응답으로 세지 않기 위함이다. */
   const [pendingSubmissionId, setPendingSubmissionId] = useState<string | null>(null);
   const [reviewNote, setReviewNote] = useState('');
-  const [reviewSaved, setReviewSaved] = useState(false);
+  /** 일반 체험에서 '다음 문제'를 눌렀을 때 고치지 않은 까닭을 묻는 칸을 띄운다. */
+  const [askingReason, setAskingReason] = useState(false);
+  const [savingReason, setSavingReason] = useState(false);
   /** 이 기기에서 낸 문항. 일반 체험의 표시를 이어 주기 위한 캐시일 뿐이다. */
   const [cachedQuestionIds, setCachedQuestionIds] = useState<string[]>([]);
   const { toast } = useToast();
@@ -141,11 +145,17 @@ export default function PracticePage() {
     return raw !== null && Number.isFinite(n) ? n : null;
   };
 
-  const loadLessonState = useCallback(async (requested: number | null) => {
+  /**
+   * keepPosition: 제출·기록 뒤 완료 수만 새로 받아 온다. 보고 있는 문항과 결과를 건드리지 않는다.
+   * (예전에는 여기서 문항을 단계 첫 문항으로 되돌려, 2번째 문항부터 제출하면 결과가 사라지고
+   * 첫 문항 빈 칸으로 튕겼다.)
+   */
+  const loadLessonState = useCallback(async (requested: number | null, opts?: { keepPosition?: boolean }) => {
     try {
       const state = await getLessonStateAction(requested);
       setLessonState(state);
       setLoadError(null);
+      if (opts?.keepPosition) return state;
       if (state.deniedMessage) setBlockedMessage(state.deniedMessage);
       const entry = state.entryLesson;
       setCurrentChasi(entry);
@@ -204,7 +214,7 @@ export default function PracticePage() {
     setStudentPrompt('');
     setPendingSubmissionId(null);
     setReviewNote('');
-    setReviewSaved(false);
+    setAskingReason(false);
     setStartedAt(new Date().toISOString());
   }, [currentQuestionIndex]);
 
@@ -229,7 +239,7 @@ export default function PracticePage() {
         // 저장에 실패했으면 같은 제출ID를 남겨 두어 다시 보낼 때 이중 저장되지 않게 한다.
         setPendingSubmissionId(res.save.ok ? null : submissionId);
         if (res.save.ok) {
-          void loadLessonState(currentChasi);
+          void loadLessonState(currentChasi, { keepPosition: true });
           // 새로 고쳐도 무엇을 냈는지 화면에서 이어 보이도록 이 기기에만 남긴다.
           const questionId = questionIdOf(currentQuestion.level);
           if (!cachedQuestionIds.includes(questionId)) {
@@ -277,30 +287,8 @@ export default function PracticePage() {
     }
     setResult(null);
     setPendingSubmissionId(null);
+    setAskingReason(false);
     setStartedAt(new Date().toISOString());
-  };
-
-  const handleKeepAsIs = async () => {
-    if (!result) return;
-    if (!reviewNote.trim()) {
-      toast({
-        variant: 'destructive',
-        title: '한 줄만 적어 주세요',
-        description: '고치지 않기로 한 까닭을 짧게 써 주세요.',
-      });
-      return;
-    }
-    const res = await recordFeedbackReviewAction({
-      submissionId: result.submissionId,
-      kind: 'kept',
-      note: reviewNote,
-    });
-    if (res.ok) {
-      setReviewSaved(true);
-      void loadLessonState(currentChasi);
-    } else {
-      toast({ variant: 'destructive', title: '기록하지 못했어요', description: res.message ?? '' });
-    }
   };
 
   const handleNextQuestion = () => {
@@ -311,6 +299,48 @@ export default function PracticePage() {
     if (!idxs.length) return;
     const at = idxs.indexOf(currentQuestionIndex);
     setCurrentQuestionIndex(idxs[(at + 1) % idxs.length]);
+  };
+
+  /**
+   * '다음 문제'. 일반 체험에서 저장된 결과가 있으면 먼저 고치지 않은 까닭을 물어본다(건너뛸 수 있다).
+   * 연구 세션은 까닭을 받지 않으므로 바로 넘어간다.
+   */
+  const handleNextClick = () => {
+    if (lessonState?.sessionType === 'experience' && result?.save.ok) {
+      setAskingReason(true);
+      return;
+    }
+    handleNextQuestion();
+  };
+
+  const handleSaveReasonAndNext = async () => {
+    if (!result || !reviewNote.trim() || savingReason) return;
+    setSavingReason(true);
+    try {
+      const res = await recordFeedbackReviewAction({
+        submissionId: result.submissionId,
+        kind: 'kept',
+        note: reviewNote,
+      });
+      if (!res.ok) {
+        toast({
+          variant: 'destructive',
+          title: '기록하지 못했어요',
+          description: `${res.message ?? ''} 건너뛰기를 눌러도 괜찮아요.`.trim(),
+        });
+        return;
+      }
+      void loadLessonState(currentChasi, { keepPosition: true });
+      handleNextQuestion();
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: '기록하지 못했어요',
+        description: '건너뛰기를 눌러도 괜찮아요.',
+      });
+    } finally {
+      setSavingReason(false);
+    }
   };
 
   const levelColor = (lv: number) => {
@@ -443,7 +473,7 @@ export default function PracticePage() {
           </p>
           {asksReviewNote && lessonState.reviewedQuestionCount === 0 && (
             <p className="mt-1 text-sm text-primary">
-              한 문항은 피드백을 읽고 고쳐 쓰거나, 고치지 않은 까닭을 적어 보세요.
+              피드백을 읽고 고쳐 써 보세요. 고치지 않는다면 다음 문제로 갈 때 까닭을 적을 수 있어요.
             </p>
           )}
         </div>
@@ -587,52 +617,67 @@ export default function PracticePage() {
                   </div>
                 </CardContent>
 
-                {/* 피드백 검토 — 일반 체험에서만 고치지 않은 까닭을 남긴다. */}
-                {asksReviewNote && (
-                <CardContent className="border-t pt-4">
-                  {reviewSaved ? (
-                    <p className="text-sm text-muted-foreground">
-                      고치지 않은 까닭을 남겼어요. 다음 문항으로 가도 좋아요.
-                    </p>
-                  ) : (
-                    <div className="space-y-3">
-                      <p className="text-sm font-medium">
-                        피드백을 읽고 어떻게 할까요?
-                      </p>
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                        <div className="flex-1 space-y-1">
-                          <Label htmlFor="keep-note" className="text-xs text-muted-foreground">
-                            고치지 않는다면 그 까닭을 한 줄로 적어 주세요
-                          </Label>
-                          <Input
-                            id="keep-note"
-                            value={reviewNote}
-                            onChange={(e) => setReviewNote(e.target.value)}
-                            placeholder="예: 그림에 없는 것이라 넣지 않았어요"
-                          />
-                        </div>
-                        <Button variant="outline" onClick={() => void handleKeepAsIs()}>
-                          까닭 남기기
-                        </Button>
-                      </div>
+                {askingReason ? (
+                  // 일반 체험에서만 뜬다. 적고 넘어가거나 건너뛸 수 있다. 적지 않아도 불이익이 없다.
+                  <CardFooter className="flex flex-col items-stretch gap-3 border-t pt-4">
+                    <Label htmlFor="keep-note" className="text-sm font-medium">
+                      고치지 않고 넘어가는 까닭이 있나요? 한 줄로 적어 보세요. 안 적어도 괜찮아요.
+                    </Label>
+                    <Input
+                      id="keep-note"
+                      value={reviewNote}
+                      onChange={(e) => setReviewNote(e.target.value)}
+                      placeholder="예: 그림에 없는 것이라 넣지 않았어요"
+                      maxLength={200}
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                          e.preventDefault();
+                          void handleSaveReasonAndNext();
+                        }
+                      }}
+                    />
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Button
+                        onClick={() => setAskingReason(false)}
+                        variant="ghost"
+                        className="w-full sm:w-auto"
+                        disabled={savingReason}
+                      >
+                        돌아가기
+                      </Button>
+                      <Button
+                        onClick={handleNextQuestion}
+                        variant="outline"
+                        className="w-full sm:w-auto sm:ml-auto"
+                        disabled={savingReason}
+                      >
+                        건너뛰기
+                      </Button>
+                      <Button
+                        onClick={() => void handleSaveReasonAndNext()}
+                        className="w-full sm:w-auto"
+                        disabled={savingReason || !reviewNote.trim()}
+                      >
+                        적고 다음 문제로 <ArrowRight className="ml-2 h-4 w-4" />
+                      </Button>
                     </div>
-                  )}
-                </CardContent>
+                  </CardFooter>
+                ) : (
+                  <CardFooter className="flex flex-col sm:flex-row gap-3">
+                    <Button onClick={handleRevise} variant="outline" className="w-full sm:w-auto">
+                      <RotateCcw className="mr-2 h-4 w-4" />
+                      고쳐서 다시 쓰기
+                    </Button>
+                    <Button
+                      onClick={handleNextClick}
+                      className="w-full sm:w-auto ml-auto"
+                      variant="outline"
+                    >
+                      다음 문제 <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  </CardFooter>
                 )}
-
-                <CardFooter className="flex flex-col sm:flex-row gap-3">
-                  <Button onClick={handleRevise} variant="outline" className="w-full sm:w-auto">
-                    <RotateCcw className="mr-2 h-4 w-4" />
-                    고쳐서 다시 쓰기
-                  </Button>
-                  <Button
-                    onClick={handleNextQuestion}
-                    className="w-full sm:w-auto ml-auto"
-                    variant="outline"
-                  >
-                    다음 문제 <ArrowRight className="ml-2 h-4 w-4" />
-                  </Button>
-                </CardFooter>
               </Card>
             </div>
           )}
