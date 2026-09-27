@@ -217,25 +217,96 @@ export const ASSESSMENT_INSTRUCTION =
 /* ────────────────────────── 연구 시작 가능 여부 ────────────────────────── */
 
 /**
- * readiness 판정에 필요한 바깥 상태. 코드가 만들어 낼 수 없는 값은
- * 호출자가 실제로 확인한 것만 넘긴다. 여기서 기본값으로 채우지 않는다.
+ * 연습 문항 ID L01~L36(번호 순). 논문 v12 연구 수업의 준비 조건과 단서 팩 점검(관리 화면)이 쓴다.
+ * 제시 순서가 아니라 번호 순이다(제시 순서는 src/lib/stages.ts).
  */
-export interface ReadinessInput {
-  /** src/server/config.ts의 RESEARCH_ASSET_DIR */
-  researchAssetDir: string;
+export const PRACTICE_QUESTION_IDS: readonly string[] = PRACTICE_ENTRIES.map((e) => e.questionId).sort();
+
+/** 두 준비 조건이 함께 쓰는 운영값. 코드가 만들어 낼 수 없는 값이다. */
+interface OperationalReadinessInput {
   /** src/server/config.ts의 CONSENT_VERSION */
   consentVersion: string;
   /** src/server/config.ts의 IRB_APPROVAL */
   irbApproval: string;
   /** src/server/config.ts의 MODEL_ACCESS_VERIFIED */
   modelAccessVerified: boolean;
-  /** 비공개 단서 팩 파일을 읽어 해석하는 데 성공했는가 */
+}
+
+function collectOperationalBlockers(input: OperationalReadinessInput): string[] {
+  const blockers: string[] = [];
+  if (!input.consentVersion) {
+    blockers.push('CONSENT_VERSION이 설정되지 않아 연구 동의 버전을 확정할 수 없습니다.');
+  }
+  if (!input.irbApproval) {
+    blockers.push('IRB_APPROVAL이 비어 있습니다. 승인 번호는 코드가 만들어 낼 수 없습니다.');
+  }
+  if (!input.modelAccessVerified) {
+    blockers.push('모델 접근·출력 스키마 확인 기록(EVALUATION_MODEL_VERIFIED)이 없습니다.');
+  }
+  return blockers;
+}
+
+/**
+ * 논문 v12 연구 수업(research_practice)의 준비 조건에 필요한 바깥 상태.
+ * 호출자가 실제로 확인한 것만 넘긴다. 여기서 기본값으로 채우지 않는다.
+ */
+export interface PracticeReadinessInput extends OperationalReadinessInput {
+  /** 비공개 단서 팩(파일 또는 관리 화면에 올린 Firestore 사본)을 읽어 해석하는 데 성공했는가 */
   cuePackLoaded: boolean;
+  /** 팩을 열지 못한 사유(고정 문구). 단서 본문이 아니다. */
+  cuePackError?: string | null;
   /**
-   * 적재한 팩이 스스로 cueVersion을 밝혔는가.
-   * 밝히지 않으면 채점 기록의 단서 버전이 코드 상수로 남아 어떤 단서로 채점했는지
-   * 뒤에 확인할 수 없다. 값을 지어내지 않고 미확정 사유로 남긴다.
+   * 적재한 팩이 스스로 밝힌 cueVersion. 밝히지 않으면 채점 기록의 단서 버전이 코드 상수로 남아
+   * 어떤 단서로 채점했는지 뒤에 확인할 수 없다. 값을 지어내지 않고 미확정 사유로 남긴다.
    */
+  cuePackVersion: string | null;
+  /** 단서가 없거나 검증에서 실격된 연습 문항 ID(L01~L36 가운데) */
+  practiceCuesMissing: string[];
+}
+
+/**
+ * 논문 v12 연구 수업을 열 수 없게 하는 사유를 모은다. 하나라도 있으면 researchReady=false다.
+ *
+ * v12는 사전·사후 검사를 쓰지 않으므로 검사 문항(T1~T3)의 확정 상태·이미지·해시·단서를 보지 않는다.
+ * 비공개 단서 팩은 파일이든 Firestore 사본이든 상관없으므로 RESEARCH_ASSET_DIR도 요구하지 않는다
+ * (연습 이미지는 public/questions의 공개 파일이다). 연습 36문항의 단서가 모두 검증을 통과해야 한다.
+ * 한 문항이라도 빠지면 그 문항의 연구 채점이 cues_missing으로 결측이 되기 때문이다.
+ */
+export function collectPracticeBlockers(input: PracticeReadinessInput): string[] {
+  const blockers = collectOperationalBlockers(input);
+
+  if (!input.cuePackLoaded) {
+    blockers.push(
+      input.cuePackError
+        ? `비공개 단서 팩(cue-pack.json)을 적재하지 못했습니다: ${input.cuePackError}`
+        : '비공개 단서 팩(cue-pack.json)을 적재하지 못했습니다.',
+    );
+  } else if (!input.cuePackVersion) {
+    blockers.push(
+      '단서 팩이 cueVersion을 밝히지 않았습니다. 어떤 단서로 채점했는지 기록할 수 없습니다.',
+    );
+  }
+  if (input.cuePackLoaded && input.practiceCuesMissing.length) {
+    const total = PRACTICE_QUESTION_IDS.length;
+    blockers.push(
+      `연습 문항 단서가 모두 적재되지 않았습니다(${total - input.practiceCuesMissing.length}/${total}). ` +
+        `빠졌거나 실격된 문항: ${input.practiceCuesMissing.join(', ')}`,
+    );
+  }
+  return blockers;
+}
+
+/**
+ * 옛 사전·사후 검사(research_assessment)의 준비 조건에 필요한 바깥 상태.
+ * 논문 v12는 검사를 쓰지 않지만 검사 경로(수집·이미지 스트리밍·사후 채점)는 옛 자료를 위해 남아 있고,
+ * 그 경로는 여전히 이 조건으로 막는다.
+ */
+export interface AssessmentReadinessInput extends OperationalReadinessInput {
+  /** src/server/config.ts의 RESEARCH_ASSET_DIR(검사 이미지가 여기에만 있다) */
+  researchAssetDir: string;
+  /** 비공개 단서 팩을 읽어 해석하는 데 성공했는가 */
+  cuePackLoaded: boolean;
+  /** 적재한 팩이 스스로 밝힌 cueVersion(위 PracticeReadinessInput과 같은 뜻) */
   cuePackVersion?: string | null;
   /** 단서가 없거나 필수 항목이 빈 검사 문항 ID */
   assessmentCuesMissing: string[];
@@ -246,24 +317,16 @@ export interface ReadinessInput {
 }
 
 /**
- * 연구 시작을 막는 사유를 모은다. 하나라도 있으면 researchReady=false다.
+ * 옛 사전·사후 검사를 시작하지 못하게 하는 사유를 모은다(v12 이전의 readiness 그대로).
  * 승인·계약·전문가 확정처럼 코드가 만들어 낼 수 없는 값은 누락 상태 그대로 남긴다.
  */
-export function collectBlockers(input: ReadinessInput): string[] {
+export function collectAssessmentBlockers(input: AssessmentReadinessInput): string[] {
   const blockers: string[] = [];
 
   if (!input.researchAssetDir) {
     blockers.push('RESEARCH_ASSET_DIR이 설정되지 않아 비공개 연구 자산을 열 수 없습니다.');
   }
-  if (!input.consentVersion) {
-    blockers.push('CONSENT_VERSION이 설정되지 않아 연구 동의 버전을 확정할 수 없습니다.');
-  }
-  if (!input.irbApproval) {
-    blockers.push('IRB_APPROVAL이 비어 있습니다. 승인 번호는 코드가 만들어 낼 수 없습니다.');
-  }
-  if (!input.modelAccessVerified) {
-    blockers.push('모델 접근·출력 스키마 확인 기록(EVALUATION_MODEL_VERIFIED)이 없습니다.');
-  }
+  blockers.push(...collectOperationalBlockers(input));
   if (!input.cuePackLoaded) {
     blockers.push('비공개 단서 팩(cue-pack.json)을 적재하지 못했습니다.');
   } else if (input.cuePackVersion !== undefined && !input.cuePackVersion) {

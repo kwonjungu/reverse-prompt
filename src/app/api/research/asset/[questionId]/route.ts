@@ -18,7 +18,7 @@
 
 import { auth } from '@/server/auth';
 import { AuthError } from '@/server/auth/contract';
-import { registry } from '@/server/registry';
+import { ensureCuePackLoaded, registry } from '@/server/registry';
 import { RegistryError } from '@/server/registry/contract';
 
 export const runtime = 'nodejs';
@@ -46,6 +46,9 @@ export async function GET(
     // 익명 요청은 여기서 끝난다.
     const principal = await auth.requirePrincipal();
 
+    // 검사 준비 조건이 단서 팩(파일 또는 Firestore 사본)을 본다. 먼저 적재한다.
+    await ensureCuePackLoaded();
+
     // 세션 성격에 맞지 않는 문항이면 requireEntry가 거부한다.
     const entry = registry.requireEntry(questionId, principal.sessionType);
 
@@ -53,7 +56,8 @@ export async function GET(
       // 검사 세션이 열려 있지 않으면 서버가 부여한 sessionType이
       // research_assessment가 아니므로 위에서 이미 거부된다. 여기서는 학급 소속과
       // 동의, 그리고 연구 시작 가능 여부를 한 번 더 확인한다.
-      const ready = registry.readiness();
+      // 옛 사전·사후 검사의 준비 조건을 쓴다(논문 v12 연구 수업의 readiness와 다르다).
+      const ready = registry.assessmentReadiness();
       if (!ready.researchReady) {
         return deny(409, '지금은 이 활동을 열 수 없어요. 선생님께 알려 주세요.');
       }

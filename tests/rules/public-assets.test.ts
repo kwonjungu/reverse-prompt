@@ -120,7 +120,7 @@ test('저장소의 어떤 텍스트 파일에도 검사 단서 문장이 없다'
   const markers = markersFromCuePack(pack);
   assert.ok(markers.length > 0, '단서 팩에서 표지 문장을 하나도 얻지 못했다');
 
-  // src/server도 검사한다. 단서는 코드가 아니라 RESEARCH_ASSET_DIR에서만 읽어야 한다.
+  // src/server도 검사한다. 단서는 코드가 아니라 RESEARCH_ASSET_DIR 파일이나 Firestore 사본(admin_config/cue_pack)에서만 읽어야 한다.
   const targets = ['src', 'tests', 'scripts', 'docs', 'research-assets', 'public'];
   const exts = ['.ts', '.tsx', '.mjs', '.js', '.json', '.md', '.rules'];
   for (const target of targets) {

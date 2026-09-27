@@ -97,11 +97,21 @@ export const COLLECTIONS = {
   auditApprovals: 'audit_approvals',
   /** 비연구 수업 기록(기존 구조 유지) */
   classes: 'classes',
-  /** 통합 관리 화면 설정. 관리자 비밀번호는 scrypt 해시로만 둔다. */
+  /**
+   * 통합 관리 화면 설정. 관리자 비밀번호는 scrypt 해시로만 둔다(console 문서).
+   * 비공개 단서 팩의 Firestore 사본도 여기 둔다(CUE_PACK_DOC_ID 문서). 클라이언트 규칙은 모두 거부한다.
+   */
   adminConfig: 'admin_config',
   /** 통합 관리 화면의 조작 기록(반 개설·차시·교사 계정). 비밀번호 원문은 남기지 않는다. */
   adminEvents: 'admin_events',
 } as const;
+
+/**
+ * admin_config 아래 비공개 단서 팩 사본 문서의 ID(admin_config/cue_pack).
+ * RESEARCH_ASSET_DIR/cue-pack.json 파일이 없는 서버(Vercel)가 여기서 단서 팩을 읽는다.
+ * 관리 화면만 쓰고, 서버 Admin SDK만 읽는다. 단서 본문(json)이 들어 있으므로 어떤 응답에도 싣지 않는다.
+ */
+export const CUE_PACK_DOC_ID = 'cue_pack';
 
 /** research/{schemaVersion} 아래의 연구 자료 컬렉션 이름 */
 export const RESEARCH_COLLECTIONS = {

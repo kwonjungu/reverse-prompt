@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 
 import { CODE_COMMIT } from '@/server/config';
 import { grading } from '@/server/grading';
-import { registry } from '@/server/registry';
+import { ensureCuePackLoaded, registry } from '@/server/registry';
 import { privacy } from '@/server/privacy';
 import { AuthError } from '@/server/auth/contract';
 import { applicabilityOf } from '@/lib/evaluation-prompt';
@@ -193,6 +193,9 @@ export async function getLessonStateAction(
 
   const decision = decideLessonAccess(state, requestedLesson ?? null);
   const entryLesson = resolveEntryLesson(state, requestedLesson ?? null);
+
+  // 해당 없음 영역은 단서 팩에서 정한다. 파일이 없는 서버(Vercel)는 Firestore 사본을 먼저 읽어 둔다.
+  await ensureCuePackLoaded();
 
   const classKey = resolveClassKey(toSubmitContext(ctx));
   const progress = await progressOwnerKeys(ctx);
@@ -377,6 +380,8 @@ export async function submitPracticeAction(
   } catch (err) {
     return { status: 'blocked', message: errorMessage(err) };
   }
+  // 문항 항목의 cuesLoaded·cueVersion과 채점 단서가 같은 팩에서 나오도록 먼저 적재한다.
+  await ensureCuePackLoaded();
   return submitPracticeCore(submitDeps(), toSubmitContext(ctx), input);
 }
 

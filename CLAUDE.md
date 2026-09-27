@@ -56,7 +56,7 @@ Firebase Emulator 권한 시험(`tests/rules/`)은 에뮬레이터가 없으면 
 | `EVALUATION_MODEL_ID` | 채점 모델 | 비우면 기본 `googleai/gemini-2.5-flash`(`src/server/config.ts`). 실제로 답한 모델은 채점 기록의 `servedModel` |
 | `EVALUATION_TEMPERATURE` | 채점 온도 | 기본 0.2 |
 | `EVALUATION_MODEL_VERIFIED` | 운영자가 모델 접근·출력 스키마를 확인함 | `true`가 아니면 연구 시작 차단 |
-| `RESEARCH_ASSET_DIR` | 비공개 연구 자산 경로 | 검사 이미지 + `cue-pack.json` |
+| `RESEARCH_ASSET_DIR` | 비공개 연구 자산 경로 | **선택(로컬·개발).** 검사 이미지 + `cue-pack.json`. 여기 `cue-pack.json`이 있으면 단서 팩은 이 파일이 우선한다. 비우면(Vercel) 관리 화면에서 올린 Firestore 사본(`admin_config/cue_pack`)을 읽는다 |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | 서버 Admin SDK 자격 | 없으면 서버 인증이 우회 없이 실패 |
 | `STUDENT_SESSION_SECRET` | 학생·관리자 세션 토큰 서명 키 | **선택.** 비우면 `FIREBASE_SERVICE_ACCOUNT_JSON`의 비공개 키에서 만든다. 서비스 계정 키를 바꾸면 세션이 끊긴다 |
 | `PARTICIPANT_CODE_PEPPER` | 참가자 코드 pepper | |
@@ -86,6 +86,7 @@ src/
     teacher/page.tsx            # 교사 대시보드 (로그인 + 배정 학급만). 학생 현황(LMS) 탭
     admin/page.tsx              # 통합 관리 (관리자 비밀번호): 반·차시·수업 시작/종료·교사 계정
     admin/research-panel.tsx    # 통합 관리의 '연구 자료' 탭(요약·CSV·제외 표시·층화 추출)
+    admin/cue-pack-panel.tsx    # '연구 자료' 탭에 붙이는 단서 팩 영역(CuePackPanel): 올리기·문항별 적재 상태·지우기
     admin/audit/page.tsx        # 감수 (연구자 역할 + 명시적 승인 필요). 옛 /admin
     api/
       auth/{session,refresh,staff}      # 세션 토큰 발급·갱신·교직원 로그인
@@ -110,13 +111,13 @@ src/
     legacy-v7/                  # 옛 공통 루브릭 v7(5수준·100점) — 게임·타임어택 전용
     research/                   # 공통 도메인 타입, 세션별 허용 모드
   server/                       # 서버 전용. 클라이언트 번들에 실리지 않는다
-    admin/                      # 통합 관리: core(해시·토큰 순수) · auth(관리자 세션) · actions · research-actions
+    admin/                      # 통합 관리: core(해시·토큰 순수) · auth(관리자 세션) · actions · research-actions · cue-pack-actions
     lms/                        # 교사 학생 현황 집계(순수)
     lecture/                    # 연수 체험판 배선. 연구 저장소를 열지 않는다
     config.ts                   # 모델 ID·자산 경로·동의 버전 등 단일 지점
     auth/                       # 역할·학급 범위·동의·세션 토큰·비식별
     privacy/                    # 전송 전 개인정보 점검
-    registry/                   # 문항 레지스트리, 비공개 단서 팩, 제작 프롬프트
+    registry/                   # 문항 레지스트리, 비공개 단서 팩(cue-pack-store: 파일 우선·Firestore 사본 TTL 캐시), 제작 프롬프트
     grading/                    # 운영 채점 1회(v12-2, 모델 1회) · legacy-v7(게임·타임어택)
     lessons/                    # 차시 개방 판정·저장
     assessment/                 # 검사 세션·제출·사후 일괄 채점
@@ -172,10 +173,31 @@ type OperationalResult =
 
 ### 문항별 단서
 채점에는 실제 이미지와 그 문항의 필수 정보(핵심 대상·필수 속성·필수 관계·앵커)를 함께 쓴다. 단서는 **비공개 자산**이며
-`RESEARCH_ASSET_DIR/cue-pack.json`에서 읽는다. 단서가 없으면 연구 세션 채점을 거부한다(`cues_missing`).
+공개 저장소에 올리지 않는다. 단서가 없으면 연구 세션 채점을 거부한다(`cues_missing`). 보관·적재는 아래 "단서 팩 보관" 참고.
 앵커는 **1~4수준 키만** 지시문에 들어간다(옛 5수준 앵커는 v12-2용으로 다시 써야 한다). 앵커 키 `specificity`·`context`는
 각각 특징·관계로 읽어 준다. 일반 체험은 단서가 없으면 공통 문언만으로 채점하고 **그 결과는 연구 자료로 쓰지 않는다.**
 이미지 제작 프롬프트(`sourcePrompt`)는 정답 문장이 아니므로 지시문에 넣지 않는다(`src/server/registry/practice-source-prompts.ts`).
+
+### 단서 팩 보관 — 파일 우선, 없으면 Firestore 관리자 전용 사본
+Vercel에는 저장소 밖 파일을 둘 자리가 없고, 환경 변수는 크기 한도(약 64KB)와 재배포 문제가 있어 **Firestore 관리자 전용 문서**를 쓴다.
+- **출처 우선순위**(`src/server/registry/cue-pack-store.ts`의 `createCuePackLoader`): `RESEARCH_ASSET_DIR/cue-pack.json`이 있으면 그 파일(로컬·개발).
+  없으면 `admin_config/cue_pack` 사본. 파일이 깨져 있어도 사본으로 내려가지 않는다. 지금 출처는 `cuePackStatus().source`(`file`·`firestore`·`none`).
+- **사본 문서** `admin_config/cue_pack`(`CUE_PACK_DOC_ID`, 컬렉션은 `COLLECTIONS.adminConfig`): `schemaVersion:'cue-pack-store-1'`·`json`(원문)·`sha256`·
+  `cueVersion`·`questionCount`(검증 통과 수)·`invalidCount`·`byteLength`·`updatedAt`·`updatedBy`. `firestore.rules`가 `admin_config/*`의
+  클라이언트 읽기·쓰기를 모두 거부하고 서버 Admin SDK만 읽는다. 읽을 때 `sha256`을 다시 계산해 다르면(콘솔에서 손으로 고친 문서 등) 쓰지 않는다.
+- **적재**: 레지스트리 API는 동기이므로 `ensureCuePackLoaded()`(`src/server/registry/index.ts`)가 사본을 메모리에 읽어 두고(TTL **60초**, 동시 요청은 한 번만 읽음)
+  레지스트리가 그 캐시를 동기로 읽는다. 서버 진입점이 레지스트리를 쓰기 전에 기다린다 — 연습 차시 상태·제출(`lessons/actions.ts`),
+  관리 상태·반 만들기(`admin/actions.ts`), 검사 action(`assessment/actions.ts`의 `deps()`), 채점기(`grading/index.ts`의 `grading`·`legacyV7Grading`),
+  게임·타임어택(`evaluate-prompt.ts`), 검사 이미지 경로(`api/research/asset`). 다른 서버 인스턴스는 최대 60초 뒤에 새 사본을 읽는다.
+  **실패는 닫힌 쪽**: 읽기 오류·해시 불일치·깨진 JSON이면 빈 팩(사유 포함)이고, 앞서 읽은 사본도 계속 쓰지 않는다. 읽기 오류는 캐시하지 않아 다음 요청이 다시 읽는다.
+  서버 자격증명(`FIREBASE_SERVICE_ACCOUNT_JSON`)이 없으면 사본이 없는 것으로 본다(로컬에서 요청마다 오류 로그가 쌓이지 않게).
+  스크립트(`score-assessments`·`manifest`)는 파일을 쓴다(`score-assessments`의 실채점은 채점기를 거치므로 파일이 없으면 사본을 읽는다).
+- **올리기**(`src/server/admin/cue-pack-actions.ts`, 화면 `src/app/admin/cue-pack-panel.tsx`의 `CuePackPanel` — '연구 자료' 탭에 붙인다):
+  파일을 고르면 먼저 **점검만** 한다(`checkCuePackUpload`: 900KB 이하·JSON·`parseCuePack` 최상위 형식·`cueVersion` 필수·통과 문항 1개 이상·
+  지금 사본과 cueVersion이 같은데 내용이 다르면 거절). 결과로 **L01~L36 문항별 적재/실격(고정 사유)/없음**을 보여 주고, 관리자가 저장을 누르면
+  서버가 **다시 점검한 뒤** 덮어쓴다. 연습 36문항이 다 차지 않거나 지금 사본보다 줄어들면 경고한다. 단서 본문은 화면에 돌려주지 않으며
+  레지스트리에 없는 ID는 문자열 대신 개수만 보인다. `admin_events`에는 `upload_cue_pack`/`delete_cue_pack`과 SHA-256·개수·cueVersion(이전 값 포함)만 남긴다.
+- 단서 팩이 적재되면 일반 체험·연수도 그 단서로 채점된다(`experience`는 단서가 있으면 쓴다는 기존 규칙). 예전에는 Vercel에 팩이 없어 늘 공통 문언만 썼다.
 
 ### 학생 입력은 데이터이지 지시가 아니다
 지시문이 학생 응답을 `<<<학생응답 시작>>> … <<<학생응답 끝>>>`으로 감싸고, 그 안의 명령·점수 요구를
@@ -287,7 +309,7 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 - 반을 만들면 **여섯 자리 수업 번호**(첫 자리 1~9)를 서버가 무작위로 정하고 `active:false`로 닫아 둔다.
   `classCode`=수업 번호, `requireStudentNumber`(일반 수업만), `managedBy:'admin_console'`을 함께 쓴다.
 - 반의 성격은 만들 때 한 번 정하고 바꾸지 않는다. 관리 화면에서 만들 수 있는 것은 **일반 수업과 연구 수업뿐**이다
-  (`parseCreatableSessionType`, 서버에서도 거부). **연구 수업은 `registry.readiness()`가 통과할 때만** 만든다.
+  (`parseCreatableSessionType`, 서버에서도 거부). **연구 수업은 `registry.readiness()`(논문 v12 조건, 아래 "연구 시작을 막는 값")가 통과할 때만** 만든다.
   논문 v12는 사전·사후 검사를 쓰지 않으므로 연구 검사(`research_assessment`) 반은 만들 수 없다. 그 세션 성격과 검사 경로는 옛 자료를 위해 코드에만 남아 있다.
 - 관리 화면에서 만든 반은 차시 기록에 `pacing:'teacher'`가 붙는다. 이 표시가 있으면 **일반 수업이어도 연 차시만** 열린다
   (`policy.ts`의 `teacherPaced`). 통제를 더할 수만 있고 연구 세션을 자율 진행으로 풀지는 못한다.
@@ -368,12 +390,12 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   한 번 입력하면 HttpOnly 쿠키(`rp_lecture`)를 심고 그 쿠키가 있을 때만 채점을 받는다.
   이 번호는 연수장에서 공유하는 값이므로 **비밀번호로 보지 않는다.** 막으려는 것은 URL이
   밖으로 퍼졌을 때의 무작위 모델 호출이지 인증이 아니다.
-- **아무것도 저장하지 않는다.** Firestore를 열지 않고 연구 컬렉션을 건드리지 않는다.
+- **아무것도 저장하지 않는다.** Firestore에 쓰지 않고 연구 컬렉션을 건드리지 않는다. 채점기가 채점 전에 단서 팩 사본(`admin_config/cue_pack`)을 읽는 것만 있다.
   여기 점수는 연구 자료가 아니며 교사 화면·내보내기에 나타나지 않는다. 화면에도 그렇게 적는다.
 - 문항은 연습 36개에서 뽑은 **고정 20개**(`src/lib/lecture-questions.ts`)뿐이다. 목록 밖 ID는
   서버가 거절한다. 검사 문항은 레지스트리가 `research_assessment`에만 허용하므로 애초에 열리지 않는다.
-- 채점은 일반 체험과 같은 `sessionType: 'experience'` 규칙(공통 루브릭 v12-2)이다. 문항별 비공개 단서가 없으므로
-  **공통 루브릭 문언만으로** 채점된다. 화면은 연습 화면과 같이 영역별 단계(●●●○)와 네 문장 피드백만 보이고 점수는 없다.
+- 채점은 일반 체험과 같은 `sessionType: 'experience'` 규칙(공통 루브릭 v12-2)이다. 단서 팩이 적재되지 않았으면
+  **공통 루브릭 문언만으로**, 적재되었으면(파일 또는 관리 화면에서 올린 사본) 그 단서로 채점된다. 화면은 연습 화면과 같이 영역별 단계(●●●○)와 네 문장 피드백만 보이고 점수는 없다.
 - 이 쿠키로는 연구 화면(`/practice`·`/assessment`·`/admin`)에 들어갈 수 없다. 그쪽은 그대로 서버 세션을 요구한다.
 - **연구 세션 학생은 `/lecture`를 쓸 수 없다.** 같은 L 그림으로 연구 밖에서 AI 채점을 받으면 연구 자료가 오염되기 때문이다.
   `middleware.ts` matcher에 `/lecture`를 넣어 연구 세션 힌트가 있으면 `/?blocked=lecture`로 돌려보내고, 연수 action도 연구 힌트 쿠키가 있으면
@@ -393,7 +415,8 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   채점자 payload에 **시점·학생·학급·자동 점수가 없다.**
 - 채점은 공통 루브릭 v12-2(영역별 1~4 또는 해당 없음)다. **최초 운영 채점(`repeatIndex: 1`)이 주 자료로 잠긴다.**
   반복 2·3은 신뢰도 분석용으로 영역별 수준을 따로 저장하며 주 자료를 덮어쓰지 않는다. 시점 혼합 순서는 시드로 재현한다.
-- 논문 v12는 사전·사후 검사를 쓰지 않는다. 검사 반(`research_assessment`)은 준비 조건(`readiness`) 때문에 지금 만들 수 없다.
+- 논문 v12는 사전·사후 검사를 쓰지 않는다. 검사 반(`research_assessment`)은 관리 화면이 만들지 않는다(`parseCreatableSessionType`).
+  검사 경로(수집·이미지 스트리밍·사후 채점)는 옛 준비 조건 `registry.assessmentReadiness()`(검사 문항 확정·이미지·해시·단서·`RESEARCH_ASSET_DIR`)로 그대로 막힌다.
 - 검사 이미지는 `public/`에 두지 않는다. `/api/research/asset/[questionId]`가 인증을 확인하고
   `private, no-store`로 스트리밍한다. **학생이 화면의 이미지를 복사하는 것까지 막았다고 주장하지 않는다.**
 
@@ -429,6 +452,7 @@ users                       # 계정과 역할 (관리 화면이 만든 교사: 
 research_classes            # 무작위 수업ID (실명 대응표는 저장소 밖)
                             #   + label·entryPassword(해시)·classCode·requireStudentNumber·managedBy
 admin_config/console        # 관리자 비밀번호 scrypt 해시
+admin_config/cue_pack       # 비공개 단서 팩 사본(json·sha256·cueVersion·개수). 클라이언트 거부, 서버만 읽음
 admin_events                # 관리 화면 조작 기록
 consents / consent_events   # 동의·승낙과 그 변경 이력
 student_sessions            # 학생 세션 토큰 폐기 목록
@@ -450,15 +474,24 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 
 ## 연구 시작을 막는 값 (미확정 운영값)
 
-`registry.readiness()`가 아래를 확인한다. 하나라도 걸리면 `researchReady=false`이고 연구 등록·검사·채점이 막힌다.
-**코드가 만들어 낼 수 없는 값을 자동으로 채우지 않는다.**
+**코드가 만들어 낼 수 없는 값을 자동으로 채우지 않는다.** 준비 조건은 둘로 나뉜다(`src/server/registry/entries.ts`).
 
-- 검사 문항 3개가 모두 `status: 'candidate'`, `approvedAt: null` — 전문가 검토·예비 채점 전
-- 비공개 단서 팩(`RESEARCH_ASSET_DIR/cue-pack.json`) 미적재
+**논문 v12 연구 수업** — `registry.readiness()`(`collectPracticeBlockers`). 하나라도 걸리면 `researchReady=false`이고
+관리 화면이 연구 수업 반을 만들지 않는다(`createClassAction`). 연구 세션 채점은 문항마다 단서가 없으면 따로 `cues_missing`으로 거부한다.
 - `CONSENT_VERSION` / `IRB_APPROVAL` / `EVALUATION_MODEL_VERIFIED` 미설정
-- 검사 이미지 SHA-256 불일치
+- 비공개 단서 팩(파일 또는 Firestore 사본) 미적재, 또는 팩이 `cueVersion`을 밝히지 않음
+- 연습 **L01~L36 가운데 하나라도** 단서가 없거나 검증에서 실격(빠진 문항 ID를 사유에 적는다)
 
-`candidate`를 코드가 `frozen`으로 올리는 경로는 만들지 않았다.
+사전·사후 검사 문항(T1~T3)의 확정 상태·이미지·해시·단서와 `RESEARCH_ASSET_DIR`은 **보지 않는다**(v12는 검사를 쓰지 않는다).
+
+**옛 사전·사후 검사** — `registry.assessmentReadiness()`(`collectAssessmentBlockers`, 예전 readiness 그대로). 검사 경로
+(`assessment/session.ts`의 `checkResearchStartAllowed`, 검사 이미지 경로)만 쓴다.
+- 검사 문항 3개가 모두 `status: 'candidate'`, `approvedAt: null` — 전문가 검토·예비 채점 전
+- `RESEARCH_ASSET_DIR` 미설정, 단서 팩 미적재, 검사 문항 단서 없음
+- `CONSENT_VERSION` / `IRB_APPROVAL` / `EVALUATION_MODEL_VERIFIED` 미설정
+- 검사 이미지 없음·SHA-256 불일치
+
+`candidate`를 코드가 `frozen`으로 올리는 경로는 만들지 않았다. `npm run manifest`는 두 결과를 `readiness`·`assessmentReadiness`로 함께 적는다.
 
 ## 학교 검색은 NEIS Open API
 
@@ -502,10 +535,13 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 - 번호로 세션을 이을 때 번호는 학생이 적은 값이다. 같은 반에서 다른 학생의 번호를 적으면 그 학생의 진행(낸 문항 번호)이 보인다.
   답안·점수는 보이지 않는다.
 - 검사(사전·사후) 세션 열기·닫기는 아직 교사 화면에만 있다. 관리 화면에는 없다.
-- **연구 반을 만들 수 없는 상태다.** `registry.readiness()`가 v12에서 쓰지 않는 사전·사후 검사 문항(T1~T3)의 확정·이미지·단서까지
-  요구한다. 이 조건을 v12에 맞게 줄일지는 연구 설계 결정이라 코드를 바꾸지 않았다.
+- 연구 반은 v12 준비 조건(운영값 셋 + 연습 36문항 단서, 위 "연구 시작을 막는 값")을 채워야 만들 수 있다. 지금 저장소 기본 상태로는
+  운영값과 단서 팩이 없어 만들 수 없다. 검사 문항(T1~T3) 조건은 v12 조건에서 뺐고 검사 경로에만 남아 있다.
 - 참가 번호(`research_classes/{id}/participants/{researchId}.codeHash`)와 동의 기록(`consents/{researchId}`)을 만드는 화면이 없다.
-- 연구 세션 채점은 비공개 단서 팩을 `RESEARCH_ASSET_DIR` 파일에서 읽는다. Vercel에는 저장소 밖 파일을 둘 자리가 없어 운영 방식을 정해야 한다.
+- 단서 팩은 Vercel에서 Firestore 관리자 전용 사본(`admin_config/cue_pack`)으로 읽는다(위 "단서 팩 보관"). 올리기·적재는 가짜 Firestore로만
+  시험했고 실제 운영 프로젝트·에뮬레이터·브라우저에서는 돌리지 않았다. 사본을 바꾸면 다른 서버 인스턴스에는 **최대 60초** 늦게 반영되어
+  그 사이에는 옛 팩과 새 팩이 인스턴스마다 섞여 쓰인다(각 기록의 `cueVersion`은 그 채점에 쓴 팩을 따른다) — 연구 수업 중에는 팩을 바꾸지 말 것.
+  단서 본문은 Firestore에 평문 JSON으로 있다(암호화하지 않음). 규칙이 클라이언트를 막을 뿐, 프로젝트 콘솔 권한자는 볼 수 있다.
 - v12 연구 추출 흐름(요약·제외·추출·CSV·연구 세션 학생 화면)은 로컬 에뮬레이터에서 가짜 연구 자료로 한 번 확인했다. 실제 연구 자료로는 돌리지 않았다.
 - **지금 켜기**(교사 로그인 방식 자동 설정)는 실제 Google API에 대고 시험하지 않았다. 에뮬레이터는 설정 없이 모든
   로그인을 받아 주므로 이 호출을 건너뛴다. 실패하면 화면이 콘솔 링크를 안내한다.
@@ -530,7 +566,9 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 | 게임·타임어택의 옛 v7 채점 | `src/lib/legacy-v7/`, `src/server/grading/legacy-v7.ts` |
 | 피드백 네 문장·영역·인용·금지 표현 검증 | `src/lib/feedback.ts` |
 | 문항 등록·검사 메타데이터 | `src/server/registry/entries.ts` |
-| 문항별 단서 | `RESEARCH_ASSET_DIR/cue-pack.json` (저장소 밖) |
+| 문항별 단서 | `RESEARCH_ASSET_DIR/cue-pack.json` (저장소 밖, 로컬) 또는 관리 화면 '연구 자료' 탭의 단서 팩(Firestore `admin_config/cue_pack`) |
+| 단서 팩 보관·적재 규칙(우선순위·TTL·올리기 점검) | `src/server/registry/cue-pack-store.ts` (배선은 `src/server/registry/index.ts`) |
+| 연구 수업·옛 검사 준비 조건 | `src/server/registry/entries.ts`의 `collectPracticeBlockers`·`collectAssessmentBlockers` |
 | 연습 문항 추가/수정 | `src/lib/questions.ts` + `public/questions/L01~L36.jpg` |
 | 차시 개방 판정 | `src/server/lessons/policy.ts` |
 | 세션별 허용 모드 | `src/lib/research/session-modes.ts` |

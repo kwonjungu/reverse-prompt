@@ -19,7 +19,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { auth } from '@/server/auth';
-import { registry } from '@/server/registry';
+import { ensureCuePackLoaded, registry } from '@/server/registry';
 import { legacyV7Grading } from '@/server/grading';
 import { assertModeAllowed } from '@/server/lessons/mode-policy';
 import type { Band } from '@/lib/scoring';
@@ -67,6 +67,7 @@ export async function evaluatePrompt(input: EvaluatePromptInput): Promise<Evalua
 
   // 3) 게임·타임어택 문항만. 등록되지 않았거나 이 세션에서 쓸 수 없는 문항이면 여기서 거부된다.
   if (!GAME_QUESTION_ID.test(questionId)) throw new Error(NOT_THIS_ACTIVITY_MESSAGE);
+  await ensureCuePackLoaded();
   const entry = registry.requireEntry(questionId, principal.sessionType);
 
   const run = await legacyV7Grading.runOperationalScoring({

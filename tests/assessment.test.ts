@@ -131,7 +131,7 @@ function fakeRegistry(options?: {
       durationSeconds: entry.durationSeconds,
       instruction: '그림을 보고, 무엇이 있고 어떻게 보이는지 자세히 써 봐요.',
     }),
-    readiness: () =>
+    assessmentReadiness: () =>
       researchReady
         ? { researchReady: true, blockers: [] }
         : { researchReady: false, blockers: ['전문가 확정 미완료'] },

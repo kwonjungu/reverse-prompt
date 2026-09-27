@@ -83,6 +83,14 @@ export interface RegistryApi {
   toPublicView(entry: RegistryEntry): PublicQuestionView;
   /** 검사 순서 T1 → T2_v7 → T3 */
   assessmentOrder(): string[];
-  /** 연구 시작 가능 여부와 막는 사유 */
+  /**
+   * 논문 v12 연구 수업(research_practice)을 열 수 있는가와 막는 사유.
+   * 운영값(CONSENT_VERSION·IRB_APPROVAL·EVALUATION_MODEL_VERIFIED)과 연습 L01~L36 단서 전부만 본다.
+   */
   readiness(): { researchReady: boolean; blockers: string[] };
+  /**
+   * 옛 사전·사후 검사(research_assessment)를 시작할 수 있는가와 막는 사유.
+   * 검사 문항 확정·이미지·해시·단서와 RESEARCH_ASSET_DIR까지 본다. 검사 경로만 쓴다.
+   */
+  assessmentReadiness(): { researchReady: boolean; blockers: string[] };
 }

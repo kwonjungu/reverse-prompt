@@ -1140,7 +1140,7 @@ function SettingsPanel(props: { status: AdminStatus; busy: boolean; act: Act }) 
           <AlertTitle>연구 준비 상태: {props.status.research.ready ? '준비됨' : '준비 전'}</AlertTitle>
           <AlertDescription>
             {props.status.research.ready ? (
-              '연구 수업·연구 검사 반을 만들 수 있습니다.'
+              '연구 수업 반을 만들 수 있습니다(논문 v12 조건: 운영값 + 연습 36문항 단서).'
             ) : (
               <ul className="list-disc pl-5 text-sm">
                 {props.status.research.blockers.map((b) => (
