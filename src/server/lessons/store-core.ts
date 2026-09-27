@@ -289,6 +289,30 @@ export interface LessonPaths {
   researchPracticeSubmissions: string;
   /** 일반 체험 제출. 비연구 수업 기록 트리 아래에 둔다. */
   experienceSubmissions(classCode: string): string;
+  /** 개인정보 보류 기록(연구). 학급은 필드(classKey)로 둔다. */
+  researchPrivacyHolds: string;
+  /** 개인정보 보류 기록(일반 체험). 비연구 수업 기록 트리 아래에 둔다. */
+  experiencePrivacyHolds(classCode: string): string;
+}
+
+/** 개인정보 보류 기록의 형식 버전 */
+export const PRIVACY_HOLD_SCHEMA_VERSION = 'v12.2-privacy-hold';
+
+/**
+ * 전송 전 개인정보 점검에 걸려 모델로 보내지 않은 제출 한 건(논문 v12-2 F4).
+ * 유형과 시각만 남긴다. 학생 글·일치한 글자·학생 식별자(연구ID·세션)는 담지 않는다.
+ * 학급 키와 문항은 건수를 셀 범위로만 둔다.
+ */
+export interface PrivacyHoldRecord {
+  schemaVersion: string;
+  sessionType: SessionType;
+  /** 연구 수업은 학급 연구ID, 일반 수업은 학급 코드 */
+  classKey: string;
+  questionId: string;
+  /** 점검에 걸린 유형(예: phone, email). 원문은 담지 않는다. */
+  types: string[];
+  checkVersion: string | null;
+  heldAt: string;
 }
 
 export interface LessonStoreDeps {
@@ -355,6 +379,10 @@ export interface LessonStore {
     ownerKey: string;
     review: FeedbackReview;
   }): Promise<SaveResult>;
+  /** 개인정보 보류를 남긴다. 실패해도 학생 화면의 보류 안내는 그대로 나간다. */
+  recordPrivacyHold(record: PrivacyHoldRecord): Promise<{ ok: boolean }>;
+  /** 한 학급의 개인정보 보류 기록(건수·유형·시각) */
+  listPrivacyHolds(sessionType: SessionType, classKey: string): Promise<PrivacyHoldRecord[]>;
   /** ownerKey를 여럿 주면 한 학생의 여러 세션(다시 들어온 경우)을 합쳐 센다. */
   readStudentSubmissions(
     sessionType: SessionType,
@@ -439,8 +467,37 @@ export function createLessonStore(deps: LessonStoreDeps): LessonStore {
     return paths.researchPracticeSubmissions;
   };
 
+  const holdCollection = (sessionType: SessionType, classKey: string): string =>
+    sessionType === 'experience'
+      ? paths.experiencePrivacyHolds(safeDocId(classKey, '학급'))
+      : (safeDocId(classKey, '학급'), paths.researchPrivacyHolds);
+
   return {
     durable: backend.durable,
+
+    async recordPrivacyHold(record) {
+      try {
+        const collection = holdCollection(record.sessionType, record.classKey);
+        const docId = `${record.heldAt.replace(/[^0-9]/g, '')}-${globalThis.crypto.randomUUID().slice(0, 8)}`;
+        await backend.create(collection, docId, {
+          schemaVersion: PRIVACY_HOLD_SCHEMA_VERSION,
+          sessionType: record.sessionType,
+          classKey: record.classKey,
+          questionId: record.questionId,
+          types: [...record.types],
+          checkVersion: record.checkVersion,
+          heldAt: record.heldAt,
+        } satisfies PrivacyHoldRecord);
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+
+    async listPrivacyHolds(sessionType, classKey) {
+      const collection = holdCollection(sessionType, classKey);
+      return backend.query<PrivacyHoldRecord>(collection, 'classKey', classKey);
+    },
 
     async readLessonSession(classResearchId) {
       safeDocId(classResearchId, '학급');

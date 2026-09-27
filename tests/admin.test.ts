@@ -255,6 +255,8 @@ test('차시 기록의 pacing이 판정 상태로 옮겨진다', async () => {
       lessonSessions: 'lessons',
       researchPracticeSubmissions: 'research',
       experienceSubmissions: (c) => `classes/${c}/exp`,
+      researchPrivacyHolds: 'research/holds',
+      experiencePrivacyHolds: (c) => `classes/${c}/holds`,
     },
     safeDocId: (v) => v,
   });

@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useState, useTransition } from 'react';
 import Image from 'next/image';
 import { LECTURE_QUESTIONS, lectureQuestionId } from '@/lib/lecture-questions';
-import { FEEDBACK_FALLBACK_TEXT, FEEDBACK_LINE_COUNT } from '@/lib/feedback';
+import { FEEDBACK_CAUTION, FEEDBACK_FALLBACK_TEXT, FEEDBACK_LINE_COUNT } from '@/lib/feedback';
 import { AREA_IDS, AREA_LABEL, type AreaId, type AreaLevels } from '@/lib/scoring';
 import { STAGE_TITLE } from '@/lib/stages';
 import {
@@ -375,7 +375,7 @@ export default function LecturePage() {
               <Card className="rounded-xl bg-card/80 backdrop-blur-sm">
                 <CardHeader>
                   <CardTitle className="font-headline text-2xl tracking-tight">
-                    AI 선생님의 피드백
+                    AI 피드백
                   </CardTitle>
                 </CardHeader>
                 {result.scoring.status === 'missing' ? (
@@ -397,6 +397,9 @@ export default function LecturePage() {
                     </div>
                   </CardContent>
                 )}
+                <CardContent className="pt-0">
+                  <p className="border-t pt-3 text-sm text-muted-foreground">{FEEDBACK_CAUTION}</p>
+                </CardContent>
                 <CardFooter>
                   <Button variant="outline" onClick={reset} className="w-full sm:w-auto">
                     <RotateCcw className="mr-2 h-4 w-4" />

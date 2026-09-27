@@ -118,6 +118,10 @@ export const RESEARCH_COLLECTIONS = {
   extractionExclusions: 'extraction_exclusions',
   /** 층화 무작위 추출 결과. 시드·후보·제외 목록을 함께 남겨 다시 만들 수 있게 한다. */
   extractionSamples: 'extraction_samples',
+  /** 추출 사례의 반복 채점(2·3회차). 주 자료(제출 문서의 1회차)는 건드리지 않는다. */
+  sampleRepeatScores: 'sample_repeat_scores',
+  /** 전송 전 개인정보 점검으로 멈춘 제출(유형·시각만). 원문은 남기지 않는다. */
+  privacyHolds: 'privacy_holds',
 } as const;
 
 export type ResearchCollection =

@@ -18,10 +18,10 @@ const range = (from: number, to: number) => Array.from({ length: to - from + 1 }
 const EXPECTED: Array<{ chasi: number; title: string; levels: number[]; focus: string | null }> = [
   { chasi: 1, title: '도구와 작성 방식 이해', levels: range(1, 6), focus: null },
   { chasi: 2, title: '대상과 수량', levels: range(7, 12), focus: 'object' },
-  { chasi: 3, title: '특징', levels: range(19, 24), focus: 'feature' },
-  { chasi: 4, title: '관계', levels: range(13, 18), focus: 'relation' },
+  { chasi: 3, title: '특징 구체화', levels: range(19, 24), focus: 'feature' },
+  { chasi: 4, title: '관계 표현', levels: range(13, 18), focus: 'relation' },
   { chasi: 5, title: '피드백 검토와 재작성', levels: range(25, 30), focus: null },
-  { chasi: 6, title: '종합', levels: range(31, 36), focus: null },
+  { chasi: 6, title: '종합 작성', levels: range(31, 36), focus: null },
 ];
 
 test('6단계의 이름·문항·초점 영역이 배치표와 같다', () => {
@@ -99,6 +99,14 @@ test('밴드는 단계와 무관하게 문항 번호로 정한다 — A=L01–12
   for (const lv of STAGES.find((s) => s.chasi === 3)!.levels) assert.equal(bandOf(lv), 'B');
   for (const lv of STAGES.find((s) => s.chasi === 4)!.levels) assert.equal(bandOf(lv), 'B');
   for (const lv of STAGES.find((s) => s.chasi === 5)!.levels) assert.equal(bandOf(lv), 'C');
+  // D1: 밴드 A = 1·2단계, B = 3·4단계, C = 5·6단계
+  const bandOfStage = (chasi: number) => new Set(STAGES.find((s) => s.chasi === chasi)!.levels.map(bandOf));
+  assert.deepEqual([...bandOfStage(1)], ['A']);
+  assert.deepEqual([...bandOfStage(2)], ['A']);
+  assert.deepEqual([...bandOfStage(3)], ['B']);
+  assert.deepEqual([...bandOfStage(4)], ['B']);
+  assert.deepEqual([...bandOfStage(5)], ['C']);
+  assert.deepEqual([...bandOfStage(6)], ['C']);
 });
 
 test('PRACTICE_QUESTIONS — 36문항이 제시 순서로 정렬되고 단계·이미지·ID는 문항 번호를 따른다', () => {

@@ -96,6 +96,8 @@ const PATHS: LessonPaths = {
   lessonSessions: 'test/lesson_sessions',
   researchPracticeSubmissions: 'test/practice_submissions',
   experienceSubmissions: (classCode: string) => `test/classes/${classCode}/experience`,
+  researchPrivacyHolds: 'test/research/privacy_holds',
+  experiencePrivacyHolds: (classCode: string) => `test/classes/${classCode}/privacy_holds`,
 };
 
 function newStore(): { store: LessonStore; dump: () => Map<string, unknown> } {
@@ -183,7 +185,7 @@ interface Harness {
 /** 저장소에 남은 제출 문서만 골라 낸다(차시 개방 기록은 뺀다). */
 function submissionRows(h: Harness): PracticeSubmissionRecord[] {
   return [...h.dump().entries()]
-    .filter(([k]) => !k.startsWith(`${PATHS.lessonSessions}/`))
+    .filter(([k]) => !k.startsWith(`${PATHS.lessonSessions}/`) && !k.includes('/privacy_holds/'))
     .map(([, v]) => v as PracticeSubmissionRecord);
 }
 
@@ -580,13 +582,42 @@ test('A-6 피드백 검토의 학급도 서버 세션이 정한다', async () =>
     experienceCtx,
     {
       submissionId,
-      kind: 'kept',
-      note: '그대로 두었어요',
+      kind: 'revised',
       // 클라이언트가 다른 학급을 지정해도 무시된다.
       experienceClassCode: '0000000_1-1',
     }
   );
   assert.equal(res.ok, true);
+});
+
+test('E1 학생은 까닭을 적지 않는다 — 일반 체험에서도 kept·note를 받지 않는다', async () => {
+  const h = newHarness();
+  const submitted = await submitPracticeCore(h.deps, experienceCtx, baseInput);
+  const submissionId = submitted.status === 'done' ? submitted.submissionId : '';
+  const kept = await recordFeedbackReviewCore(
+    { store: h.deps.store, now: h.deps.now },
+    experienceCtx,
+    { submissionId, kind: 'kept', note: '그대로 두었어요' }
+  );
+  assert.equal(kept.ok, false);
+  assert.equal(kept.message, REVIEW_NOTE_NOT_COLLECTED_MESSAGE);
+  // 고쳐 쓰기 연결은 남고, 함께 온 글은 저장하지 않는다.
+  const revised = await recordFeedbackReviewCore(
+    { store: h.deps.store, now: h.deps.now },
+    experienceCtx,
+    { submissionId, kind: 'revised', note: '몰래 적은 까닭' }
+  );
+  assert.equal(revised.ok, true);
+  const json = JSON.stringify([...h.dump()]);
+  assert.equal(json.includes('몰래 적은 까닭'), false, '까닭 글이 어딘가에 저장되었다');
+  assert.equal(json.includes('그대로 두었어요'), false, '까닭 글이 어딘가에 저장되었다');
+});
+
+test('E1 학생 화면에 까닭 입력칸이 없다', () => {
+  const src = readFileSync(path.join(process.cwd(), 'src', 'app', 'practice', 'page.tsx'), 'utf8');
+  assert.equal(/kind:\s*'kept'/.test(src), false, '연습 화면이 kept를 보낸다');
+  assert.equal(src.includes('까닭'), false, '연습 화면에 까닭 안내가 남아 있다');
+  assert.equal(src.includes('keep-note'), false);
 });
 
 /* ────────────────── A-7: 저장 상태를 사실대로 기록한다 ────────────────── */
@@ -787,6 +818,42 @@ test('개인정보가 의심되면 모델에 보내지 않는다', async () => {
   assert.equal(h.gradeCalls(), 0);
 });
 
+test('F4 개인정보 보류는 보류 여부·유형·시각만 기록하고 글·학생은 남기지 않는다', async () => {
+  const h = await newResearchHarness();
+  const deps: SubmitDeps = {
+    ...h.deps,
+    checkPii: () => ({ decision: 'hold_for_teacher', matchedTypes: ['phone'], checkVersion: 'pii-test-1' }),
+  };
+  const res = await submitPracticeCore(deps, researchCtx, baseInput);
+  assert.equal(res.status, 'blocked');
+  assert.equal(h.gradeCalls(), 0);
+  const holds = await h.store.listPrivacyHolds('research_practice', 'CLS-AAA');
+  assert.equal(holds.length, 1);
+  assert.deepEqual(holds[0], {
+    schemaVersion: 'v12.2-privacy-hold',
+    sessionType: 'research_practice',
+    classKey: 'CLS-AAA',
+    questionId: SYNTH_ENTRY.questionId,
+    types: ['phone'],
+    checkVersion: 'pii-test-1',
+    heldAt: '2026-09-07T00:10:00.000Z',
+  });
+  const json = JSON.stringify([...h.dump()]);
+  assert.equal(json.includes(SYNTH_TEXT), false, '보류된 글이 저장되었다');
+  assert.equal(json.includes('R-001'), false, '보류 기록에 연구ID가 남았다');
+  // 제출 문서는 생기지 않는다(모델로 보내지 않았으므로).
+  assert.equal(submissionRows(h).length, 0);
+
+  // 일반 체험도 같은 모양으로 반 아래에 남는다.
+  const e = newHarness();
+  const eDeps: SubmitDeps = { ...e.deps, checkPii: () => ({ decision: 'hold_for_teacher', matchedTypes: ['email'] }) };
+  await submitPracticeCore(eDeps, experienceCtx, baseInput);
+  const eHolds = await e.store.listPrivacyHolds('experience', experienceCtx.classCode!);
+  assert.equal(eHolds.length, 1);
+  assert.deepEqual(eHolds[0].types, ['email']);
+  assert.equal(JSON.stringify([...e.dump()]).includes('sid-1'), false, '보류 기록에 세션이 남았다');
+});
+
 test('채점이 실패해도 글은 저장하고 점수를 만들지 않는다', async () => {
   const h = await newResearchHarness({ gradeThrows: true });
   const res = await submitPracticeCore(h.deps, researchCtx, baseInput);
@@ -816,6 +883,54 @@ test('v12-2 화면 결과는 영역별 수준만 담고 100점·종합 수준이
   }
   assert.equal(res.feedback?.status, 'verified');
   assert.equal(res.feedback?.text.split('\n').length, 4);
+});
+
+test('F1 시도마다 저장하는 필드(논문 Ⅲ.3.다) — 문장·피드백 원문·영역별 수준·근거·시각·모델·버전·이미지 해시', async () => {
+  const h = await newResearchHarness({ objectLevel: 3 });
+  await submitPracticeCore(h.deps, researchCtx, baseInput);
+  const [row] = submissionRows(h) as unknown as Record<string, any>[];
+  // 제출 문장
+  assert.equal(row.text, SYNTH_TEXT);
+  // 피드백 원문(네 줄)과 상태
+  assert.equal(typeof row.scoring.feedback.text, 'string');
+  assert.equal(row.scoring.feedback.text.split('\n').length, 4);
+  assert.ok(['verified', 'regenerated', 'fallback'].includes(row.scoring.feedback.status));
+  // 영역별 수준(해당 없음 포함)과 근거·빠진 정보·증거 부족
+  for (const area of ['object', 'feature', 'relation']) {
+    const a = row.scoring.result.areas[area];
+    assert.ok('level' in a && 'evidence' in a && 'missing' in a && 'evidenceMissing' in a, area);
+  }
+  assert.equal(row.scoring.result.areas.relation.level, 'not_applicable');
+  // 시작·제출 시각, 걸린 시간
+  assert.equal(row.startedAt, baseInput.startedAt);
+  assert.equal(typeof row.submittedAt, 'string');
+  assert.equal(typeof row.durationMs, 'number');
+  // 모델(설정값과 실제 응답 모델)·지시문 해시·루브릭·단서·스키마 버전·이미지 해시
+  assert.equal(row.scoring.modelId, 'fake-model');
+  assert.ok('servedModel' in row.scoring);
+  assert.ok('promptHash' in row.scoring);
+  assert.equal(row.rubricVersion, 'v12-2');
+  assert.ok('cueVersion' in row);
+  assert.equal(row.schemaVersion, 'v12.2-practice-submission');
+  assert.ok('imageHash' in row);
+  // 연구ID·학급·문항·밴드·시도 번호
+  assert.equal(row.researchId, 'R-001');
+  assert.equal(row.classResearchId, 'CLS-AAA');
+  assert.equal(row.questionId, SYNTH_ENTRY.questionId);
+  assert.equal(row.attemptNo, 1);
+  assert.ok('band' in row);
+  // 결측(자료 없음)은 수준 1이 아니라 areas: null로 남는다.
+  const m = await newResearchHarness({ gradeThrows: true });
+  await submitPracticeCore(m.deps, researchCtx, baseInput);
+  const [missingRow] = submissionRows(m) as unknown as Record<string, any>[];
+  assert.equal(missingRow.scoring.result, null);
+  assert.equal(missingRow.responseStatus, 'submitted');
+  // 이름·출석번호·학교는 없다.
+  const json = JSON.stringify(row);
+  for (const key of ['studentName', 'name', 'attendanceNumber', 'schoolName', 'studentNumber']) {
+    assert.equal(key in row, false, `${key}가 저장되었다`);
+  }
+  assert.equal(json.includes('studentNumber'), false);
 });
 
 test('채점 기록에 설정 모델과 실제로 답한 모델을 함께 남긴다', async () => {

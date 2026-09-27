@@ -24,7 +24,7 @@ AI가 축별 5수준으로 판정하고 피드백을 준다. 석사 학위논문
 ## 기술 스택
 
 - Next.js 15 (App Router, Turbopack) + React 18
-- Genkit + Google Gemini (모델 ID는 `EVALUATION_MODEL_ID`, 기본 `googleai/gemini-3.8-flash`)
+- Genkit + Google Gemini (모델 ID는 `EVALUATION_MODEL_ID`, 기본 `googleai/gemini-2.5-flash` — `src/server/config.ts` 한 곳에서 정한다)
 - Firebase — 클라이언트 SDK + 서버 `firebase-admin`(권한 검증 후 쓰기), Firestore 보안 규칙은 기본 거부
 - shadcn/ui + Tailwind CSS
 

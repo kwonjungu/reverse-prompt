@@ -17,7 +17,12 @@ import path from 'node:path';
 
 // tsx가 .ts를 CommonJS로 읽으므로 이름 있는 import 대신 모듈 전체를 받아 꺼낸다.
 const pick = (mod) => mod.default ?? mod;
-const { PRACTICE_HINTS, HINT_GOAL, HINT_CHECK, HINT_C_OPTIONAL } = pick(await import('../src/lib/practice-hints.ts'));
+const { PRACTICE_HINTS, HINT_GOAL, HINT_CHECK, HINT_C_OPTIONAL, STAGE_GOAL } = pick(
+  await import('../src/lib/practice-hints.ts')
+);
+const { RELATION_NOT_APPLICABLE_QUESTIONS, STILL_SCENE_QUESTIONS, defaultNotApplicableAreas } = pick(
+  await import('../src/lib/question-areas.ts')
+);
 const { PRACTICE_QUESTIONS } = pick(await import('../src/lib/questions.ts'));
 const { AREA_LABEL, bandOf } = pick(await import('../src/lib/scoring.ts'));
 const { STAGES, STAGE_TITLE, stageFocusArea } = pick(await import('../src/lib/stages.ts'));
@@ -68,10 +73,9 @@ const LEGACY_DRAFTS = {
 };
 
 /**
- * A밴드(L01–L12) 관계 질문 점검 — "서로 어디에 있는지(위·아래·왼쪽·오른쪽)"는 대상이 둘 이상일 때만 뜻이 있다.
- * 그림(public/questions/L01~L12.jpg)을 직접 보고 적었다. 힌트 문구는 바꾸지 않는다.
- * 'na'는 단서 팩에서 관계를 not_applicable로 둘 후보, 'applies'는 관계를 판정할 거리가 있는 문항이다.
- * 단서 팩에서 not_applicable로 정하면 서버가 알려 준 대로 학생 화면에서 관계 질문이 빠진다(withoutAreas).
+ * A밴드(L01–L12) 관계 판단 — "서로 어디에 있는지"는 대상이 둘 이상일 때만 뜻이 있다.
+ * 그림(public/questions/L01~L12.jpg)을 직접 보고 적었다. 'na'는 관계 해당 없음, 'applies'는 관계를 판정할 거리가 있는 문항이다.
+ * 'na' 목록은 src/lib/question-areas.ts의 RELATION_NOT_APPLICABLE_QUESTIONS와 같아야 한다(아래에서 확인한다).
  */
 const A_RELATION = {
   L01: { verdict: 'na', why: '흰 바탕에 대상 하나뿐(꼭지는 대상의 한 부분).' },
@@ -95,17 +99,17 @@ const NOTES = {
   L11: '날개를 편 나비 한 마리가 그림을 가득 채움. "날개"라는 말은 예전 초안에서도 뺐음(대상 추측 단서).',
   L12: '돌 네 개 가운데 하나는 납작한 판 모양이라 모양 차이도 볼 거리.',
   L17: '왼쪽 위 노란 원(해로 볼 수 있음). B밴드라 시간대는 요구하지 않음.',
-  L19: '이제 3단계(특징). 예전 4차시 공통 안내가 요구하던 "질감"은 새 확인 질문(색과 모양)에 없음. 털의 질감을 특징 영역 필수 단서로 둘지 단서 팩에서 결정.',
-  L20: '반짝이는 금속 겉면(질감)을 특징 단서로 둘지 L19와 함께 결정. 검은 손잡이·뚜껑 꼭지. 행동하는 대상이 없음 — 관계 질문("무엇을 하고 있는지")은 놓인 곳(파란 바닥면·노란 배경)으로만 판정될 것. 관계 단서를 놓인 곳으로 둘지 결정.',
+  L19: '3단계(특징). 3단계 특징 질문은 겉모습(매끈한지·거친지)까지 묻는다. 털의 질감을 필수 속성으로 둘지는 단서 팩이 정한다.',
+  L20: '반짝이는 금속 겉면(질감)은 3단계 겉모습 질문에 들어감(필수 여부는 단서 팩). 검은 손잡이·뚜껑 꼭지. 추상 도형 배경 위 파란 받침이라 놓인 곳을 알 수 없어 관계는 해당 없음.',
   L21: '두 팔로 무릎을 감싸고 앉은 자세.',
-  L22: '행동이 없는 문항. 배경(풀밭·덤불·하늘)과 뿌리 모양이 볼 거리. 관계는 장소(풀밭)만 판정할 거리 — 관계 단서를 장소로만 둘지 결정.',
-  L23: '배경은 장소가 아니라 파란 네모와 노란 원. 줄 공책 종이. 행동·장소가 없어 관계 질문("어디에서 무엇을")이 맞지 않음 — 단서 팩에서 관계를 not_applicable로 정할지, 배경 도형과의 앞뒤로 판정할지 결정.',
-  L24: '장소는 욕실(욕조·타일). 수건이 고리에 걸려 물이 떨어져 바닥에 고임. 행동 대신 상태(걸려 있음·물이 떨어짐)를 관계로 볼지 결정.',
+  L22: '행동이 없는 문항. 배경(풀밭·덤불·하늘)과 뿌리 모양이 볼 거리. 관계 질문은 놓인 모양으로 묻는다 — 관계 단서를 장소(풀밭)로 적을 것.',
+  L23: '배경은 장소가 아니라 파란 네모와 노란 원. 줄 공책 종이. 장소가 없어 관계는 해당 없음.',
+  L24: '장소는 욕실(욕조·타일). 수건이 고리에 걸려 물이 떨어져 바닥에 고임. 관계 질문은 놓인 모양으로 묻는다(걸려 있음·물이 떨어짐).',
   L26: '비 오는 날 창가. 시간대(낮)를 그림만으로 단정하기 어려움(예전 초안은 날씨로 안내함). C밴드 선택 안내가 "언제인지 알 수 있다면"이라 시간대를 필수 단서로 두지 말 것.',
   L27: '제목에 없지만 아이 두 명과 벤치가 있음. 밤·눈.',
-  L28: '빈 교실, 왼쪽 창으로 햇빛. 아침인지 그림만으로 단정은 어려움(예전 초안은 빛을 근거로 쓰라고만 안내). 사람이 없어 관계 질문의 "무엇을 하고 있는지"는 판정할 거리가 없음 — 관계 단서를 장소·놓인 곳으로 둘지 결정.',
+  L28: '빈 교실, 왼쪽 창으로 햇빛. 아침인지 그림만으로 단정은 어려움(예전 초안은 빛을 근거로 쓰라고만 안내). 사람이 없어 관계 질문은 놓인 모양으로 묻는다 — 관계 단서를 장소·놓인 곳으로 적을 것.',
   L29: '안개 낀 숲길에 토끼 한 마리, 오른쪽에 버섯·통나무.',
-  L30: '해 질 무렵 빈 놀이터. 그네·미끄럼틀·흔들 말·모래밭. 사람이 없어 관계는 놓인 곳으로만 판정할 거리 — L28과 함께 결정.',
+  L30: '해 질 무렵 빈 놀이터. 그네·미끄럼틀·흔들 말·모래밭. 사람이 없어 관계 질문은 놓인 모양으로 묻는다 — L28과 함께 정할 것.',
   L32: '시간대 단정 어려움(분홍빛 하늘·불 켜진 창문). 예전 초안은 근거를 보고 생각하라고만 안내. 시간대를 필수 단서로 두지 말 것.',
   L34: '시간대 단정 어려움(연분홍 하늘). 제목은 "오후". 예전 초안은 근거를 보고 생각하라고만 안내. 시간대를 필수 단서로 두지 말 것.',
   L35: '창밖 빛만으로 아침·오후 구분이 어려움. 제목은 "오후". 시간대를 필수 단서로 두지 말 것.',
@@ -117,14 +121,15 @@ function escapeCell(value) {
 
 const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
 
-/** 확인 질문 칸 — 순서대로, 단계 초점 영역은 굵게 '초점'으로 표시 */
-function renderChecks(checks, focus) {
+/** 확인 질문 칸 — 순서대로, 단계 초점 영역은 굵게 '초점'으로 표시. 기본 해당 없음 영역은 취소선과 표시 */
+function renderChecks(checks, focus, skip) {
   return checks
     .map((c, i) => {
       const n = CIRCLED[i] ?? `${i + 1}.`;
       if (c.area === null) return `${n} (선택) ${escapeCell(c.text)}`;
       const label = AREA_LABEL[c.area];
       const tag = c.area === focus ? `**[${label}·초점]**` : `[${label}]`;
+      if (skip.includes(c.area)) return `${n} ${tag} ~~${escapeCell(c.text)}~~ (기본 해당 없음 — 화면에서 빠짐)`;
       return `${n} ${tag} ${escapeCell(c.text)}`;
     })
     .join('<br>');
@@ -136,10 +141,12 @@ function renderMemo(id) {
   if (rel) {
     parts.push(
       rel.verdict === 'na'
-        ? `**관계: not_applicable 후보** — ${rel.why} 단서 팩에서 관계를 not_applicable로 정할지 결정.`
+        ? `**관계: 기본 해당 없음** — ${rel.why}`
         : `관계: 판정 거리 있음 — ${rel.why}`
     );
   }
+  if (STILL_SCENE_QUESTIONS.includes(id)) parts.push('관계 질문: 놓인 모양(물건·풍경).');
+  if (id === 'L20' || id === 'L23') parts.push('**관계: 기본 해당 없음** — 추상 도형 배경이라 장소를 알 수 없음(단서 팩이 있으면 단서 팩이 우선).');
   if (NOTES[id]) parts.push(NOTES[id]);
   return escapeCell(parts.join(' / '));
 }
@@ -154,7 +161,7 @@ const rows = PRACTICE_QUESTIONS.map((q) => {
     stage: `${q.chasi} · ${STAGE_TITLE[q.chasi]}`,
     band: bandOf(q.level),
     goal: draft.goal,
-    checks: renderChecks(draft.checks, focus),
+    checks: renderChecks(draft.checks, focus, defaultNotApplicableAreas(id)),
     reviewed: draft.reviewed,
     legacy: LEGACY_DRAFTS[id] ?? '',
     memo: renderMemo(id),
@@ -166,6 +173,10 @@ if (missingLegacy.length) throw new Error(`예전 초안이 없는 문항: ${mis
 
 const reviewedIds = rows.filter((r) => r.reviewed).map((r) => r.id);
 const naCandidates = Object.entries(A_RELATION).filter(([, v]) => v.verdict === 'na').map(([id]) => id);
+const naA = RELATION_NOT_APPLICABLE_QUESTIONS.filter((id) => Number(id.slice(1)) <= 12);
+if (naCandidates.join(',') !== naA.join(',')) {
+  throw new Error(`A_RELATION의 해당 없음(${naCandidates.join(',')})이 RELATION_NOT_APPLICABLE_QUESTIONS의 A밴드와 다르다`);
+}
 const relationApplies = Object.entries(A_RELATION).filter(([, v]) => v.verdict === 'applies').map(([id]) => id);
 const stageLine = (s) => {
   const ids = s.levels.map((l) => `L${String(l).padStart(2, '0')}`);
@@ -181,33 +192,38 @@ const lines = [
   '',
   `검수 완료 ${reviewedIds.length}/${rows.length}${reviewedIds.length ? ` (${reviewedIds.join(', ')})` : ''}.`,
   '',
-  '## 승인하는 방법',
+  '## 승인하는 방법 — 문항 ID를 넣는다',
   '',
-  '1. 아래 표에서 문항의 확인 질문을 실제 그림(`public/questions/Lxx.jpg`)과 견주어 본다.',
-  '2. 그림에 맞지 않는 영역 질문이 있으면(예: 대상이 하나뿐인 그림의 관계 질문) **문구를 고치지 말고**',
-  '   비공개 단서 팩(`RESEARCH_ASSET_DIR/cue-pack.json`)에서 그 영역을 `not_applicable`로 정한다.',
-  '   그러면 채점에서 그 영역이 해당 없음이 되고, 학생 화면에서도 그 질문이 빠진다(`withoutAreas`).',
-  '   이 표는 단서 팩을 모르므로 세 영역 질문을 모두 보여 준다.',
-  '3. 승인할 문항 ID를 `src/lib/practice-hints.ts`의 `REVIEWED_QUESTIONS`에 더한다.',
+  '1. 아래 표에서 문항의 목표·확인 질문을 실제 그림(`public/questions/Lxx.jpg`)과 견주어 본다.',
+  '2. 승인할 문항 ID를 `src/lib/practice-hints.ts`의 `REVIEWED_QUESTIONS`에 더한다(넣은 문항만 학생 화면에 나간다).',
   '',
   '   ```ts',
   "   export const REVIEWED_QUESTIONS: readonly string[] = ['L01', 'L02'];",
   '   ```',
   '',
-  '4. `npm run hints:table`로 이 표를 다시 만들고 `npm test`를 돌린다(`tests/hints.test.ts`가 표와 원본이 맞는지 본다).',
+  '3. `npm run hints:table`로 이 표를 다시 만들고 `npm test`를 돌린다(`tests/hints.test.ts`가 표와 원본이 맞는지 본다).',
+  '4. 커밋해 `main`에 올린다. 36개를 모두 켠 미리 보기 판은 별도 브랜치에만 둔다(`main`에 올리지 않는다).',
   '',
   '- **`REVIEWED_QUESTIONS`에 들어간 문항의 힌트만 학생 화면에 나간다.** 들어가기 전에는 단계 공통 안내(`src/lib/questions.ts`의 `GUIDE`)가 나간다.',
-  '- 문구 자체를 바꾸려면 `HINT_GOAL`·`HINT_CHECK`·`HINT_C_OPTIONAL`을 고친다. 36문항에 함께 바뀐다.',
-  '- 힌트는 정답 값(대상 이름·색 이름·개수)과 그림의 특정 부위를 말하지 않는다(`tests/hints.test.ts`가 숫자·색·개수 낱말을 막는다).',
+  '- 문구 자체를 바꾸려면 `HINT_GOAL`·`STAGE_GOAL`·`HINT_CHECK`·`HINT_C_OPTIONAL`을 고친다. 36문항에 함께 바뀐다.',
+  '- 관계 질문의 문항별 예외와 관계 해당 없음 문항은 `src/lib/question-areas.ts` 한 곳에서 정한다.',
+  '- 그 밖에 그림에 맞지 않는 영역 질문이 있으면 비공개 단서 팩(`RESEARCH_ASSET_DIR/cue-pack.json`)에서 그 영역을 해당 없음으로 정한다.',
+  '  채점에서 그 영역이 해당 없음이 되고 학생 화면에서도 그 질문이 빠진다(`withoutAreas`). 이 표는 단서 팩을 모른다.',
+  '- 힌트는 정답 값(대상 이름·색 이름·개수)과 그림의 특정 부위를 말하지 않는다(`tests/hints.test.ts`가 36문항 전부를 본다).',
   '',
   '## 힌트 구성 (루브릭 v12-2)',
   '',
-  `- **목표(공통)**: ${HINT_GOAL}`,
+  `- **목표** = 공통 문장 + 단계별 둘째 문장. 공통: ${HINT_GOAL}`,
+  ...Object.entries(STAGE_GOAL).map(([chasi, text]) => `  - ${chasi}단계: ${text}`),
   '- **확인 질문**: 영역마다 한 문장, 그 문항에서 판정하는 영역만.',
   `  - 대상: ${HINT_CHECK.object}`,
-  `  - 특징: ${HINT_CHECK.feature}`,
+  `  - 특징(1·2·4·5·6단계): ${HINT_CHECK.feature}`,
+  `  - 특징(3단계 L19–L24): ${HINT_CHECK.featureStage3}`,
   `  - 관계(A밴드 L01–L12): ${HINT_CHECK.relationA}`,
-  `  - 관계(B·C밴드 L13–L36): ${HINT_CHECK.relationBC}`,
+  `  - 관계(물건·풍경 ${STILL_SCENE_QUESTIONS.join(', ')}): ${HINT_CHECK.relationStill}`,
+  `  - 관계(그 밖의 B·C밴드, 사람·동물): ${HINT_CHECK.relationBC}`,
+  `  - 관계 기본 해당 없음(${RELATION_NOT_APPLICABLE_QUESTIONS.join(', ')}): 화면에서 관계 질문이 빠진다. 단서 팩이 있으면 단서 팩이 우선한다`,
+  '    (대상이 하나인 A밴드 그림, 장소를 알 수 없는 L20·L23). 표에는 ~~취소선~~으로 남겨 둔다.',
   `  - C밴드(L25–L36) 선택 안내(영역 없음, 맨 뒤): ${HINT_C_OPTIONAL}`,
   '- 단계 초점 영역의 질문을 맨 앞에 둔다. 표의 **[영역·초점]** 표시가 그것이다.',
   '',
@@ -217,14 +233,12 @@ const lines = [
   '',
   '밴드는 문항 번호로 정한다(A=L01–L12, B=L13–L24, C=L25–L36). 그래서 4단계(관계, L13–L18)는 B밴드, 3단계(특징, L19–L24)도 B밴드다.',
   '',
-  '## A밴드 관계 질문 점검',
+  '## A밴드 관계 판단',
   '',
   `A밴드 관계 질문 "${HINT_CHECK.relationA}"는 대상이 둘 이상일 때만 뜻이 있다. 그림을 보고 나눈 결과(메모 열에 까닭):`,
   '',
-  `- **not_applicable 후보(대상 하나)**: ${naCandidates.join(', ')} — 단서 팩에서 관계를 not_applicable로 정할지 결정.`,
+  `- **관계 기본 해당 없음(대상 하나)**: ${naCandidates.join(', ')} — 단서 팩이 없으면 채점에서 관계가 not_applicable이고 화면에 관계 질문이 없다.`,
   `- 관계를 판정할 거리가 있음: ${relationApplies.join(', ')}`,
-  '- 1단계(L01–L06)는 대부분 대상이 하나다. 단서 팩에서 정하지 않으면 학생은 관계 질문을 그대로 본다.',
-  '- B·C밴드에서도 행동하는 대상이 없는 그림(L20·L22·L23·L24·L28·L30)은 관계 질문 "무엇을 하고 있는지"가 맞지 않는다. 메모 열 참고.',
   '',
   '## 문항별 표 (제시 순서)',
   '',

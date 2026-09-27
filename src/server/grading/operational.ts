@@ -221,7 +221,7 @@ export function createGrading(deps: GradingDeps): GradingApi {
           cuesMissing = true;
         }
       }
-      const applicability = applicabilityOf(cues);
+      const applicability = applicabilityOf(cues, req.questionId);
 
       const prompt = buildEvaluationPrompt({
         band,
@@ -229,6 +229,7 @@ export function createGrading(deps: GradingDeps): GradingApi {
         cues,
         noCuePolicy: commonOnly ? 'common_only' : 'refuse',
         focusArea,
+        questionId: req.questionId,
       });
       // 단서가 없어 보내지 않을 지시문의 해시는 남기지 않는다(보낸 것처럼 보이지 않게).
       const hash = cuesMissing ? '' : await promptHash(prompt);

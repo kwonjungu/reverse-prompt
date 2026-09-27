@@ -68,7 +68,7 @@ export interface CallRecord {
   /** 형식 검증을 통과한 영역 수준. 실패 호출·피드백 호출은 null. */
   levels: AreaLevels | null;
   failureReason: string | null;
-  /** 모델 API가 응답에 밝힌 실제 모델(예: gemini-2.5-flash). 알 수 없으면 null. */
+  /** 모델 API가 응답에 밝힌 실제 모델(Gemini 응답의 modelVersion). 알 수 없으면 null. */
   servedModel: string | null;
   startedAt: string;
   finishedAt: string;

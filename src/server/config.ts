@@ -44,6 +44,13 @@ export const CONSENT_VERSION = process.env.CONSENT_VERSION?.trim() || '';
 export const IRB_APPROVAL = process.env.IRB_APPROVAL?.trim() || '';
 
 /**
+ * 연구용 추출의 대표 사진(문항 ID, 쉼표로 구분 — 예: L05,L16,L31). 논문 v12-2는 A·B·C밴드에서 하나씩 쓴다.
+ * 아직 정하지 않았으면 비워 둔다(미정). 관리 화면 '연구 자료' 탭이 이 값으로 문항을 미리 고른다.
+ * 형식 검사는 src/server/export/practice-summary.ts의 parseRepresentativeQuestions가 한다.
+ */
+export const RESEARCH_SAMPLE_QUESTIONS = process.env.RESEARCH_SAMPLE_QUESTIONS?.trim() || '';
+
+/**
  * 연수(강의) 모드 입장 번호. 연수장에서 공유하는 값이며 비밀번호가 아니다.
  * 비워 두어도 기본값으로 동작한다 — 이 값이 막는 것은 URL이 퍼졌을 때의 무작위
  * 접근이지 인증이 아니다. 연구 경로의 권한 판정에는 쓰이지 않는다.

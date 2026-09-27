@@ -8,6 +8,9 @@
  *   5. 추출은 문항 × 4수준 층, 기본 5개, 시드만으로 다시 만들어지며 모자라면 채우지 않는다
  *   6. CSV에서 not_applicable과 결측(NA)이 섞이지 않는다
  *   7. 동의가 없거나 철회한 학생은 연구 추출 대상이 아니다
+ *   8. 추출 결과는 전문가용(새 사례번호·사진ID·학생 문장만)과 연구자용(대응표 + 앱 판정)으로 나뉜다
+ *   9. 뺀 수와 사유를 CSV로 내고, 고른 문항이 A·B·C 하나씩이 아니면 경고한다
+ *  10. 옛 v7 숫자는 연구자용 시도 CSV에만 남고 요약·추출에는 없다. 학생의 까닭(note)은 어디에도 나가지 않는다
  */
 
 import assert from 'node:assert/strict';
@@ -20,12 +23,19 @@ import {
   MAX_PER_LEVEL,
   NO_FEEDBACK_MARK,
   SAMPLE_SCHEMA_VERSION,
+  EXCLUSION_REASONS,
+  EXPERT_SAMPLE_COLUMNS,
+  bandCoverageWarning,
   buildAttemptCsv,
-  buildLegacySampleCsv,
+  buildExclusionReportCsv,
+  buildExpertSampleCsv,
   buildQuestionSummaryCsv,
+  buildResearcherSampleCsv,
   buildSampleCsv,
   buildStudentQuestionCsv,
   caseIdOf,
+  expertCaseIdsOf,
+  parseRepresentativeQuestions,
   countLegacyAttempts,
   drawStratifiedSample,
   exclusionKey,
@@ -59,8 +69,8 @@ function scored(o: Lv, f: Lv, r: Lv) {
     },
     feedback: { text: '목표\n[대상] 잘 쓴 점\n[특징] 다음 행동\n제안', status: 'verified', quote: null, regenerated: false },
     calls: [],
-    modelId: 'googleai/gemini-3.8-flash',
-    servedModel: 'gemini-3.8-flash-001',
+    modelId: 'googleai/test-configured-model',
+    servedModel: 'test-served-model-001',
     promptHash: 'ph',
   };
 }
@@ -68,7 +78,7 @@ function scored(o: Lv, f: Lv, r: Lv) {
 const MISSING_SCORING = {
   result: { status: 'missing', areas: null, reason: 'model_error' },
   feedback: null,
-  modelId: 'googleai/gemini-3.8-flash',
+  modelId: 'googleai/test-configured-model',
   servedModel: null,
   promptHash: 'ph',
 };
@@ -231,8 +241,8 @@ test('영역별 근거·빠진 정보·설정 모델과 실제 모델을 그대�
   assert.equal(a.legacyRubric, false);
   assert.deepEqual(a.areas?.object, { level: 2, evidence: '사과', missing: ['개수'], evidenceMissing: [] });
   assert.deepEqual(a.areas?.relation, { level: 'not_applicable', evidence: null, missing: [], evidenceMissing: [] });
-  assert.equal(a.modelId, 'googleai/gemini-3.8-flash');
-  assert.equal(a.servedModel, 'gemini-3.8-flash-001');
+  assert.equal(a.modelId, 'googleai/test-configured-model');
+  assert.equal(a.servedModel, 'test-served-model-001');
   assert.equal(a.rubricVersion, 'v12-2');
   assert.equal(a.v7TotalScore, null, '새 기록에는 옛 값이 없다');
   assert.ok(a.feedbackText?.includes('[대상] 잘 쓴 점'), '피드백 원문(네 줄)을 바꾸지 않는다');
@@ -291,7 +301,7 @@ test('학생 × 문항 요약은 제출 순서를 지키고 원문과 피드백�
   assert.equal(summary.finalScoreMissing, false);
   assert.equal(summary.firstSubmittedAt, '2026-09-27T01:01:00.000Z');
   assert.equal(summary.finalSubmittedAt, '2026-09-27T01:05:00.000Z');
-  assert.equal(summary.finalServedModel, 'gemini-3.8-flash-001');
+  assert.equal(summary.finalServedModel, 'test-served-model-001');
 });
 
 /* ────────────────── 3. 옛 v7 기록 ────────────────── */
@@ -503,22 +513,124 @@ test('추출 CSV에 사례 ID·시드·표본 ID와 영역 수준이 들어간�
   assert.equal(header(csv).some((h) => h.includes('total_score')), false, '100점 열이 없다');
 });
 
-test('옛 5수준 추출 기록은 그때의 열 그대로 다시 낸다', () => {
+test('옛 5수준 추출 기록은 옛 기록으로 가려낸다(다시 내보내지 않는다)', () => {
   assert.equal(SAMPLE_SCHEMA_VERSION, 'v12-2-extraction-1');
   assert.equal(isLegacySampleDoc({ schemaVersion: 'v12-extraction-1' }), true);
   assert.equal(isLegacySampleDoc({ schemaVersion: SAMPLE_SCHEMA_VERSION }), false);
-  const oldCase = {
-    caseId: '01-51',
+  assert.equal(isLegacySampleDoc(null), true);
+});
+
+/* ────────────────── 전문가용·연구자용 추출 파일(후속 6) ────────────────── */
+
+test('전문가용 CSV에는 새 사례번호·사진ID·학생 문장만 있고 앱 판정이 없다', () => {
+  // 학생 문장에 연구ID가 섞이지 않게 문장을 바꾼 표본
+  const rows = frame(['L01', 'L14', 'L25'], 6).map((r, i) => ({ ...r, finalPrompt: `학생 문장 ${i}` }));
+  const res = drawStratifiedSample({ rows, questionIds: ['L01', 'L14', 'L25'], perLevel: 5, seed: 'seed-x', excludedKeys: new Set() });
+  assert.equal(res.cases.length, 60, '3문항 × 4수준 × 5개');
+  const csv = buildExpertSampleCsv('seed-x', res.cases);
+  assert.deepEqual(header(csv), ['expert_case_id', 'question_id', 'student_text']);
+  assert.deepEqual(EXPERT_SAMPLE_COLUMNS.map((c) => c.key), ['expert_case_id', 'question_id', 'student_text']);
+  const lines = csvLines(csv).slice(1);
+  assert.equal(lines.length, 60);
+  // 앱 사례 ID(수준이 들어 있음)·연구ID·수준이 어디에도 없다.
+  for (const c of res.cases) {
+    assert.equal(csv.includes(`"${c.caseId}"`), false, '앱 사례 ID가 전문가용에 있다');
+    assert.equal(csv.includes(c.row.researchId), false, '연구ID가 전문가용에 있다');
+  }
+  // 새 사례번호는 E001부터 겹치지 않고, 번호 순으로 놓인다(층 순서가 드러나지 않게 섞였다).
+  const ids = lines.map((l) => l.split(',')[0].replace(/"/g, ''));
+  assert.deepEqual(ids, [...ids].sort());
+  assert.equal(new Set(ids).size, 60);
+  assert.equal(ids[0], 'E001');
+  const qOrder = lines.map((l) => l.split(',')[1]);
+  assert.notDeepEqual(qOrder, [...qOrder].sort(), '문항·수준 순서 그대로면 섞이지 않은 것이다');
+});
+
+test('전문가용 사례번호는 시드로 다시 만들어지고, 연구자용 대응표와 맞는다', () => {
+  const res = drawStratifiedSample({ rows: frame(['L01'], 3), questionIds: ['L01'], perLevel: 2, seed: 's1', excludedKeys: new Set() });
+  const a = expertCaseIdsOf('s1', res.cases);
+  const b = expertCaseIdsOf('s1', [...res.cases].reverse());
+  assert.deepEqual([...a.entries()].sort(), [...b.entries()].sort(), '사례 순서와 무관하게 같은 번호');
+  assert.notDeepEqual([...a.entries()].sort(), [...expertCaseIdsOf('s2', res.cases).entries()].sort());
+  const researcher = buildResearcherSampleCsv('S-1', 's1', res.cases);
+  assert.equal(header(researcher)[0], 'expert_case_id');
+  assert.ok(header(researcher).includes('case_id'));
+  assert.ok(header(researcher).includes('app_level'));
+  assert.ok(header(researcher).includes('final_object_level'));
+  for (const c of res.cases) {
+    assert.ok(researcher.includes(`"${a.get(c.caseId)}","${c.caseId}"`), `${c.caseId} 대응이 연구자용에 없다`);
+  }
+});
+
+test('뺀 수와 사유를 문항 × 사유로 센다(제외 표시·최종 결측)', () => {
+  const rows = [...frame(['L01'], 2), row('R-null', 'L01', null)];
+  const excluded = new Set([exclusionKey('R-100', 'L01'), exclusionKey('R-300', 'L01')]);
+  const reasons = new Map([
+    [exclusionKey('R-100', 'L01'), 'irrelevant' as const],
+    [exclusionKey('R-300', 'L01'), 'personal_info' as const],
+  ]);
+  const res = drawStratifiedSample({ rows, questionIds: ['L01'], perLevel: 5, seed: 's', excludedKeys: excluded, exclusionReasons: reasons });
+  const count = (reason: string) => res.exclusionCounts.find((c) => c.questionId === 'L01' && c.reason === reason)?.count;
+  assert.equal(count('irrelevant'), 1);
+  assert.equal(count('personal_info'), 1);
+  assert.equal(count('final_missing'), 1);
+  assert.equal(res.exclusionCounts.length, EXCLUSION_REASONS.length + 1);
+  const csv = buildExclusionReportCsv('S-1', [...res.exclusionCounts, { questionId: 'L01', reason: 'no_consent', count: 4 }]);
+  assert.deepEqual(header(csv), ['sample_id', 'question_id', 'reason', 'reason_label', 'count']);
+  assert.ok(csv.includes('"no_consent","동의 없음·철회",4'));
+  assert.ok(csv.includes('"personal_info","개인정보 포함",1'));
+  assert.equal(csv.includes('R-'), false, '학생 연구ID를 싣지 않는다');
+});
+
+test('고른 문항이 A·B·C 하나씩이 아니면 경고한다', () => {
+  assert.equal(bandCoverageWarning(['L01', 'L14', 'L25']), null);
+  assert.equal(bandCoverageWarning(['L25', 'L01', 'L14']), null);
+  assert.match(bandCoverageWarning(['L01', 'L02', 'L25']) ?? '', /A·A·C/);
+  assert.ok(bandCoverageWarning(['L01', 'L14']));
+  assert.ok(bandCoverageWarning([]));
+});
+
+test('대표 문항 설정값은 미정이면 빈 목록, 틀리면 쓰지 않는다', () => {
+  assert.deepEqual(parseRepresentativeQuestions(''), { questionIds: [], problem: null });
+  assert.deepEqual(parseRepresentativeQuestions(undefined), { questionIds: [], problem: null });
+  assert.deepEqual(parseRepresentativeQuestions(' l25, L01 ,L14'), { questionIds: ['L01', 'L14', 'L25'], problem: null });
+  const bad = parseRepresentativeQuestions('L01,L02,L03,L04');
+  assert.deepEqual(bad.questionIds, []);
+  assert.ok(bad.problem);
+  assert.ok(parseRepresentativeQuestions('L99').problem);
+});
+
+test('옛 v7 숫자는 연구자용 시도 CSV에만 있고 요약·추출에는 없다', () => {
+  const legacy = toPracticeAttempt('old', {
+    researchId: 'R-9',
     questionId: 'L01',
-    level: 5,
-    sequence: 1,
-    row: { band: 'A', researchId: 'R-9', finalPrompt: '옛 글', finalTotalScore: 100, finalAppLevelRaw: 5, finalObjectLevel: 5, finalSpecificityLevel: 5, finalContextLevel: null, attemptCount: 2 },
-  };
-  const csv = buildLegacySampleCsv('S-old', 'seed-old', [oldCase]);
-  assert.ok(header(csv).includes('final_total_score'));
-  assert.equal(cellOf(csv, 'app_level'), '5', '옛 수준을 새 4수준으로 옮기지 않는다');
-  assert.equal(cellOf(csv, 'final_total_score'), '100');
-  assert.equal(cellOf(csv, 'final_context_level'), 'NA');
+    sessionType: 'research_practice',
+    rubricVersion: 'v7-candidate',
+    scoring: { result: { status: 'scored', score: 87.5, levels: { objectLevel: 4, specificityLevel: 3, contextLevel: null } } },
+    text: '옛 글',
+  })!;
+  const current = attempt({ submissionId: 'ps_new' });
+  const attemptsCsv = buildAttemptCsv([legacy, current]);
+  assert.ok(header(attemptsCsv).includes('v7_total_score'), '옛 기록 보존용 열은 시도 CSV에 남는다');
+  assert.ok(attemptsCsv.includes('87.5'));
+  const summary = summarizeStudentQuestions([legacy, current]);
+  for (const csv of [
+    buildStudentQuestionCsv(summary),
+    buildQuestionSummaryCsv(summarizeQuestions(summary)),
+  ]) {
+    assert.equal(header(csv).some((h) => h.startsWith('v7_') || h.includes('total_score')), false);
+    assert.equal(csv.includes('87.5'), false, '옛 100점 숫자가 요약에 섞였다');
+  }
+});
+
+test('학생이 예전에 적은 까닭(feedbackReview.note)은 연구 내보내기에 나가지 않는다', () => {
+  const withNote = toPracticeAttempt('ps_n', { ...doc(), feedbackReview: { kind: 'kept', note: '비밀 까닭 문장', recordedAt: 'x' } })!;
+  assert.ok(withNote, '문서는 그대로 읽는다(지우지 않는다)');
+  const rows = summarizeStudentQuestions([withNote]);
+  for (const csv of [buildAttemptCsv([withNote]), buildStudentQuestionCsv(rows)]) {
+    assert.equal(csv.includes('비밀 까닭 문장'), false);
+    assert.equal(header(csv).some((h) => h.includes('note') || h.includes('review')), false);
+  }
 });
 
 /* ────────────────── 6. CSV의 해당 없음과 결측 ────────────────── */
@@ -532,7 +644,7 @@ test('CSV에서 not_applicable은 "not_applicable", 결측은 NA로 갈린다', 
   assert.equal(cellOf(csv, 'app_level', 1), '3');
   assert.equal(cellOf(csv, 'app_level_raw', 1), '2.5', '반올림 전 값을 그대로 쓴다');
   assert.equal(cellOf(csv, 'relation_missing', 1), '"[]"', '해당 없음 영역의 빠진 정보는 빈 목록');
-  assert.equal(cellOf(csv, 'served_model', 1), '"gemini-3.8-flash-001"');
+  assert.equal(cellOf(csv, 'served_model', 1), '"test-served-model-001"');
   for (const col of ['object_level', 'feature_level', 'relation_level', 'app_level', 'object_missing']) {
     assert.equal(cellOf(csv, col, 2), 'NA', `결측의 ${col}은 NA`);
   }

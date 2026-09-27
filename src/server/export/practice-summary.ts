@@ -14,9 +14,11 @@
  *     (@/lib/scoring의 overallLevelOf·APP_LEVEL_RULE이 정한다. 여기서 다시 정의하지 않는다).
  *
  * 옛 v7 기록(축별 5수준·100점)
- *   - 읽을 수 있게 둔다. 시도 목록·시도별 CSV에는 legacy_rubric=true와 옛 값(v7_* 열)으로 남긴다.
+ *   - 연구자용 시도별 CSV에만 legacy_rubric=true와 옛 값(v7_* 열)으로 남긴다(옛 기록 보존용, 지우지 않는다).
  *   - 학생 × 문항 요약·문항 요약·추출에서는 뺀다. 옛 5수준을 새 4수준으로 옮기거나 지어내지 않는다.
  *     뺀 수는 따로 센다(countLegacyAttempts, 행마다 legacyAttemptCount).
+ *   - 요약·추출·교사 화면에는 옛 수준·100점 숫자를 싣지 않는다(논문 v12-2 B1·H2).
+ *     옛 5수준 추출 결과(schemaVersion 'v12-extraction-1')는 다시 내보내지 않는다.
  *
  * 지키는 것
  *   - 요약은 저장된 기록에서 계산한다. AI로 문장을 요약하지 않고 원문을 바꾸지 않는다.
@@ -83,7 +85,10 @@ export interface PracticeAttempt {
   /** 앱 종합 수준(1~4)과 반올림 전 값. 결측·옛 기록이면 null. */
   appLevel: AreaLevel | null;
   appLevelRaw: number | null;
-  /** 옛 v7 값. 새 기록이면 모두 null. 옛 수준은 반수준(2.5)일 수 있어 그대로 둔다. */
+  /**
+   * 옛 v7 값. 새 기록이면 모두 null. 옛 수준은 반수준(2.5)일 수 있어 그대로 둔다.
+   * 연구자용 시도별 CSV(옛 기록 보존)에만 나가고 요약·추출에는 쓰지 않는다.
+   */
   v7TotalScore: number | null;
   v7ObjectLevel: number | null;
   v7SpecificityLevel: number | null;
@@ -162,7 +167,7 @@ export function toPracticeAttempt(id: string, raw: Record<string, unknown>): Pra
   const band = raw.band === 'A' || raw.band === 'B' || raw.band === 'C' ? raw.band : bandOf(level);
   const legacyRubric = isLegacyPracticeRecord(raw);
 
-  // 옛 v7 결과: 100점과 축별 5수준. 새 영역 수준으로 옮기지 않는다.
+  // 옛 v7 결과: 100점과 축별 5수준. 새 영역 수준으로 옮기지 않고 시도별 CSV에만 옛 값 그대로 남긴다.
   const legacyScored = legacyRubric && result?.status === 'scored' && num(result.score) !== null;
   const legacyLevels = legacyScored && isObject(result?.levels) ? result.levels : null;
 
@@ -442,11 +447,11 @@ export const MAX_SAMPLE_QUESTIONS = 3;
 /**
  * 추출 기록(research/v7.0/extraction_samples)의 형식 버전.
  * v12-2-extraction-1: 앱 종합 4수준(v12-2) 층, 행에 영역별 수준·근거·빠진 정보.
- * 그 전의 'v12-extraction-1'은 앱 AI 5수준(v7 100점 환산) 층이다. 다시 받을 때 옛 열로 낸다.
+ * 그 전의 'v12-extraction-1'은 앱 AI 5수준(v7 100점 환산) 층이다. 다시 내보내지 않는다.
  */
 export const SAMPLE_SCHEMA_VERSION = 'v12-2-extraction-1';
 
-/** 저장된 추출 기록이 옛 5수준 추출인가(형식 버전이 지금 값이 아니면 옛 기록으로 본다). */
+/** 저장된 추출 기록이 옛 5수준 추출인가(형식 버전이 지금 값이 아니면 옛 기록으로 본다). 옛 추출은 내보내지 않는다. */
 export function isLegacySampleDoc(data: { schemaVersion?: unknown } | null | undefined): boolean {
   return data?.schemaVersion !== SAMPLE_SCHEMA_VERSION;
 }
@@ -477,7 +482,31 @@ export interface SampleResult {
   excludedCount: number;
   /** 최종 점수가 결측이라 어느 층에도 들지 못한 수 */
   unlevelledCount: number;
+  /** 문항·사유별로 뺀 수(제외 표시 사유, 최종 결측). 동의 없는 학생 수는 배선에서 더한다. */
+  exclusionCounts: ExclusionCount[];
 }
+
+/**
+ * 추출에서 뺀 수 한 줄. 사유:
+ *   irrelevant     무관한 내용(제외 표시)
+ *   personal_info  개인정보 포함(제외 표시)
+ *   no_consent     동의(보호자 동의 + 학생 승낙)가 지금 유효하지 않은 학생
+ *   final_missing  최종 시도의 채점이 결측이라 종합 수준이 없음
+ */
+export type ExclusionCountReason = ExclusionReason | 'no_consent' | 'final_missing';
+
+export interface ExclusionCount {
+  questionId: string;
+  reason: ExclusionCountReason;
+  count: number;
+}
+
+export const EXCLUSION_COUNT_LABEL: Record<ExclusionCountReason, string> = {
+  irrelevant: '무관한 내용',
+  personal_info: '개인정보 포함',
+  no_consent: '동의 없음·철회',
+  final_missing: '최종 채점 결측',
+};
 
 export function caseIdOf(questionId: string, level: number, sequence: number): string {
   const m = PRACTICE_ID.exec(questionId);
@@ -506,6 +535,35 @@ export function sampleInputProblem(input: {
 }
 
 /**
+ * 고른 문항이 A·B·C밴드에서 하나씩인지 본다(논문 v12-2: 대표 사진은 밴드마다 하나).
+ * 막지는 않고 경고 문구만 돌려준다. 맞으면 null.
+ */
+export function bandCoverageWarning(questionIds: readonly string[]): string | null {
+  const bands = questionIds
+    .filter((id) => PRACTICE_ID.exec(id))
+    .map((id) => bandOf(Number(id.slice(1))))
+    .sort();
+  if (bands.join('') === 'ABC') return null;
+  const label = bands.length ? bands.join('·') : '없음';
+  return `대표 문항은 A·B·C밴드에서 하나씩 고르는 것이 논문의 절차입니다. 지금 고른 밴드: ${label}.`;
+}
+
+/**
+ * 대표 문항 설정값(RESEARCH_SAMPLE_QUESTIONS, 쉼표로 구분한 문항 ID)을 읽는다.
+ * 비어 있으면(미정) 빈 목록. L01~L36 밖의 값·중복·네 개 이상이면 쓰지 않고 빈 목록과 문제 문구를 돌려준다.
+ */
+export function parseRepresentativeQuestions(raw: string | null | undefined): { questionIds: string[]; problem: string | null } {
+  const ids = String(raw ?? '')
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  if (!ids.length) return { questionIds: [], problem: null };
+  const problem = sampleInputProblem({ questionIds: ids, perLevel: DEFAULT_PER_LEVEL, seed: 'x' });
+  if (problem) return { questionIds: [], problem: `대표 문항 설정값이 올바르지 않습니다: ${problem}` };
+  return { questionIds: [...ids].sort(), problem: null };
+}
+
+/**
  * 문항 × 앱 종합 4수준으로 층을 나눠 층마다 perLevel개를 무작위로 뽑는다.
  *
  *   - 후보: 고른 문항의 학생 × 문항 요약 가운데 제외 표시가 없고 최종 종합 수준이 있는 행
@@ -519,6 +577,8 @@ export function drawStratifiedSample(input: {
   perLevel: number;
   seed: string;
   excludedKeys: ReadonlySet<string>;
+  /** 제외 키 → 사유. 없으면 사유별 수에서 '무관한 내용'으로 센다. */
+  exclusionReasons?: ReadonlyMap<string, ExclusionReason>;
 }): SampleResult {
   const problem = sampleInputProblem(input);
   if (problem) throw new Error(problem);
@@ -527,17 +587,29 @@ export function drawStratifiedSample(input: {
   const seed = input.seed.trim();
   const cases: SampleCase[] = [];
   const strata: SampleStratum[] = [];
+  const exclusionCounts: ExclusionCount[] = [];
   let excludedCount = 0;
   let unlevelledCount = 0;
 
   for (const questionId of questionIds) {
     const inQuestion = input.rows.filter((r) => r.questionId === questionId);
+    const byReason = new Map<ExclusionReason, number>();
     const kept = inQuestion.filter((r) => {
-      const excluded = input.excludedKeys.has(exclusionKey(r.researchId, r.questionId));
-      if (excluded) excludedCount += 1;
+      const key = exclusionKey(r.researchId, r.questionId);
+      const excluded = input.excludedKeys.has(key);
+      if (excluded) {
+        excludedCount += 1;
+        const reason = input.exclusionReasons?.get(key) ?? 'irrelevant';
+        byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
+      }
       return !excluded;
     });
-    unlevelledCount += kept.filter((r) => r.finalAppLevel === null).length;
+    const unlevelled = kept.filter((r) => r.finalAppLevel === null).length;
+    unlevelledCount += unlevelled;
+    for (const reason of EXCLUSION_REASONS) {
+      exclusionCounts.push({ questionId, reason, count: byReason.get(reason) ?? 0 });
+    }
+    exclusionCounts.push({ questionId, reason: 'final_missing', count: unlevelled });
 
     for (const level of APP_LEVELS) {
       const pool = kept
@@ -571,7 +643,7 @@ export function drawStratifiedSample(input: {
       });
     }
   }
-  return { cases, strata, excludedCount, unlevelledCount };
+  return { cases, strata, excludedCount, unlevelledCount, exclusionCounts };
 }
 
 /* ────────────────────────── CSV ────────────────────────── */
@@ -634,6 +706,7 @@ export const ATTEMPT_COLUMNS: CsvColumn<PracticeAttempt>[] = [
   { key: 'app_level', get: (r) => r.appLevel },
   { key: 'app_level_raw', get: (r) => r.appLevelRaw },
   ...areaDetailColumns<PracticeAttempt>('', (r) => r.areas, true),
+  // 옛 기록 보존용(연구자용 시도 CSV에만). 요약·추출 CSV에는 없다.
   { key: 'v7_total_score', get: (r) => r.v7TotalScore },
   { key: 'v7_object_level', get: (r) => r.v7ObjectLevel },
   { key: 'v7_specificity_level', get: (r) => r.v7SpecificityLevel },
@@ -751,40 +824,74 @@ export const SAMPLE_COLUMNS: CsvColumn<SampleCsvRow>[] = [
   { key: 'seed', get: (r) => r.seed },
 ];
 
+/* ────────────────────────── 전문가용·연구자용 추출 파일 ────────────────────────── */
+
 /**
- * 옛 5수준 추출 기록(schemaVersion 'v12-extraction-1')을 다시 받을 때의 열.
- * 그때 내보낸 파일과 같은 열로 낸다. 저장된 값을 새 4수준으로 옮기지 않는다.
+ * 전문가용 사례번호. 전문가는 앱의 판정을 보지 않고 채점하므로(논문 Ⅲ.4.나) 앱 사례 ID(문항-수준-순번)를
+ * 쓰지 않고 새 번호를 붙인다. 사례를 앱 사례 ID 순으로 놓은 뒤 `${seed}|expert` 난수로 섞어 E001부터 매긴다.
+ * 같은 시드·같은 사례면 같은 번호가 나온다(다시 받아도 대응표가 바뀌지 않는다).
  */
-interface LegacySampleCsvRow {
-  sampleId: string;
-  seed: string;
-  item: Record<string, unknown>;
+export function expertCaseIdsOf(seed: string, cases: readonly Pick<SampleCase, 'caseId'>[]): Map<string, string> {
+  const ids = [...new Set(cases.map((c) => c.caseId))].sort();
+  const rand = createSeededRandom(`${seed.trim()}|expert`);
+  for (let i = ids.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rand() * (i + 1));
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+  }
+  const width = Math.max(3, String(ids.length).length);
+  return new Map(ids.map((caseId, i) => [caseId, `E${String(i + 1).padStart(width, '0')}`]));
 }
 
-const legacyRow = (r: LegacySampleCsvRow): Record<string, unknown> =>
-  isObject(r.item.row) ? r.item.row : {};
-const cell = (v: unknown): CsvCell =>
-  typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' ? v : null;
+export interface ExpertSampleRow {
+  expertCaseId: string;
+  questionId: string;
+  text: string;
+}
 
-export const LEGACY_SAMPLE_COLUMNS: CsvColumn<LegacySampleCsvRow>[] = [
-  { key: 'case_id', get: (r) => cell(r.item.caseId) },
-  { key: 'question_id', get: (r) => cell(r.item.questionId) },
-  { key: 'band', get: (r) => cell(legacyRow(r).band) },
-  { key: 'app_level', get: (r) => cell(r.item.level) },
-  { key: 'sequence', get: (r) => cell(r.item.sequence) },
-  { key: 'research_id', get: (r) => cell(legacyRow(r).researchId) },
-  { key: 'final_prompt', get: (r) => cell(legacyRow(r).finalPrompt) },
-  { key: 'final_total_score', get: (r) => cell(legacyRow(r).finalTotalScore) },
-  { key: 'final_app_level_raw', get: (r) => cell(legacyRow(r).finalAppLevelRaw) },
-  { key: 'final_object_level', get: (r) => cell(legacyRow(r).finalObjectLevel) },
-  { key: 'final_specificity_level', get: (r) => cell(legacyRow(r).finalSpecificityLevel) },
-  { key: 'final_context_level', get: (r) => cell(legacyRow(r).finalContextLevel) },
-  { key: 'attempt_count', get: (r) => cell(legacyRow(r).attemptCount) },
-  { key: 'final_submission_id', get: (r) => cell(legacyRow(r).finalSubmissionId) },
-  { key: 'final_submitted_at', get: (r) => cell(legacyRow(r).finalSubmittedAt) },
-  { key: 'sample_id', get: (r) => r.sampleId },
-  { key: 'seed', get: (r) => r.seed },
+/** 전문가용 열: 새 사례번호·사진 ID·학생 문장만. 앱 판정·수준·연구ID·시각·단계는 싣지 않는다. */
+export const EXPERT_SAMPLE_COLUMNS: CsvColumn<ExpertSampleRow>[] = [
+  { key: 'expert_case_id', get: (r) => r.expertCaseId },
+  { key: 'question_id', get: (r) => r.questionId },
+  { key: 'student_text', get: (r) => r.text },
 ];
+
+export function expertSampleRows(seed: string, cases: readonly SampleCase[]): ExpertSampleRow[] {
+  const ids = expertCaseIdsOf(seed, cases);
+  return cases
+    .map((c) => ({ expertCaseId: ids.get(c.caseId)!, questionId: c.questionId, text: c.row.finalPrompt }))
+    .sort((a, b) => a.expertCaseId.localeCompare(b.expertCaseId));
+}
+
+export const buildExpertSampleCsv = (seed: string, cases: readonly SampleCase[]) =>
+  toCsv(expertSampleRows(seed, cases), EXPERT_SAMPLE_COLUMNS);
+
+/** 연구자용: 전문가용 사례번호 대응표 + 앱 판정(기존 추출 열) */
+export const buildResearcherSampleCsv = (sampleId: string, seed: string, cases: readonly SampleCase[]) => {
+  const ids = expertCaseIdsOf(seed, cases);
+  return toCsv(
+    cases.map((item) => ({ sampleId, seed, item, expertCaseId: ids.get(item.caseId) ?? null })),
+    [{ key: 'expert_case_id', get: (r) => r.expertCaseId }, ...(SAMPLE_COLUMNS as CsvColumn<SampleCsvRow & { expertCaseId: string | null }>[])]
+  );
+};
+
+export interface ExclusionReportRow extends ExclusionCount {
+  sampleId: string;
+}
+
+export const EXCLUSION_REPORT_COLUMNS: CsvColumn<ExclusionReportRow>[] = [
+  { key: 'sample_id', get: (r) => r.sampleId },
+  { key: 'question_id', get: (r) => r.questionId },
+  { key: 'reason', get: (r) => r.reason },
+  { key: 'reason_label', get: (r) => EXCLUSION_COUNT_LABEL[r.reason] },
+  { key: 'count', get: (r) => r.count },
+];
+
+/** 추출에서 뺀 수와 사유(문항 × 사유). 학생 식별 정보는 싣지 않는다. */
+export const buildExclusionReportCsv = (sampleId: string, counts: readonly ExclusionCount[]) =>
+  toCsv(
+    counts.map((c) => ({ ...c, sampleId })),
+    EXCLUSION_REPORT_COLUMNS
+  );
 
 export const buildAttemptCsv = (rows: readonly PracticeAttempt[]) => toCsv(rows, ATTEMPT_COLUMNS);
 export const buildStudentQuestionCsv = (rows: readonly StudentQuestionSummary[]) =>
@@ -796,10 +903,4 @@ export const buildSampleCsv = (sampleId: string, seed: string, cases: readonly S
   toCsv(
     cases.map((item) => ({ sampleId, seed, item })),
     SAMPLE_COLUMNS
-  );
-/** 옛 5수준 추출 기록을 그때의 열 그대로 다시 낸다. */
-export const buildLegacySampleCsv = (sampleId: string, seed: string, cases: readonly unknown[]) =>
-  toCsv(
-    cases.filter(isObject).map((item) => ({ sampleId, seed, item })),
-    LEGACY_SAMPLE_COLUMNS
   );

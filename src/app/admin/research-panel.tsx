@@ -6,8 +6,11 @@
  *   - 연구 세션 연습 기록의 문항 요약(앱 종합 4수준 분포·영역별 평균)을 보고,
  *     시도별·학생×문항·문항 요약 CSV를 받는다.
  *   - 문항 셋(A·B·C 하나씩)을 골라 학생×문항 행에 제외 표시(무관한 내용 / 개인정보 포함)를 단다.
- *   - 제외 뒤 앱 종합 4수준별로 문항마다 n개(기본 5)를 고정 시드로 뽑아 사례 ID를 붙이고 저장·내보낸다.
+ *   - 제외 뒤 앱 종합 4수준별로 문항마다 n개(기본 5)를 고정 시드로 뽑아 저장하고, 세 파일로 내보낸다:
+ *     전문가용(새 사례번호·사진ID·학생 문장만), 연구자용(대응표 + 앱 판정), 뺀 수와 사유.
+ *   - 추출 사례를 운영 채점기로 2·3회차 다시 채점해 따로 저장하고, 영역별 세 번 일치 비율을 CSV로 낸다.
  *   - 옛 v7 기록(5수준·100점)은 요약·추출에서 빠진다. 뺀 수만 보여 준다.
+ *   - 개인정보 점검으로 멈춘 제출은 건수만 보인다(글은 남기지 않는다).
  *
  * 계산과 권한은 모두 서버(src/server/admin/research-actions.ts)가 한다. 이 화면은 요청만 보낸다.
  * 학생 화면에는 나오지 않는다. 100점 점수는 어디에도 없다.
@@ -17,19 +20,22 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   drawSampleAction,
   exportExtractionCsvAction,
+  exportRepeatScoresCsvAction,
   exportResearchCsvAction,
   exportSampleCsvAction,
   listSamplesAction,
   loadExtractionAction,
   loadResearchOverviewAction,
+  rescoreSampleBatchAction,
   setExclusionAction,
   type ExtractionView,
   type ResearchCsvKind,
   type ResearchOverview,
+  type SampleFileKind,
   type SampleListItem,
   type SampleView,
 } from '@/server/admin/research-actions';
-import type { ExclusionReason } from '@/server/export/practice-summary';
+import { EXCLUSION_COUNT_LABEL, type ExclusionReason } from '@/server/export/practice-summary';
 import { PRACTICE_QUESTIONS } from '@/lib/questions';
 import { AREA_IDS, AREA_LABEL, type AreaJudgments, type AreaLevels, type AreaLevelValue } from '@/lib/scoring';
 import { Button } from '@/components/ui/button';
@@ -119,6 +125,8 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
   const [seed, setSeed] = useState(defaultSeed);
   const [sample, setSample] = useState<SampleView | null>(null);
   const [samples, setSamples] = useState<SampleListItem[]>([]);
+  /** 반복 채점 진행('S-…|2' → '12/60') */
+  const [repeatRunning, setRepeatRunning] = useState<string | null>(null);
 
   const classResearchId = scope === ALL ? null : scope;
 
@@ -148,7 +156,11 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
   const loadOverview = useCallback(async () => {
     setLoading(true);
     const data = await call(() => loadResearchOverviewAction({ classResearchId }));
-    if (data) setOverview(data);
+    if (data) {
+      setOverview(data);
+      // 대표 문항 설정값(RESEARCH_SAMPLE_QUESTIONS)이 있으면 아직 아무것도 고르지 않았을 때 미리 고른다.
+      setPicked((prev) => (prev.length === 0 && data.representativeQuestions.length ? data.representativeQuestions : prev));
+    }
     setLoading(false);
   }, [call, classResearchId]);
 
@@ -215,7 +227,37 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
     );
     if (data) {
       setSample(data);
-      downloadCsv(data.filename, data.csv);
+      for (const f of data.files) downloadCsv(f.filename, f.csv);
+      void loadSamples();
+    }
+  };
+
+  const downloadSampleFile = async (sampleId: string, kind: SampleFileKind) => {
+    const file = await call(() => exportSampleCsvAction(sampleId, kind));
+    if (file) downloadCsv(file.filename, file.csv);
+  };
+
+  /** 2·3회차 반복 채점. 서버 함수 시간 제한 때문에 사례 하나씩 이어 부른다. */
+  const runRepeat = async (sampleId: string, repeatIndex: 2 | 3) => {
+    setRepeatRunning(`${sampleId}|${repeatIndex}|…`);
+    try {
+      for (;;) {
+        const res = await rescoreSampleBatchAction({ sampleId, repeatIndex, limit: 1 });
+        if (!res.ok) {
+          if (res.signedOut) onSignedOut();
+          toast({ variant: 'destructive', title: '반복 채점을 멈췄습니다', description: res.error });
+          break;
+        }
+        setRepeatRunning(`${sampleId}|${repeatIndex}|${res.data.done}/${res.data.total}`);
+        if (res.data.done >= res.data.total || res.data.scoredNow + res.data.skippedNow === 0) {
+          toast({ title: `${repeatIndex}회차 반복 채점을 마쳤습니다`, description: `${res.data.done}/${res.data.total}` });
+          break;
+        }
+      }
+    } catch {
+      toast({ variant: 'destructive', title: '반복 채점을 멈췄습니다', description: '잠시 뒤 이어서 해 주세요. 이미 채점한 사례는 다시 부르지 않습니다.' });
+    } finally {
+      setRepeatRunning(null);
       void loadSamples();
     }
   };
@@ -278,12 +320,13 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
             <Skeleton className="h-40 w-full" />
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
                 {[
                   { label: '시도(v12-2)', value: `${overview.attemptCount}건` },
                   { label: '학생', value: `${overview.studentCount}명` },
                   { label: '동의 없음·철회로 뺀 학생', value: `${overview.consentExcludedStudents}명` },
                   { label: '옛 기록(v7)으로 뺀 시도', value: `${overview.legacyAttemptCount}건` },
+                  { label: '개인정보 점검으로 멈춘 제출', value: `${overview.privacyHoldCount}건` },
                   { label: '고른 문항', value: `${picked.length}/3` },
                 ].map((t) => (
                   <div key={t.label} className="rounded-xl bg-muted/50 p-4">
@@ -300,6 +343,15 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                 <p className="text-xs text-amber-700">
                   옛 기준(v7, 5수준·100점)으로 채점된 시도 {overview.legacyAttemptCount}건은 요약과 추출에서
                   뺐습니다. 시도별 CSV에는 legacy_rubric=true와 옛 값(v7_* 열)으로 남아 있습니다.
+                </p>
+              )}
+              {overview.representativeProblem && (
+                <p className="text-xs text-amber-700">{overview.representativeProblem}</p>
+              )}
+              {overview.representativeQuestions.length === 0 && !overview.representativeProblem && (
+                <p className="text-xs text-muted-foreground">
+                  대표 사진(A·B·C밴드 하나씩)은 아직 정하지 않았습니다(설정값 RESEARCH_SAMPLE_QUESTIONS 비어 있음). 아래
+                  표에서 직접 고르세요.
                 </p>
               )}
               {overview.attemptCount === 0 && (
@@ -398,8 +450,10 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                 </Badge>
               ))
             )}
-            {picked.length > 0 && bandsPicked.size < picked.length && (
-              <span className="text-xs text-amber-700">같은 밴드의 문항을 둘 이상 골랐습니다.</span>
+            {picked.length > 0 && (bandsPicked.size < picked.length || picked.length < 3) && (
+              <span className="text-xs text-amber-700">
+                논문 절차는 A·B·C밴드에서 한 문항씩입니다. 지금 고른 문항은 그렇지 않습니다(추출은 막지 않습니다).
+              </span>
             )}
             <div className="ml-auto flex gap-2">
               <Button disabled={busy || picked.length === 0} onClick={() => void loadCandidates()}>
@@ -420,6 +474,7 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
 
           {extraction && (
             <>
+              {extraction.bandWarning && <p className="text-xs text-amber-700">{extraction.bandWarning}</p>}
               <p className="text-sm text-muted-foreground">
                 후보 {extraction.rows.length}행 · 제외 {excludedCount}행 · 동의 없음·철회로 뺀 학생{' '}
                 {extraction.consentExcludedStudents}명 · 옛 기록(v7)으로 뺀 시도 {extraction.legacyAttemptCount}건.
@@ -550,11 +605,13 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                   </div>
                 </div>
                 <Button disabled={busy} onClick={() => void draw()} className="ml-auto">
-                  <Shuffle className="mr-2 h-4 w-4" /> 추출하고 CSV 받기
+                  <Shuffle className="mr-2 h-4 w-4" /> 추출하고 CSV 세 개 받기
                 </Button>
                 <p className="w-full text-xs text-muted-foreground">
                   같은 시드·같은 후보면 같은 결과가 나옵니다. 시드와 후보 목록, 제외 목록, 뽑힌 사례를 함께 저장합니다.
-                  후보가 모자란 층은 있는 만큼만 뽑고 다른 층에서 채우지 않습니다.
+                  후보가 모자란 층은 있는 만큼만 뽑고 다른 층에서 채우지 않습니다(부족분으로 남깁니다).
+                  파일은 셋입니다: 전문가용(새 사례번호·사진ID·학생 문장만, 앱 판정 없음), 연구자용(전문가용 번호 대응표 +
+                  앱 판정), 뺀 수와 사유(무관한 내용·개인정보·동의 없음·최종 결측).
                 </p>
               </div>
             </>
@@ -595,10 +652,22 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                   </TableBody>
                 </Table>
               </div>
+              {sample.bandWarning && <p className="text-xs text-amber-700">{sample.bandWarning}</p>}
               <p className="text-xs text-muted-foreground">
-                사례 ID에는 앱 종합 수준이 들어 있습니다(01-31의 “3”). 전문가에게 앱 판정을 가리고 줄 때는
-                case_id·app_level·final_app_level_raw 열과 영역별 수준·근거·빠진 정보(final_object_* 등) 열을 빼고
-                다른 번호를 붙여 주세요.
+                뺀 수:{' '}
+                {sample.questionIds
+                  .map((qid) =>
+                    `${qid} ` +
+                    sample.exclusionCounts
+                      .filter((c) => c.questionId === qid && c.count > 0)
+                      .map((c) => `${EXCLUSION_COUNT_LABEL[c.reason]} ${c.count}`)
+                      .join(', ')
+                  )
+                  .join(' / ')}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                전문가에게는 전문가용 파일만 주세요. 앱 사례 ID(01-31의 “3”이 종합 수준)와 앱 판정은 연구자용 파일에만
+                있습니다.
               </p>
             </div>
           )}
@@ -617,7 +686,8 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                     <TableHead className="text-right">n</TableHead>
                     <TableHead className="text-right">사례</TableHead>
                     <TableHead className="text-right">부족</TableHead>
-                    <TableHead />
+                    <TableHead>받기</TableHead>
+                    <TableHead>반복 채점(2·3회차)</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -626,7 +696,7 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                       <TableCell className="font-mono text-xs">
                         {s.sampleId}
                         {s.legacy && (
-                          <Badge variant="outline" className="ml-1 text-[10px]" title="옛 앱 AI 5수준(v7 100점 환산) 층으로 뽑은 추출">
+                          <Badge variant="outline" className="ml-1 text-[10px]" title="옛 앱 AI 5수준(v7 100점 환산) 층으로 뽑은 추출 — 내보내지 않습니다">
                             옛 5수준
                           </Badge>
                         )}
@@ -636,18 +706,58 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                       <TableCell className="text-right tabular-nums">{s.perLevel}</TableCell>
                       <TableCell className="text-right tabular-nums">{s.caseCount}</TableCell>
                       <TableCell className="text-right tabular-nums">{s.shortfall}</TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={busy}
-                          onClick={async () => {
-                            const file = await call(() => exportSampleCsvAction(s.sampleId));
-                            if (file) downloadCsv(file.filename, file.csv);
-                          }}
-                        >
-                          <Download className="h-4 w-4" />
-                        </Button>
+                      <TableCell>
+                        {s.legacy ? (
+                          <span className="text-xs text-muted-foreground">내보내지 않음</span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {(
+                              [
+                                ['expert', '전문가용'],
+                                ['researcher', '연구자용'],
+                                ['exclusions', '뺀 수'],
+                              ] as const
+                            ).map(([kind, label]) => (
+                              <Button key={kind} size="sm" variant="outline" disabled={busy} onClick={() => void downloadSampleFile(s.sampleId, kind)}>
+                                <Download className="mr-1 h-3 w-3" /> {label}
+                              </Button>
+                            ))}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {!s.legacy && (
+                          <div className="flex flex-wrap items-center gap-1">
+                            {([2, 3] as const).map((n) => {
+                              const running = repeatRunning?.startsWith(`${s.sampleId}|${n}|`);
+                              return (
+                                <Button
+                                  key={n}
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={busy || repeatRunning !== null || s.repeatDone[n] >= s.caseCount}
+                                  onClick={() => void runRepeat(s.sampleId, n)}
+                                  title="운영 채점기와 같은 설정으로 다시 채점해 따로 저장합니다. 1회차(주 자료)는 바꾸지 않습니다."
+                                >
+                                  {running ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                                  {n}회차 {running ? repeatRunning!.split('|')[2] : `${s.repeatDone[n]}/${s.caseCount}`}
+                                </Button>
+                              );
+                            })}
+                            <Button size="sm" variant="ghost" disabled={busy} onClick={async () => {
+                              const file = await call(() => exportRepeatScoresCsvAction({ sampleId: s.sampleId, kind: 'cases' }));
+                              if (file) downloadCsv(file.filename, file.csv);
+                            }}>
+                              <Download className="mr-1 h-3 w-3" /> 회차별
+                            </Button>
+                            <Button size="sm" variant="ghost" disabled={busy} onClick={async () => {
+                              const file = await call(() => exportRepeatScoresCsvAction({ sampleId: s.sampleId, kind: 'agreement' }));
+                              if (file) downloadCsv(file.filename, file.csv);
+                            }}>
+                              <Download className="mr-1 h-3 w-3" /> 일치 비율
+                            </Button>
+                          </div>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

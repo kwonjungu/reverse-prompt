@@ -1,12 +1,12 @@
 /**
  * 연습 6단계 — 논문 v12의 단계 구성(공개 정보만).
  *
- *   1 도구와 작성 방식 이해   L01–L06   세 영역
- *   2 대상과 수량             L07–L12   대상 영역 중심
- *   3 특징                    L19–L24   특징 영역 중심
- *   4 관계                    L13–L18   관계 영역 중심
- *   5 피드백 검토와 재작성    L25–L30   세 영역
- *   6 종합                    L31–L36   세 영역
+ *   1 도구와 작성 방식 이해   L01–L06   세 영역          A밴드
+ *   2 대상과 수량             L07–L12   대상 영역 중심   A밴드
+ *   3 특징 구체화             L19–L24   특징 영역 중심   B밴드
+ *   4 관계 표현               L13–L18   관계 영역 중심   B밴드
+ *   5 피드백 검토와 재작성    L25–L30   세 영역          C밴드
+ *   6 종합 작성               L31–L36   세 영역          C밴드
  *
  * 문항 ID와 이미지는 그대로 두고 단계(chasi)와 제시 순서만 이 표로 정한다.
  * 밴드(A=L01–12, B=L13–24, C=L25–36)는 문항 번호로 정하며 단계와 무관하다(src/lib/scoring.ts의 bandOf).
@@ -29,10 +29,10 @@ const range = (from: number, to: number) => Array.from({ length: to - from + 1 }
 export const STAGES: readonly Stage[] = [
   { chasi: 1, title: '도구와 작성 방식 이해', focus: null, levels: range(1, 6) },
   { chasi: 2, title: '대상과 수량', focus: 'object', levels: range(7, 12) },
-  { chasi: 3, title: '특징', focus: 'feature', levels: range(19, 24) },
-  { chasi: 4, title: '관계', focus: 'relation', levels: range(13, 18) },
+  { chasi: 3, title: '특징 구체화', focus: 'feature', levels: range(19, 24) },
+  { chasi: 4, title: '관계 표현', focus: 'relation', levels: range(13, 18) },
   { chasi: 5, title: '피드백 검토와 재작성', focus: null, levels: range(25, 30) },
-  { chasi: 6, title: '종합', focus: null, levels: range(31, 36) },
+  { chasi: 6, title: '종합 작성', focus: null, levels: range(31, 36) },
 ];
 
 export const STAGE_TITLE: Record<number, string> = Object.fromEntries(

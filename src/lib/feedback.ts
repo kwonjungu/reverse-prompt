@@ -40,6 +40,12 @@ export { quoteAppearsInText };
 /** 두 번째 시도까지 검증되지 않았을 때 쓰는 고정 안내 */
 export const FEEDBACK_FALLBACK_TEXT = '표현을 선생님과 함께 확인해 보세요';
 
+/**
+ * 모든 AI 피드백 화면에 늘 붙이는 고정 안내(설계 원리 5). 피드백을 그대로 받아들이지 않고
+ * 그림과 견주어 보게 한다. 모델이 만든 문장이 아니라 화면이 붙이는 문장이다.
+ */
+export const FEEDBACK_CAUTION = '피드백이 틀릴 수 있어요. 그림과 견주어 보고, 이상하면 선생님께 물어봐요.';
+
 /** 화면에 보여 줄 문장 수. 한 줄에 한 문장이다. */
 export const FEEDBACK_LINE_COUNT = 4;
 
@@ -77,6 +83,7 @@ export type FeedbackRejectReason =
   | 'empty_line'
   | 'line_count'
   | 'sentence_count'
+  | 'line_too_long'
   | 'forbidden_expression'
   | 'quote_required'
   | 'quote_not_found'
@@ -110,6 +117,13 @@ function normalizeLine(line: string): string {
 function hasLineBreak(line: string): boolean {
   return /\n/.test((line ?? '').replace(/\r/g, ''));
 }
+
+/**
+ * 한 문장의 최대 글자 수(공백 포함, 2문장의 학생 인용 자리는 가린 뒤에 센다).
+ * 초등학생이 읽기 쉬운 짧은 문장을 지키려는 구조 점검이다(논문 v12-2 C4). 넉넉하게 잡은 설계 선택이며
+ * 읽기 쉬움을 검증한 값이 아니다. 넘으면 탈락하고 피드백만 1회 다시 만든다.
+ */
+export const MAX_FEEDBACK_LINE_CHARS = 80;
 
 /** 한 줄에 든 문장 수. 마침표·물음표·느낌표 뒤에 공백이 오면 문장이 나뉜 것으로 본다. */
 export function sentenceCount(line: string): number {
@@ -191,6 +205,7 @@ export function validateFeedback(draft: FeedbackDraft, ctx: FeedbackContext): Fe
   const maskedLine2 = quote !== null ? maskQuoteInLine(lines[1], quote) : null;
   const checked = [lines[0], maskedLine2 ?? lines[1], lines[2], lines[3]];
   if (checked.some((l) => sentenceCount(l) !== 1)) return { ok: false, reason: 'sentence_count' };
+  if (checked.some((l) => [...l].length > MAX_FEEDBACK_LINE_CHARS)) return { ok: false, reason: 'line_too_long' };
   if (checked.some(hasForbiddenExpression)) return { ok: false, reason: 'forbidden_expression' };
 
   // 2문장 — 영역과 인용
