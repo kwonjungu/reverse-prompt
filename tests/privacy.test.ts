@@ -10,7 +10,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { privacy, detectPiiTypes, toPiiLogEntry, PII_CHECK_VERSION } from '@/server/privacy';
+import {
+  privacy,
+  detectPiiTypes,
+  toPiiLogEntry,
+  PII_CHECK_VERSION,
+  PII_STUDENT_NOTICE,
+} from '@/server/privacy';
 
 test('개인정보가 없는 응답은 통과한다', () => {
   const result = privacy.checkBeforeSend('노란 세모 블록의 밑면이 넓고 위쪽 꼭짓점이 뾰족하다.');
@@ -24,6 +30,13 @@ test('통과 문구가 완전 제거를 뜻하지 않는다고 밝힌다', () =>
   assert.equal(result.decision, 'pass');
   assert.match(result.notice, /아니/);
   assert.ok(result.notice.includes('보조'));
+});
+
+test('학생 안내는 쓰지 말라는 행동만 짧게 적고, 통과하면 안전하다고 말하지 않는다', () => {
+  assert.ok(PII_STUDENT_NOTICE.includes('개인정보'));
+  assert.ok(PII_STUDENT_NOTICE.includes('쓰지 않'));
+  assert.ok(PII_STUDENT_NOTICE.length <= 40);
+  assert.doesNotMatch(PII_STUDENT_NOTICE, /안전|제거|지워|걸러|점검/);
 });
 
 test('전화번호를 찾으면 교사 확인으로 멈춘다', () => {

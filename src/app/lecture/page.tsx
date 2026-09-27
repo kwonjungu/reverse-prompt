@@ -31,7 +31,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Skeleton } from '@/components/ui/skeleton';
-import { PII_NOTICE } from '@/server/privacy';
+import { PII_STUDENT_NOTICE } from '@/server/privacy';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -254,7 +254,7 @@ export default function LecturePage() {
                       className="flex-grow bg-input/50 text-base transition-colors focus:bg-input/80"
                       disabled={isSubmitting}
                     />
-                    <p className="mt-2 text-xs text-muted-foreground">{PII_NOTICE}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">{PII_STUDENT_NOTICE}</p>
                   </div>
                   <Button type="submit" size="lg" className="mt-4 w-full" disabled={isSubmitting}>
                     {isSubmitting ? (

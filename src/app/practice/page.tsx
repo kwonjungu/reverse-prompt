@@ -32,7 +32,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
-import { PII_NOTICE } from '@/server/privacy';
+import { PII_STUDENT_NOTICE } from '@/server/privacy';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -487,8 +487,8 @@ export default function PracticePage() {
                       className="text-base flex-grow bg-input/50 focus:bg-input/80 transition-colors"
                       disabled={isSubmitting}
                     />
-                    {/* 전송 전 점검의 한계를 문구 사본이 아니라 원문 상수로 알린다. */}
-                    <p className="mt-2 text-xs text-muted-foreground">{PII_NOTICE}</p>
+                    {/* 학생에게는 짧은 행동 안내만. 문구 사본이 아니라 원문 상수를 쓴다. */}
+                    <p className="mt-2 text-xs text-muted-foreground">{PII_STUDENT_NOTICE}</p>
                   </div>
                   <Button type="submit" size="lg" className="mt-4 w-full" disabled={isSubmitting}>
                     {isSubmitting ? (
