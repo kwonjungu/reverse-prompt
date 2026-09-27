@@ -165,7 +165,7 @@ AI 지시문·교사 화면·내보내기 문서를 `renderForModel/renderForTea
 - 단서 팩이 없으면 **코드의 기본 목록**(`src/lib/question-areas.ts`의 `RELATION_NOT_APPLICABLE_QUESTIONS`)이 관계를 정한다:
   L01·L02·L03·L04·L06·L08·L11(대상 하나인 A밴드 그림)·L20·L23(장소를 알 수 없는 물건 그림)은 관계 해당 없음.
   그 밖의 특징·관계는 모델이 정한다(대상은 늘 판정). **단서 팩이 있으면 단서 팩이 우선한다.**
-  `ScoringRun.applicabilitySource`에 `'cue_pack' | 'model'`로 남는다.
+  `ScoringRun.applicabilitySource`에 `'cue_pack' | 'code_default' | 'model'`로 남는다(code_default = 단서 팩 없이 기본 목록이 관계를 정함).
 
 ### 형식 오류를 유효 값으로 바꾸지 않는다
 영역마다 `{level, evidence, missing, evidence_missing}`를 받고 `validateAreaCall`이 검사한다. 0·5·2.5·`'3'`·NaN·null은
@@ -442,13 +442,17 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
     섞어 E001부터 매긴다(`expertCaseIdsOf`, 같은 시드면 같은 번호). 앱 판정·앱 사례 ID·연구ID·시각이 없다.
   - 연구자용 `rp_sample_{id}_researcher.csv`: `expert_case_id` 대응표 + 앱 판정(기존 추출 열).
   - 뺀 수 `rp_sample_{id}_exclusions.csv`: 문항 × 사유(`irrelevant`·`personal_info`·`no_consent`·`final_missing`)별 수. 학생 식별자 없음.
+- **내보낼 때마다 지금 기준으로 다시 본다**: 추출 뒤 동의를 철회했거나 제외 표시를 단 사례는 전문가용에서 빠지고, 연구자용에는
+  행만 남기고 학생 문장을 비운 채 `withheld_reason`을 적으며, 뺀 수 파일에 `no_consent_after_draw`·`excluded_after_draw`로 덧붙는다
+  (`withheldCasesOf`). 반복 채점 CSV에서도 빠진다. 뺀 수를 따로 담지 않은 예전 추출은 제외 목록에서 다시 만든다(결측·동의 없음은 'ALL' 합계).
 - 고른 문항이 A·B·C밴드 하나씩이 아니면 경고한다(막지 않음, `bandCoverageWarning`). 대표 사진은 설정값 `RESEARCH_SAMPLE_QUESTIONS`
   (예: `L05,L16,L31`)로 미리 고른다. **지금은 비어 있다(미정).** 모자란 층은 다른 층에서 채우지 않고 부족분(shortfall)으로 남긴다.
 - **반복 채점(2·3회차)**: 지난 추출 목록의 '2회차'·'3회차' 단추가 추출 사례의 최종 시도 글을 운영 채점기
   (`grading.runOperationalScoring`, 같은 모델·온도·지시문·단서 팩)로 다시 채점해 `research/v7.0/sample_repeat_scores/{추출}__{사례}__r{n}`에
   따로 저장한다(`schemaVersion 'v12.2-sample-repeat-1'`, 필드: sampleId·caseId·questionId·finalSubmissionId·repeatIndex·status·run·scoredAt).
-  1회차(제출 문서의 채점)는 건드리지 않는다. 동의가 지금 유효하지 않으면 부르지 않고 `skipped_consent`로 남긴다. 서버 함수 시간 제한 때문에
-  사례 하나씩 이어 부르며 이미 채점한 사례는 다시 부르지 않는다. CSV: 회차별 영역 수준(`r1_object_level`…) / 영역별 세 번 일치 비율
+  1회차(제출 문서의 채점)는 건드리지 않는다. 추출 뒤 동의를 철회했거나 제외 표시가 붙은 사례는 모델에 보내지 않고 문서도 만들지 않는다.
+  **모델 호출 실패·단서 없음 결측은 저장하지 않는다**(일시 장애가 영구 결측으로 굳지 않게 — 화면은 거기서 멈추고, 다시 누르면 이어서 한다).
+  형식 오류로 끝난 결측은 채점 절차의 결과라 저장한다. 서버 함수 시간 제한 때문에 사례 하나씩 이어 부르며 이미 저장한 사례는 다시 부르지 않는다. CSV: 회차별 영역 수준(`r1_object_level`…) / 영역별 세 번 일치 비율
   (`agreement_rate` = 세 번 모두 같은 수준 ÷ 세 번 모두 1~4로 채점된 사례, 해당 없음·결측은 분모에서 빼고 따로 셈, 반올림 안 함).
 - 개인정보 점검으로 멈춘 제출 수를 개요에 건수로만 보인다.
 - CSV는 브라우저로만 내려간다(BOM은 브라우저에서 다시 붙인다). `rp_*.csv`·`/exports/`는 `.gitignore`에 있다.

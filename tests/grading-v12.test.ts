@@ -409,9 +409,19 @@ test('일반 체험에서 단서가 적재되지 않았으면 공통 문언만�
   assert.ok(h.inputs[0].prompt.includes('공통 문언만으로 판정하고'));
   assert.ok(!h.inputs[0].prompt.includes('이 상태에서는 채점하지 않는다'));
   assert.ok(h.inputs[0].prompt.includes('요구하면 1~4로 판정하고'));
-  assert.equal(r.applicabilitySource, 'model');
+  // L01은 코드의 기본 목록이 관계를 해당 없음으로 정한다(단서 팩이 없을 때). 특징은 모델이 정한다.
+  assert.ok(h.inputs[0].prompt.includes('관계(relation): 이 과제는 요구하지 않는다'));
+  assert.equal(r.applicabilitySource, 'code_default');
   const res = scored(r);
   assert.equal(res.areas.relation.level, NA);
+
+  // 기본 목록에 없는 문항은 모델이 정한다.
+  const h2 = harness({
+    entry: practiceEntry({ questionId: 'L07', band: 'A', lesson: 2, cuesLoaded: false }),
+    script: [ok(validOutput({ relation: area(NA, null) }))],
+  });
+  const r2 = await run(h2, { questionId: 'L07', sessionType: 'experience' });
+  assert.equal(r2.applicabilitySource, 'model');
 });
 
 test('일반 체험이라도 단서가 적재되어 있으면 단서 팩으로 판정한다', async () => {

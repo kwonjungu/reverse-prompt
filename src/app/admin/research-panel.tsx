@@ -98,7 +98,16 @@ function downloadCsv(filename: string, csv: string) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // 브라우저가 내려받기를 시작하기 전에 주소를 거두지 않도록 조금 뒤에 푼다.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** 여러 파일을 잇달아 내려받는다. 브라우저가 한꺼번에 막지 않도록 사이를 둔다(막히면 목록의 파일별 단추로 받는다). */
+async function downloadCsvFiles(files: readonly { filename: string; csv: string }[]) {
+  for (const [i, f] of files.entries()) {
+    if (i > 0) await new Promise((resolve) => setTimeout(resolve, 600));
+    downloadCsv(f.filename, f.csv);
+  }
 }
 
 function defaultSeed(): string {
@@ -227,7 +236,7 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
     );
     if (data) {
       setSample(data);
-      for (const f of data.files) downloadCsv(f.filename, f.csv);
+      await downloadCsvFiles(data.files);
       void loadSamples();
     }
   };
@@ -249,8 +258,22 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
           break;
         }
         setRepeatRunning(`${sampleId}|${repeatIndex}|${res.data.done}/${res.data.total}`);
-        if (res.data.done >= res.data.total || res.data.scoredNow + res.data.skippedNow === 0) {
-          toast({ title: `${repeatIndex}회차 반복 채점을 마쳤습니다`, description: `${res.data.done}/${res.data.total}` });
+        if (res.data.failedNow > 0) {
+          // 모델 호출 실패·단서 없음은 저장하지 않았다. 잇달아 부르지 않고 멈춘다(다시 누르면 이어서 한다).
+          toast({
+            variant: 'destructive',
+            title: '반복 채점을 멈췄습니다',
+            description: `모델 호출에 실패한 사례가 있어 저장하지 않았습니다(${res.data.done}/${res.data.total}). 잠시 뒤 다시 누르면 이어서 합니다.`,
+          });
+          break;
+        }
+        if (res.data.done >= res.data.total || res.data.scoredNow === 0) {
+          toast({
+            title: `${repeatIndex}회차 반복 채점을 마쳤습니다`,
+            description:
+              `${res.data.done}/${res.data.total}` +
+              (res.data.withheld ? ` · 추출 뒤 동의 철회·제외 표시로 뺀 사례 ${res.data.withheld}개` : ''),
+          });
           break;
         }
       }

@@ -493,7 +493,12 @@ export interface SampleResult {
  *   no_consent     동의(보호자 동의 + 학생 승낙)가 지금 유효하지 않은 학생
  *   final_missing  최종 시도의 채점이 결측이라 종합 수준이 없음
  */
-export type ExclusionCountReason = ExclusionReason | 'no_consent' | 'final_missing';
+export type ExclusionCountReason =
+  | ExclusionReason
+  | 'no_consent'
+  | 'final_missing'
+  | 'no_consent_after_draw'
+  | 'excluded_after_draw';
 
 export interface ExclusionCount {
   questionId: string;
@@ -506,7 +511,69 @@ export const EXCLUSION_COUNT_LABEL: Record<ExclusionCountReason, string> = {
   personal_info: '개인정보 포함',
   no_consent: '동의 없음·철회',
   final_missing: '최종 채점 결측',
+  no_consent_after_draw: '추출 뒤 동의 철회(내보내기에서 뺌)',
+  excluded_after_draw: '추출 뒤 제외 표시(내보내기에서 뺌)',
 };
+
+/** 추출 뒤에 빠져야 하는 사례의 까닭: 지금 동의가 유효하지 않음 / 지금 제외 표시가 있음 */
+export type WithheldReason = 'no_consent' | ExclusionReason;
+
+/**
+ * 저장된 추출 사례 가운데 지금 기준으로 내보내거나 다시 채점하면 안 되는 사례(사례 ID → 까닭).
+ * 추출 뒤에 동의를 철회했거나 제외 표시(무관·개인정보)를 단 행이다. 동의가 우선한다.
+ */
+export function withheldCasesOf(
+  cases: readonly SampleCase[],
+  activeConsent: ReadonlySet<string>,
+  exclusions: ReadonlyMap<string, ExclusionReason>
+): Map<string, WithheldReason> {
+  const out = new Map<string, WithheldReason>();
+  for (const c of cases) {
+    if (!activeConsent.has(c.row.researchId)) out.set(c.caseId, 'no_consent');
+    else {
+      const reason = exclusions.get(exclusionKey(c.row.researchId, c.questionId));
+      if (reason) out.set(c.caseId, reason);
+    }
+  }
+  return out;
+}
+
+/** 추출 뒤에 빠진 사례를 문항 × 까닭으로 센다(뺀 수 파일에 덧붙인다). */
+export function withheldCounts(cases: readonly SampleCase[], withheld: ReadonlyMap<string, WithheldReason>): ExclusionCount[] {
+  const counts = new Map<string, ExclusionCount>();
+  for (const c of cases) {
+    const why = withheld.get(c.caseId);
+    if (!why) continue;
+    const reason: ExclusionCountReason = why === 'no_consent' ? 'no_consent_after_draw' : 'excluded_after_draw';
+    const key = `${c.questionId}|${reason}`;
+    const cur = counts.get(key) ?? { questionId: c.questionId, reason, count: 0 };
+    cur.count += 1;
+    counts.set(key, cur);
+  }
+  return [...counts.values()].sort((a, b) => a.questionId.localeCompare(b.questionId) || a.reason.localeCompare(b.reason));
+}
+
+/**
+ * 뺀 수를 문항·사유별로 담지 않은 예전 추출 기록(이 기능 전의 v12-2 추출)에서 뺀 수를 다시 만든다.
+ * 제외 목록(exclusions)은 문항·사유별로, 결측·동의 없음은 문항을 가를 수 없어 문항 'ALL'로 합계만 낸다.
+ */
+export function exclusionCountsFromStoredSample(data: Record<string, unknown>): ExclusionCount[] {
+  if (Array.isArray(data.exclusionCounts)) return data.exclusionCounts as ExclusionCount[];
+  const counts = new Map<string, ExclusionCount>();
+  for (const e of Array.isArray(data.exclusions) ? data.exclusions : []) {
+    const row = e as { questionId?: unknown; reason?: unknown };
+    if (typeof row.questionId !== 'string' || !isExclusionReason(row.reason)) continue;
+    const key = `${row.questionId}|${row.reason}`;
+    const cur = counts.get(key) ?? { questionId: row.questionId, reason: row.reason, count: 0 };
+    cur.count += 1;
+    counts.set(key, cur);
+  }
+  const out = [...counts.values()];
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  out.push({ questionId: 'ALL', reason: 'final_missing', count: num(data.unlevelledCount) });
+  out.push({ questionId: 'ALL', reason: 'no_consent', count: num(data.consentExcludedStudents) });
+  return out;
+}
 
 export function caseIdOf(questionId: string, level: number, sequence: number): string {
   const m = PRACTICE_ID.exec(questionId);
@@ -855,22 +922,55 @@ export const EXPERT_SAMPLE_COLUMNS: CsvColumn<ExpertSampleRow>[] = [
   { key: 'student_text', get: (r) => r.text },
 ];
 
-export function expertSampleRows(seed: string, cases: readonly SampleCase[]): ExpertSampleRow[] {
+/**
+ * 전문가용 행. 번호는 뽑힌 사례 전체로 매겨(나중에 빠진 사례가 있어도 번호가 바뀌지 않게) 빠진 사례만 뺀다.
+ * withheld: 추출 뒤 동의 철회·제외 표시로 내보내지 않는 사례(withheldCasesOf).
+ */
+export function expertSampleRows(
+  seed: string,
+  cases: readonly SampleCase[],
+  withheld: ReadonlyMap<string, WithheldReason> = new Map()
+): ExpertSampleRow[] {
   const ids = expertCaseIdsOf(seed, cases);
   return cases
+    .filter((c) => !withheld.has(c.caseId))
     .map((c) => ({ expertCaseId: ids.get(c.caseId)!, questionId: c.questionId, text: c.row.finalPrompt }))
     .sort((a, b) => a.expertCaseId.localeCompare(b.expertCaseId));
 }
 
-export const buildExpertSampleCsv = (seed: string, cases: readonly SampleCase[]) =>
-  toCsv(expertSampleRows(seed, cases), EXPERT_SAMPLE_COLUMNS);
+export const buildExpertSampleCsv = (
+  seed: string,
+  cases: readonly SampleCase[],
+  withheld: ReadonlyMap<string, WithheldReason> = new Map()
+) => toCsv(expertSampleRows(seed, cases, withheld), EXPERT_SAMPLE_COLUMNS);
 
-/** 연구자용: 전문가용 사례번호 대응표 + 앱 판정(기존 추출 열) */
-export const buildResearcherSampleCsv = (sampleId: string, seed: string, cases: readonly SampleCase[]) => {
+type ResearcherSampleRow = SampleCsvRow & { expertCaseId: string | null; withheld: WithheldReason | null };
+
+/**
+ * 연구자용: 전문가용 사례번호 대응표 + 앱 판정(기존 추출 열). 추출 뒤 빠진 사례는 행을 남기되 학생 문장·근거를 비우고
+ * withheld_reason에 까닭을 적는다(철회한 학생의 글을 다시 내보내지 않는다).
+ */
+export const buildResearcherSampleCsv = (
+  sampleId: string,
+  seed: string,
+  cases: readonly SampleCase[],
+  withheld: ReadonlyMap<string, WithheldReason> = new Map()
+) => {
   const ids = expertCaseIdsOf(seed, cases);
-  return toCsv(
-    cases.map((item) => ({ sampleId, seed, item, expertCaseId: ids.get(item.caseId) ?? null })),
-    [{ key: 'expert_case_id', get: (r) => r.expertCaseId }, ...(SAMPLE_COLUMNS as CsvColumn<SampleCsvRow & { expertCaseId: string | null }>[])]
+  const blank = (c: SampleCase): SampleCase => ({
+    ...c,
+    row: { ...c.row, finalPrompt: '', firstPrompt: '', feedbacks: '', finalAreas: null },
+  });
+  return toCsv<ResearcherSampleRow>(
+    cases.map((item) => {
+      const why = withheld.get(item.caseId) ?? null;
+      return { sampleId, seed, item: why ? blank(item) : item, expertCaseId: ids.get(item.caseId) ?? null, withheld: why };
+    }),
+    [
+      { key: 'expert_case_id', get: (r) => r.expertCaseId },
+      { key: 'withheld_reason', get: (r) => r.withheld },
+      ...(SAMPLE_COLUMNS as CsvColumn<ResearcherSampleRow>[]),
+    ]
   );
 };
 

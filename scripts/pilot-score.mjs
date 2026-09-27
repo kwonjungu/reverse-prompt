@@ -66,6 +66,27 @@ async function main() {
   const { grading } = pick(await import('../src/server/grading/index.ts'));
   const sessionType = args.experience ? 'experience' : 'research_practice';
 
+  // 연구 경로는 문항 단서가 있어야 채점한다. 단서가 없으면 운영 채점기는 모델을 부르지 않고 결측
+  // (required_call_failed)을 돌려주므로, 그것이 모델 결측률에 섞이지 않게 미리 확인하고 멈춘다.
+  if (!args.experience) {
+    const { registry, ensureCuePackLoaded } = pick(await import('../src/server/registry/index.ts'));
+    await ensureCuePackLoaded();
+    const missingCues = [];
+    for (const qid of [...new Set(items.map((it) => it.questionId))]) {
+      try {
+        registry.getCues(qid);
+      } catch {
+        missingCues.push(qid);
+      }
+    }
+    if (missingCues.length) {
+      console.error(
+        `단서 팩에 없는 문항: ${missingCues.join(', ')}. RESEARCH_ASSET_DIR/cue-pack.json을 두거나 --experience로 공통 문언만 쓴다.`
+      );
+      process.exit(2);
+    }
+  }
+
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '');
   const rows = [];
   for (const [i, item] of items.entries()) {
@@ -80,7 +101,7 @@ async function main() {
         wantFeedback: true,
       });
     } catch (err) {
-      // 단서 없음(cues_missing) 같은 등록 오류는 운영에서도 채점을 거부한다. 문장은 찍지 않는다.
+      // 등록되지 않은 문항·세션 같은 레지스트리 오류는 운영에서도 채점을 거부한다. 문장은 찍지 않는다.
       console.error(`[${i + 1}/${items.length}] ${item.id} ${item.questionId}: 채점 거부 — ${err?.code ?? err?.name ?? 'error'}`);
       process.exitCode = 1;
       continue;

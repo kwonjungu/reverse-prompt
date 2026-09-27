@@ -34,8 +34,11 @@ import {
   buildSampleCsv,
   buildStudentQuestionCsv,
   caseIdOf,
+  exclusionCountsFromStoredSample,
   expertCaseIdsOf,
   parseRepresentativeQuestions,
+  withheldCasesOf,
+  withheldCounts,
   countLegacyAttempts,
   drawStratifiedSample,
   exclusionKey,
@@ -554,11 +557,12 @@ test('전문가용 사례번호는 시드로 다시 만들어지고, 연구자�
   assert.notDeepEqual([...a.entries()].sort(), [...expertCaseIdsOf('s2', res.cases).entries()].sort());
   const researcher = buildResearcherSampleCsv('S-1', 's1', res.cases);
   assert.equal(header(researcher)[0], 'expert_case_id');
+  assert.equal(header(researcher)[1], 'withheld_reason');
   assert.ok(header(researcher).includes('case_id'));
   assert.ok(header(researcher).includes('app_level'));
   assert.ok(header(researcher).includes('final_object_level'));
   for (const c of res.cases) {
-    assert.ok(researcher.includes(`"${a.get(c.caseId)}","${c.caseId}"`), `${c.caseId} 대응이 연구자용에 없다`);
+    assert.ok(researcher.includes(`"${a.get(c.caseId)}",NA,"${c.caseId}"`), `${c.caseId} 대응이 연구자용에 없다`);
   }
 });
 
@@ -580,6 +584,52 @@ test('뺀 수와 사유를 문항 × 사유로 센다(제외 표시·최종 결�
   assert.ok(csv.includes('"no_consent","동의 없음·철회",4'));
   assert.ok(csv.includes('"personal_info","개인정보 포함",1'));
   assert.equal(csv.includes('R-'), false, '학생 연구ID를 싣지 않는다');
+});
+
+test('추출 뒤 동의를 철회했거나 제외 표시가 붙은 사례는 전문가용에서 빠지고, 연구자용에는 까닭만 남는다', () => {
+  const rows = frame(['L01'], 2).map((r, i) => ({ ...r, finalPrompt: `학생 문장 ${i}` }));
+  const res = drawStratifiedSample({ rows, questionIds: ['L01'], perLevel: 2, seed: 'w', excludedKeys: new Set() });
+  const [a, b, ...rest] = res.cases;
+  const active = new Set(res.cases.map((c) => c.row.researchId).filter((id) => id !== a.row.researchId));
+  const withheld = withheldCasesOf(res.cases, active, new Map([[exclusionKey(b.row.researchId, 'L01'), 'personal_info' as const]]));
+  assert.deepEqual([...withheld.entries()].sort(), [[a.caseId, 'no_consent'], [b.caseId, 'personal_info']].sort());
+  // 전문가용: 빠진 두 사례의 문장이 없고, 나머지의 새 번호는 전체로 매긴 번호 그대로다.
+  const ids = expertCaseIdsOf('w', res.cases);
+  const expert = buildExpertSampleCsv('w', res.cases, withheld);
+  assert.equal(expert.includes(a.row.finalPrompt), false);
+  assert.equal(expert.includes(b.row.finalPrompt), false);
+  for (const c of rest) assert.ok(expert.includes(`"${ids.get(c.caseId)}","L01","${c.row.finalPrompt}"`));
+  // 연구자용: 행은 남기되 학생 문장은 비우고 까닭을 적는다.
+  const researcher = buildResearcherSampleCsv('S', 'w', res.cases, withheld);
+  assert.equal(researcher.includes(a.row.finalPrompt), false);
+  assert.ok(researcher.includes(`"${ids.get(a.caseId)}","no_consent"`));
+  assert.ok(researcher.includes(`"${ids.get(b.caseId)}","personal_info"`));
+  // 뺀 수 파일에 덧붙일 수
+  assert.deepEqual(withheldCounts(res.cases, withheld), [
+    { questionId: 'L01', reason: 'excluded_after_draw', count: 1 },
+    { questionId: 'L01', reason: 'no_consent_after_draw', count: 1 },
+  ]);
+});
+
+test('뺀 수를 담지 않은 예전 추출 기록에서도 뺀 수 파일을 만든다', () => {
+  const counts = exclusionCountsFromStoredSample({
+    exclusions: [
+      { researchId: 'R-1', questionId: 'L01', reason: 'irrelevant' },
+      { researchId: 'R-2', questionId: 'L01', reason: 'irrelevant' },
+      { researchId: 'R-3', questionId: 'L14', reason: 'personal_info' },
+    ],
+    unlevelledCount: 2,
+    consentExcludedStudents: 5,
+  });
+  assert.deepEqual(counts, [
+    { questionId: 'L01', reason: 'irrelevant', count: 2 },
+    { questionId: 'L14', reason: 'personal_info', count: 1 },
+    { questionId: 'ALL', reason: 'final_missing', count: 2 },
+    { questionId: 'ALL', reason: 'no_consent', count: 5 },
+  ]);
+  const stored = [{ questionId: 'L01', reason: 'no_consent' as const, count: 3 }];
+  assert.deepEqual(exclusionCountsFromStoredSample({ exclusionCounts: stored }), stored);
+  assert.ok(buildExclusionReportCsv('S', counts).includes('"ALL","no_consent"'));
 });
 
 test('고른 문항이 A·B·C 하나씩이 아니면 경고한다', () => {

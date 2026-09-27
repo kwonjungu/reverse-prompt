@@ -71,8 +71,11 @@ import {
   exclusionKey,
   isConsentDocActive,
   isExclusionReason,
+  exclusionCountsFromStoredSample,
   isLegacySampleDoc,
   parseRepresentativeQuestions,
+  withheldCasesOf,
+  withheldCounts,
   sampleInputProblem,
   summarizeQuestions,
   summarizeStudentQuestions,
@@ -81,6 +84,7 @@ import {
   type ExclusionMark,
   type ExclusionReason,
   type ExtractionRow,
+  type WithheldReason,
   type PracticeAttempt,
   type QuestionSummary,
   type SampleCase,
@@ -479,15 +483,20 @@ function sampleFile(
   sampleId: string,
   seed: string,
   cases: SampleCase[],
-  exclusionCounts: ExclusionCount[]
+  exclusionCounts: ExclusionCount[],
+  withheld: ReadonlyMap<string, WithheldReason> = new Map()
 ): CsvFile {
   if (kind === 'expert') {
-    return { filename: `rp_sample_${sampleId}_expert.csv`, csv: buildExpertSampleCsv(seed, cases), rowCount: cases.length };
+    return {
+      filename: `rp_sample_${sampleId}_expert.csv`,
+      csv: buildExpertSampleCsv(seed, cases, withheld),
+      rowCount: cases.length - withheld.size,
+    };
   }
   if (kind === 'researcher') {
     return {
       filename: `rp_sample_${sampleId}_researcher.csv`,
-      csv: buildResearcherSampleCsv(sampleId, seed, cases),
+      csv: buildResearcherSampleCsv(sampleId, seed, cases, withheld),
       rowCount: cases.length,
     };
   }
@@ -496,6 +505,25 @@ function sampleFile(
     csv: buildExclusionReportCsv(sampleId, exclusionCounts),
     rowCount: exclusionCounts.length,
   };
+}
+
+/**
+ * 저장된 추출 사례를 지금 기준으로 다시 본다. 추출 뒤 동의를 철회했거나(보호자 동의 + 학생 승낙이 지금 유효하지 않음)
+ * 제외 표시가 붙은 사례는 내보내기·반복 채점에서 뺀다(사례 ID → 까닭).
+ */
+async function currentWithheld(cases: readonly SampleCase[]): Promise<Map<string, WithheldReason>> {
+  const db = getAdminFirestore();
+  const ids = [...new Set(cases.map((c) => c.row.researchId))];
+  const active = new Set<string>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const refs = ids.slice(i, i + 200).map((id) => db.collection(COLLECTIONS.consents).doc(assertSafeDocId(id, '연구ID')));
+    if (!refs.length) continue;
+    const docs = await db.getAll(...(refs as DocumentReference[]));
+    for (const d of docs) if (isConsentDocActive(d.id, d.exists ? (d.data() ?? null) : null)) active.add(d.id);
+  }
+  const exclusions = await loadActiveExclusions();
+  const reasons = new Map([...exclusions].map(([key, mark]) => [key, mark.reason]));
+  return withheldCasesOf(cases, active, reasons);
 }
 
 function newSampleId(): string {
@@ -686,10 +714,12 @@ export async function exportSampleCsvAction(sampleId: string, kind: SampleFileKi
     }
     const cases = Array.isArray(data.cases) ? (data.cases as SampleCase[]) : [];
     const seed = typeof data.seed === 'string' ? data.seed : '';
-    const counts = Array.isArray(data.exclusionCounts) ? (data.exclusionCounts as ExclusionCount[]) : [];
-    const file = sampleFile(kind, id, seed, cases, counts);
+    // 추출 뒤 동의 철회·제외 표시를 지금 기준으로 다시 본다. 빠진 사례는 전문가용에서 빼고 연구자용에는 까닭만 남긴다.
+    const withheld = await currentWithheld(cases);
+    const counts = [...exclusionCountsFromStoredSample(data), ...withheldCounts(cases, withheld)];
+    const file = sampleFile(kind, id, seed, cases, counts, withheld);
     privacy.assertNoSecrets([file.csv]);
-    await recordAdminEvent('research_export', id, { kind: `sample_${kind}`, rows: file.rowCount });
+    await recordAdminEvent('research_export', id, { kind: `sample_${kind}`, rows: file.rowCount, withheld: withheld.size });
     return file;
   });
 }
@@ -710,19 +740,29 @@ async function loadCurrentSample(sampleId: string): Promise<{ id: string; cases:
 export interface RepeatProgress {
   sampleId: string;
   repeatIndex: RepeatIndex;
+  /** 반복 채점할 사례 수(추출 뒤 동의 철회·제외 표시로 빠진 사례는 뺀 수) */
   total: number;
   done: number;
-  /** 이번 호출에서 채점한 사례 */
+  /** 이번 호출에서 채점해 저장한 사례 */
   scoredNow: number;
-  /** 이번 호출에서 동의가 없어 건너뛴 사례 */
-  skippedNow: number;
+  /** 이번 호출에서 모델 호출 실패·단서 없음으로 저장하지 않은 사례(다시 누르면 다시 채점한다) */
+  failedNow: number;
+  /** 추출 뒤 동의 철회·제외 표시로 빼는 사례 수 */
+  withheld: number;
+}
+
+/** 반복 채점 결과 가운데 저장하지 않고 다시 시도할 결측(모델 호출 실패, 단서 없음 같은 준비 실패). */
+function isRetryableMissing(run: ScoringRun): boolean {
+  return run.result.status === 'missing' && (run.result.reason === 'model_error' || run.result.reason === 'required_call_failed');
 }
 
 /**
  * 추출 사례를 운영 채점기(grading.runOperationalScoring)와 같은 설정으로 다시 채점해 repeatIndex 2·3으로
  * 따로 저장한다. 1회차(제출 문서의 채점)는 건드리지 않는다. 한 번에 limit개(기본 1)씩 하고 남은 수를 돌려준다
  * — 화면이 다 끝날 때까지 이어 부른다(서버 함수 시간 제한 때문). 이미 저장된 사례는 다시 부르지 않는다.
- * 동의가 지금 유효하지 않은 학생의 글은 모델에 보내지 않고 skipped_consent로 남긴다(철회 뒤 추가 채점 금지).
+ *   - 추출 뒤 동의를 철회했거나 제외 표시가 붙은 사례는 모델에 보내지 않는다(철회 뒤 추가 채점 금지).
+ *   - 모델 호출 실패·단서 없음은 저장하지 않는다(일시 장애가 영구 결측으로 굳지 않게). 형식 오류로 끝난 결측은
+ *     채점 절차의 결과이므로 그대로 저장한다.
  */
 export async function rescoreSampleBatchAction(input: {
   sampleId: string;
@@ -736,19 +776,20 @@ export async function rescoreSampleBatchAction(input: {
     if (!isRepeatIndex(repeatIndex)) throw new ResearchInputError('반복 채점은 2회차나 3회차만 합니다.');
     const limit = Math.min(Math.max(Math.trunc(Number(input?.limit ?? 1)) || 1, 1), 3);
 
+    const withheld = await currentWithheld(cases);
+    const eligible = cases.filter((c) => !withheld.has(c.caseId));
     const existing = await repeatScoresCollection()
       .where('sampleId', '==', id)
       .where('repeatIndex', '==', repeatIndex)
       .select('caseId')
       .get();
     const doneIds = new Set(existing.docs.map((d) => String(d.data().caseId)));
-    const todo = cases.filter((c) => !doneIds.has(c.caseId)).slice(0, limit);
+    const todo = eligible.filter((c) => !doneIds.has(c.caseId)).slice(0, limit);
 
     const db = getAdminFirestore();
     let scoredNow = 0;
-    let skippedNow = 0;
+    let failedNow = 0;
     for (const c of todo) {
-      const researchId = c.row.researchId;
       const finalSubmissionId = c.row.finalSubmissionId;
       const base = {
         schemaVersion: REPEAT_SCORE_SCHEMA_VERSION,
@@ -758,50 +799,51 @@ export async function rescoreSampleBatchAction(input: {
         finalSubmissionId,
         repeatIndex,
       };
-      const consent = await db.collection(COLLECTIONS.consents).doc(assertSafeDocId(researchId, '연구ID')).get();
+      const sub = await db
+        .collection(RESEARCH_PRACTICE_SUBMISSIONS_PATH)
+        .doc(assertSafeDocId(finalSubmissionId, '제출'))
+        .get();
+      const text = sub.exists ? sub.data()?.text : null;
       let docData: RepeatScoreDoc;
-      if (!isConsentDocActive(researchId, consent.exists ? (consent.data() ?? null) : null)) {
-        docData = { ...base, status: 'skipped_consent', run: null, scoredAt: new Date().toISOString() };
-        skippedNow += 1;
+      if (typeof text !== 'string' || !text.trim()) {
+        docData = { ...base, status: 'skipped_missing_submission', run: null, scoredAt: new Date().toISOString() };
       } else {
-        const sub = await db
-          .collection(RESEARCH_PRACTICE_SUBMISSIONS_PATH)
-          .doc(assertSafeDocId(finalSubmissionId, '제출'))
-          .get();
-        const text = sub.exists ? sub.data()?.text : null;
-        if (typeof text !== 'string' || !text.trim()) {
-          docData = { ...base, status: 'skipped_missing_submission', run: null, scoredAt: new Date().toISOString() };
-          skippedNow += 1;
-        } else {
-          // 채점 payload에는 학생·학급·시점이 없다(operationId도 사례 번호만 쓴다).
-          const scoringRun: ScoringRun = await grading.runOperationalScoring({
-            questionId: c.questionId,
-            studentText: text,
-            operationId: `repeat_${id}_${c.caseId}_r${repeatIndex}`,
-            repeatIndex,
-            sessionType: 'research_practice',
-            wantFeedback: true,
-          });
-          docData = { ...base, status: 'scored', run: scoringRun, scoredAt: new Date().toISOString() };
-          scoredNow += 1;
+        // 채점 payload에는 학생·학급·시점이 없다(operationId도 사례 번호만 쓴다).
+        const scoringRun: ScoringRun = await grading.runOperationalScoring({
+          questionId: c.questionId,
+          studentText: text,
+          operationId: `repeat_${id}_${c.caseId}_r${repeatIndex}`,
+          repeatIndex,
+          sessionType: 'research_practice',
+          wantFeedback: true,
+        });
+        if (isRetryableMissing(scoringRun)) {
+          failedNow += 1;
+          continue;
         }
+        docData = { ...base, status: 'scored', run: scoringRun, scoredAt: new Date().toISOString() };
       }
       try {
         await repeatScoresCollection().doc(repeatDocId(id, c.caseId, repeatIndex)).create(docData);
+        scoredNow += 1;
       } catch (err) {
         // 같은 사례를 다른 창에서 먼저 채점했다. 먼저 저장된 것을 그대로 둔다.
         const code = (err as { code?: unknown } | null)?.code;
-        if (code !== 6) throw err;
+        const message = String((err as Error | null)?.message ?? '');
+        if (code !== 6 && !/already exists/i.test(message)) throw err;
+        scoredNow += 1;
       }
     }
-    await recordAdminEvent('research_repeat_score', id, { repeatIndex, scoredNow, skippedNow });
+    await recordAdminEvent('research_repeat_score', id, { repeatIndex, scoredNow, failedNow, withheld: withheld.size });
+    const doneEligible = eligible.filter((c) => doneIds.has(c.caseId)).length;
     return {
       sampleId: id,
       repeatIndex,
-      total: cases.length,
-      done: Math.min(doneIds.size + todo.length, cases.length),
+      total: eligible.length,
+      done: Math.min(doneEligible + scoredNow, eligible.length),
       scoredNow,
-      skippedNow,
+      failedNow,
+      withheld: withheld.size,
     };
   });
 }
@@ -826,8 +868,10 @@ export async function exportRepeatScoresCsvAction(input: {
       const r = d.data() as RepeatScoreDoc;
       byKey.set(`${r.caseId}|${r.repeatIndex}`, r);
     }
+    // 추출 뒤 동의 철회·제외 표시로 빠진 사례는 반복 채점 CSV에서도 뺀다.
+    const withheld = await currentWithheld(cases);
     const rows: RepeatCaseRow[] = [];
-    for (const c of cases) {
+    for (const c of cases.filter((x) => !withheld.has(x.caseId))) {
       const sub = await db
         .collection(RESEARCH_PRACTICE_SUBMISSIONS_PATH)
         .doc(assertSafeDocId(c.row.finalSubmissionId, '제출'))

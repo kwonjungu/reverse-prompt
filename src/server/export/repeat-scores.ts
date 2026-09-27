@@ -29,9 +29,11 @@ export function isRepeatIndex(v: unknown): v is RepeatIndex {
 
 /**
  * research/v7.0/sample_repeat_scores/{sampleId}__{caseId}__r{n} 문서.
- *   status  scored  채점함(run.result가 scored 또는 missing — 결측도 채점 시도의 결과로 남긴다)
- *           skipped_consent  동의가 지금 유효하지 않아 부르지 않음(철회 뒤 추가 채점 금지)
+ *   status  scored  채점함(run.result가 scored, 또는 형식 오류로 끝난 missing — 채점 절차의 결과로 남긴다).
+ *                   모델 호출 실패·단서 없음은 저장하지 않고 다시 시도한다.
  *           skipped_missing_submission  최종 제출 문서를 찾지 못함
+ *   추출 뒤 동의를 철회했거나 제외 표시가 붙은 사례는 문서를 만들지 않는다(모델에 보내지 않는다).
+ *   skipped_consent는 예전 문서와의 호환을 위해 타입에만 남는다.
  */
 export interface RepeatScoreDoc {
   schemaVersion: string;

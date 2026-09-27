@@ -75,7 +75,7 @@ export interface PracticeScoringRecord {
    */
   servedModel: string | null;
   /** 판정 여부(해당 없음)를 정한 근거. 옛 기록에는 없다. */
-  applicabilitySource?: 'cue_pack' | 'model' | null;
+  applicabilitySource?: 'cue_pack' | 'code_default' | 'model' | null;
   /** 피드백의 단계 초점 영역. 옛 기록에는 없다. */
   focusArea?: AreaId | null;
   modelConfig: Record<string, unknown> | null;

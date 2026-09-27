@@ -38,6 +38,7 @@ import {
   type FeedbackDraft,
 } from '@/lib/feedback';
 import { stageFocusArea } from '@/lib/stages';
+import { defaultNotApplicableAreas } from '@/lib/question-areas';
 import type {
   CallRecord,
   FeedbackPresentation,
@@ -281,7 +282,11 @@ export function createGrading(deps: GradingDeps): GradingApi {
           // 이 절차가 실제로 쓴 공통 문언의 버전이다.
           rubricVersion: RUBRIC_VERSION,
           cueVersion: entry.cueVersion,
-          applicabilitySource: cues ? 'cue_pack' : 'model',
+          applicabilitySource: cues
+            ? 'cue_pack'
+            : defaultNotApplicableAreas(req.questionId).length
+              ? 'code_default'
+              : 'model',
           focusArea,
           imageHash,
           promptHash: hash,
