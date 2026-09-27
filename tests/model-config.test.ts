@@ -31,6 +31,17 @@ test('채점 모델 이름은 src/server/config.ts 한 곳에만 있다', () => 
   assert.deepEqual(hits, ['src/server/config.ts']);
 });
 
+test('채점 호출은 측정한 설정 그대로다: 사고 수준을 지정하지 않고 온도만 넘긴다', () => {
+  // docs/model-cost-analysis.md의 권장 설정(3.8 Flash, 사고 기본값)이 이 모양으로 측정됐다.
+  const hits = walk(path.join(ROOT, 'src'))
+    .filter((f) => /\bthinking(Config|Level|Budget)\s*:/.test(readFileSync(f, 'utf8')))
+    .map((f) => path.relative(ROOT, f));
+  assert.deepEqual(hits, [], '사고 수준을 바꾸려면 다시 측정한 뒤 이 시험을 고친다');
+  const cfg = /EVALUATION_MODEL_CONFIG = \{([^}]*)\}/.exec(read('src/server/config.ts'));
+  assert.ok(cfg, 'config.ts에서 EVALUATION_MODEL_CONFIG를 찾지 못했다');
+  assert.match(cfg[1], /^\s*temperature: Number\(process\.env\.EVALUATION_TEMPERATURE \?\? 0\.2\),\s*$/);
+});
+
 test('문서가 적은 기본 모델이 config.ts의 기본값과 같다', () => {
   const m = /\|\|\s*'([^']+)'/.exec(read('src/server/config.ts').split('EVALUATION_MODEL_ID =')[1] ?? '');
   assert.ok(m, 'config.ts에서 기본 모델을 찾지 못했다');

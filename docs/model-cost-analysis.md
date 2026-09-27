@@ -1,6 +1,21 @@
 # 채점 모델 비교와 API 비용 (2026-09-27 실측)
 
-Gemini 2.5 계열이 2026-10-16(가장 이른 종료일) 이후 끊길 수 있어 후보 세 모델을 실제 채점 절차로 비교했다.
+**결정(2026-09-27): 채점 모델은 `gemini-3.8-flash`로 확정한다.** 사고 수준은 지정하지 않고(Google 기본값, 아래 권장 설정), 온도는 논문 설정 0.2 그대로다.
+다른 회사 모델(Grok·GPT·Claude 등)은 시험하지 않기로 했다. 설정은 `src/server/config.ts` 한 곳이며
+`tests/model-config.test.ts`가 이 모양(사고 수준을 넘기지 않음, 온도만)을 고정한다.
+
+**비교한 까닭.** 앱은 `gemini-2.5-flash`를 쓰고 있었다. 종료일은 경로마다 다르다(2026-09-27 확인).
+- Gemini Developer API(앱이 쓰는 경로, API 키): `gemini-2.5-flash`는 **종료일 미발표**.
+- Vertex AI: `gemini-2.5-flash` 종료 **2026-10-20**.
+- 두 경로 모두 `gemini-3.8-flash`는 종료일 미발표.
+- 예전 이 문단의 "2026-10-16"은 틀린 날짜였다. 공식 페이지 두 곳 어디에도 없다.
+
+곧 끊기는 것은 채점이 아니라 그림 제작 모델이다. Developer API의 `gemini-2.5-flash-image`는 **2026-10-02** 종료다.
+`scripts/generate-question-images.mjs`가 이 모델을 쓰지만 옛 파일 이름(`practice-01.png`)으로 만드는 옛 스크립트라 지금은 쓰지 않는다.
+사진 교체는 `docs/practice-image-audit.md`의 프롬프트를 Nano Banana 2(`gemini-3.1-flash-image`, 종료일 미발표)로 만든다.
+
+**사고 수준.** Google 안내에 따르면 지정하지 않을 때 Gemini 3은 `high`가 기본이다. Flash는 여기에 더해 문제 난이도에 따라 조절한다.
+`high`를 명시하는 것이 기본값과 같은지는 재지 않았으므로 명시하지 않는다.
 
 **측정 방법**
 - 앱의 운영 채점 절차를 그대로 썼다(`createGrading` + `genkitCallModel`). 지시문, 그림, 출력 형식, 재시도, 피드백 검증, 피드백 재생성이 모두 운영과 같다.
@@ -77,6 +92,7 @@ Gemini 2.5 계열이 2026-10-16(가장 이른 종료일) 이후 끊길 수 있�
 ## 5. 출처
 
 - [Gemini Developer API 가격](https://ai.google.dev/gemini-api/docs/pricing)
-- [Gemini 모델 종료 일정](https://ai.google.dev/gemini-api/docs/deprecations)
+- [Gemini 모델 종료 일정(Developer API)](https://ai.google.dev/gemini-api/docs/deprecations)
+- [Vertex AI 모델 버전·종료 일정](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions)
 - [Gemini 3 개발 안내(사고 수준·온도)](https://ai.google.dev/gemini-api/docs/gemini-3)
 - [미디어 해상도별 토큰](https://ai.google.dev/gemini-api/docs/media-resolution)

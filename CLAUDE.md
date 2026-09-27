@@ -682,7 +682,7 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 | 추출 사례 반복 채점·일치 비율 | `src/server/export/repeat-scores.ts` · `src/server/admin/research-actions.ts` |
 | 실제 모델 예비 점검(연구자 구성 문장) | `scripts/pilot-score.mjs` · `src/server/export/pilot-summary.ts` |
 | 요약·층화 추출 규칙(앱 종합 4수준 산정은 `scoring.ts`의 `overallLevelOf`) | `src/server/export/practice-summary.ts` |
-| 모델 교체 | `src/server/config.ts`의 `EVALUATION_MODEL_ID` |
+| 모델 교체 | `src/server/config.ts`의 `EVALUATION_MODEL_ID` — 3.8 Flash로 확정, 사고 수준 지정 없음·온도 0.2(2026-09-27, `docs/model-cost-analysis.md`). 바꾸려면 같은 절차로 다시 잰다 |
 
 ## 복구 기록
 
