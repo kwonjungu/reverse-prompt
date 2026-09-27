@@ -16,7 +16,7 @@
  *     교사 비밀번호는 Firebase Authentication이 보관한다.
  *   - 이 화면은 학생 답안·점수를 읽지 않는다(access.ts: 관리 계정은 반·계정 관리만).
  *     입장 중인 학생 수만 센다.
- *   - 연구 성격의 반은 registry.readiness()가 통과할 때만 만든다. 코드가 만들어 낼 수
+ *   - 연구 성격의 반은 registry.readiness()(논문 v12 연구 수업 조건)가 통과할 때만 만든다. 코드가 만들어 낼 수
  *     없는 운영값(IRB·동의 버전·전문가 확정)을 대신 채우지 않는다.
  *   - 반의 세션 성격은 만들 때 한 번 정하고 바꾸지 않는다(감사 A-5).
  *
@@ -34,7 +34,7 @@ import {
   getAdminFirestore,
 } from '@/server/firebase-admin';
 import { getLessonStore } from '@/server/lessons/store';
-import { registry } from '@/server/registry';
+import { ensureCuePackLoaded, registry } from '@/server/registry';
 import type { SessionType } from '@/lib/research/types';
 import { parseCreatableSessionType } from '@/lib/research/session-modes';
 
@@ -131,6 +131,8 @@ export async function getAdminStatusAction(): Promise<AdminStatus> {
   if (signedIn) {
     firebase = await checkFirebaseSetup().catch(() => null);
     try {
+      // 준비 조건이 단서 팩(파일 또는 Firestore 사본)을 본다. 사본을 먼저 읽어 둔다.
+      await ensureCuePackLoaded();
       const r = registry.readiness();
       research = { ready: r.researchReady, blockers: r.blockers };
     } catch {
@@ -344,7 +346,8 @@ export async function createClassAction(input: {
       throw new AdminInputError('만들 수 없는 반 성격입니다. 일반 수업 또는 연구 수업을 골라 주세요.');
     }
     if (sessionType !== 'experience') {
-      // 연구 성격의 반은 연구 시작 조건이 모두 갖춰졌을 때만 만든다.
+      // 연구 성격의 반은 연구 시작 조건(논문 v12: 운영값 + 연습 36문항 단서)이 모두 갖춰졌을 때만 만든다.
+      await ensureCuePackLoaded();
       const readiness = registry.readiness();
       if (!readiness.researchReady) {
         throw new AdminInputError(

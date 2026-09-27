@@ -126,9 +126,12 @@ service cloud.firestore {
     }
 
     // 통합 관리 화면(/admin)의 설정·조작 기록. 서버(Admin SDK)만 읽고 쓴다.
-    // 관리자 비밀번호는 여기에 scrypt 해시로만 있다.
+    // 관리자 비밀번호는 여기에 scrypt 해시로만 있다(admin_config/console).
+    // admin_config/cue_pack에는 비공개 단서 팩 사본(단서 본문)이 있다. 어떤 클라이언트도
+    // 읽거나 쓰지 못한다. 관리 화면의 올리기·지우기도 서버 action(Admin SDK)을 거친다.
     match /admin_config/{docId} {
       allow read, write: if false;
+      match /{document=**} { allow read, write: if false; }
     }
 
     match /admin_events/{eventId} {

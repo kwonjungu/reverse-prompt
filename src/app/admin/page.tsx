@@ -38,6 +38,7 @@ import {
 } from '@/server/admin/actions';
 import type { SessionType } from '@/lib/research/types';
 import { ResearchPanel } from './research-panel';
+import { CuePackPanel } from './cue-pack-panel';
 import { ParticipantsDialog } from './participants-dialog';
 import { isResearchSession } from '@/lib/research/session-modes';
 import { Button } from '@/components/ui/button';
@@ -418,7 +419,11 @@ export default function AdminConsolePage() {
           </TabsContent>
 
           <TabsContent value="research" className="space-y-6">
-            <ResearchPanel onSignedOut={markSignedOut} />
+            <div className="space-y-6">
+              {/* 단서 팩 올리기·적재 상태(연구 수업 채점과 준비 조건의 근거). 내용은 화면에 다시 보이지 않는다. */}
+              <CuePackPanel onSignedOut={markSignedOut} />
+              <ResearchPanel onSignedOut={markSignedOut} />
+            </div>
           </TabsContent>
 
           <TabsContent value="settings" className="space-y-6">
@@ -1167,7 +1172,7 @@ function SettingsPanel(props: { status: AdminStatus; busy: boolean; act: Act }) 
           <AlertTitle>연구 준비 상태: {props.status.research.ready ? '준비됨' : '준비 전'}</AlertTitle>
           <AlertDescription>
             {props.status.research.ready ? (
-              '연구 수업·연구 검사 반을 만들 수 있습니다.'
+              '연구 수업 반을 만들 수 있습니다(논문 v12 조건: 운영값 + 연습 36문항 단서).'
             ) : (
               <ul className="list-disc pl-5 text-sm">
                 {props.status.research.blockers.map((b) => (

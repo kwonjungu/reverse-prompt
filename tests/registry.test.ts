@@ -14,11 +14,13 @@ import { chasiOfLevel } from '@/lib/stages';
 import {
   ASSESSMENT_INSTRUCTION,
   ASSESSMENT_ORDER,
+  PRACTICE_QUESTION_IDS,
   baseEntries,
-  collectBlockers,
+  collectAssessmentBlockers,
+  collectPracticeBlockers,
   findBaseEntry,
   practiceQuestionId,
-  type ReadinessInput,
+  type AssessmentReadinessInput,
 } from '@/server/registry/entries';
 import {
   createRegistry,
@@ -295,22 +297,101 @@ test('연구 세션은 단서 없는 문항 채점을 거부하고 일반 체험
 
 /* ────────────────────────── readiness ────────────────────────── */
 
-test('검사 문항이 candidate이면 researchReady는 false다', () => {
+/** 연습 36문항 단서가 모두 채워진 팩(형식 확인용 자리표시) */
+function fullPracticePack(extra: Record<string, unknown> = {}, omit: string[] = []): LoadedCuePack {
+  const questions: Record<string, unknown> = {};
+  for (const id of PRACTICE_QUESTION_IDS) {
+    if (!omit.includes(id)) questions[id] = filledCues(findBaseEntry(id)!.band);
+  }
+  return parseCuePack({ cueVersion: 'v12-2-candidate', questions: { ...questions, ...extra } });
+}
+
+test('연습 문항 ID는 L01~L36 번호 순 36개다', () => {
+  assert.equal(PRACTICE_QUESTION_IDS.length, 36);
+  assert.equal(PRACTICE_QUESTION_IDS[0], 'L01');
+  assert.equal(PRACTICE_QUESTION_IDS[12], 'L13');
+  assert.equal(PRACTICE_QUESTION_IDS[35], 'L36');
+});
+
+test('v12 readiness — 운영값 셋과 연습 36문항 단서가 있으면 검사 문항이 candidate여도 연구 수업을 연다', () => {
+  // 검사 T1~T3은 candidate·승인일 없음·이미지 없음·단서 없음이지만 v12 연구 수업은 막지 않는다.
+  const registry = createRegistry(
+    makeDeps({
+      cuePack: () => fullPracticePack(),
+      assessmentImageStatus: () => ({ missing: ['T1', 'T2_v7', 'T3'], mismatch: [] }),
+      config: { ...ALL_ASSETS_PRESENT, researchAssetDir: '' },
+    }),
+  );
+  const readiness = registry.readiness();
+  assert.deepEqual(readiness.blockers, []);
+  assert.equal(readiness.researchReady, true);
+
+  // 검사 경로는 옛 조건 그대로 막힌다.
+  const assessment = registry.assessmentReadiness();
+  assert.equal(assessment.researchReady, false);
+  for (const needle of ['RESEARCH_ASSET_DIR', 'candidate', 'approvedAt', '검사 문항 단서', '검사 이미지']) {
+    assert.ok(assessment.blockers.some((b) => b.includes(needle)), `검사 조건에 '${needle}'가 남아야 한다`);
+  }
+});
+
+test('v12 readiness — 연습 문항 하나라도 단서가 빠지거나 실격이면 막고 그 문항을 밝힌다', () => {
+  const missingOne = createRegistry(makeDeps({ cuePack: () => fullPracticePack({}, ['L07']) }));
+  const r1 = missingOne.readiness();
+  assert.equal(r1.researchReady, false);
+  assert.ok(r1.blockers.some((b) => b.includes('L07') && b.includes('35/36')), r1.blockers.join(' | '));
+
+  const brokenOne = createRegistry(
+    makeDeps({ cuePack: () => fullPracticePack({ L20: { ...filledCues('B'), coreObjects: [] } }) }),
+  );
+  const r2 = brokenOne.readiness();
+  assert.equal(r2.researchReady, false);
+  assert.ok(r2.blockers.some((b) => b.includes('L20')));
+});
+
+test('v12 readiness — 운영값과 단서 팩이 없으면 각각 사유로 남고 검사·자산 사유는 섞이지 않는다', () => {
+  const blockers = collectPracticeBlockers({
+    consentVersion: '',
+    irbApproval: '',
+    modelAccessVerified: false,
+    cuePackLoaded: false,
+    cuePackError: '단서 팩이 없습니다.',
+    cuePackVersion: null,
+    practiceCuesMissing: [...PRACTICE_QUESTION_IDS],
+  });
+  for (const needle of ['CONSENT_VERSION', 'IRB_APPROVAL', 'EVALUATION_MODEL_VERIFIED', 'cue-pack.json', '단서 팩이 없습니다']) {
+    assert.ok(blockers.some((b) => b.includes(needle)), `사유에 '${needle}'가 들어 있어야 한다: ${blockers.join(' | ')}`);
+  }
+  for (const absent of ['RESEARCH_ASSET_DIR', 'candidate', 'approvedAt', 'SHA-256', '검사']) {
+    assert.ok(!blockers.some((b) => b.includes(absent)), `v12 조건에 '${absent}'가 들어가면 안 된다`);
+  }
+
+  const ready = collectPracticeBlockers({
+    consentVersion: 'c1',
+    irbApproval: 'IRB-1',
+    modelAccessVerified: true,
+    cuePackLoaded: true,
+    cuePackVersion: 'v12-2-candidate',
+    practiceCuesMissing: [],
+  });
+  assert.deepEqual(ready, []);
+});
+
+test('검사 문항이 candidate이면 옛 검사 준비 조건(assessmentReadiness)은 false다', () => {
   const pack = packWith({
     T1: filledCues('A'),
     T2_v7: filledCues('B'),
     T3: filledCues('C'),
   });
   const registry = createRegistry(makeDeps({ cuePack: () => pack }));
-  const readiness = registry.readiness();
+  const readiness = registry.assessmentReadiness();
 
   assert.equal(readiness.researchReady, false);
   assert.ok(readiness.blockers.some((b) => b.includes('candidate')));
   assert.ok(readiness.blockers.some((b) => b.includes('approvedAt')));
 });
 
-test('미확정 운영값과 자산 누락이 각각 사유로 남는다', () => {
-  const base: ReadinessInput = {
+test('옛 검사 준비 조건 — 미확정 운영값과 자산 누락이 각각 사유로 남는다', () => {
+  const base: AssessmentReadinessInput = {
     researchAssetDir: '',
     consentVersion: '',
     irbApproval: '',
@@ -320,7 +401,7 @@ test('미확정 운영값과 자산 누락이 각각 사유로 남는다', () =>
     assessmentImagesMissing: ['T1'],
     assessmentImageHashMismatch: ['T3'],
   };
-  const blockers = collectBlockers(base);
+  const blockers = collectAssessmentBlockers(base);
 
   for (const needle of [
     'RESEARCH_ASSET_DIR',
@@ -340,17 +421,18 @@ test('미확정 운영값과 자산 누락이 각각 사유로 남는다', () =>
   }
 });
 
-test('이미지 해시가 명세와 다르면 연구 시작을 막는다', () => {
-  const pack = packWith({ T1: filledCues('A'), T2_v7: filledCues('B'), T3: filledCues('C') });
+test('이미지 해시가 명세와 다르면 옛 검사를 막지만 v12 연구 수업은 막지 않는다', () => {
+  const pack = fullPracticePack({ T1: filledCues('A'), T2_v7: filledCues('B'), T3: filledCues('C') });
   const registry = createRegistry(
     makeDeps({
       cuePack: () => pack,
       assessmentImageStatus: () => ({ missing: [], mismatch: ['T2_v7'] }),
     }),
   );
-  const readiness = registry.readiness();
-  assert.equal(readiness.researchReady, false);
-  assert.ok(readiness.blockers.some((b) => b.includes('SHA-256') && b.includes('T2_v7')));
+  const assessment = registry.assessmentReadiness();
+  assert.equal(assessment.researchReady, false);
+  assert.ok(assessment.blockers.some((b) => b.includes('SHA-256') && b.includes('T2_v7')));
+  assert.equal(registry.readiness().researchReady, true);
 });
 
 /* ────────────────────────── 공개 view ────────────────────────── */
@@ -471,7 +553,7 @@ test('D4 — 팩이 cueVersion을 밝히지 않으면 연구 시작을 막는 �
   const noVersion = parseCuePack({ questions: { T1: filledCues('A') } });
   assert.equal(noVersion.cueVersion, null);
 
-  const input: ReadinessInput = {
+  const input: AssessmentReadinessInput = {
     ...ALL_ASSETS_PRESENT,
     cuePackLoaded: true,
     cuePackVersion: null,
@@ -479,8 +561,19 @@ test('D4 — 팩이 cueVersion을 밝히지 않으면 연구 시작을 막는 �
     assessmentImagesMissing: [],
     assessmentImageHashMismatch: [],
   };
-  assert.ok(collectBlockers(input).some((b) => b.includes('cueVersion')));
+  assert.ok(collectAssessmentBlockers(input).some((b) => b.includes('cueVersion')));
 
-  const withVersion = collectBlockers({ ...input, cuePackVersion: 'v7.2-frozen' });
+  const withVersion = collectAssessmentBlockers({ ...input, cuePackVersion: 'v7.2-frozen' });
   assert.ok(!withVersion.some((b) => b.includes('cueVersion')));
+
+  // v12 연구 수업 조건도 같다. 연습 36문항이 다 있어도 버전이 없으면 막는다.
+  const practice = {
+    consentVersion: 'c1',
+    irbApproval: 'IRB-1',
+    modelAccessVerified: true,
+    cuePackLoaded: true,
+    practiceCuesMissing: [],
+  };
+  assert.ok(collectPracticeBlockers({ ...practice, cuePackVersion: null }).some((b) => b.includes('cueVersion')));
+  assert.deepEqual(collectPracticeBlockers({ ...practice, cuePackVersion: 'v12-2' }), []);
 });

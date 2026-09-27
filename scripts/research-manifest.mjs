@@ -102,7 +102,14 @@ async function main() {
   const registryDir = join(ROOT, 'src', 'server', 'registry');
   const entriesModule = await import(pathToFileURL(join(registryDir, 'entries.ts')).href);
   const coreModule = await import(pathToFileURL(join(registryDir, 'core.ts')).href);
-  const { ASSESSMENT_ORDER, baseEntries, collectBlockers, assessmentImageFile } = entriesModule;
+  const {
+    ASSESSMENT_ORDER,
+    PRACTICE_QUESTION_IDS,
+    baseEntries,
+    collectAssessmentBlockers,
+    collectPracticeBlockers,
+    assessmentImageFile,
+  } = entriesModule;
   const { applyCueState, parseCuePack } = coreModule;
 
   const missing = [];
@@ -128,6 +135,7 @@ async function main() {
   );
 
   /* ── 비공개 단서 팩 ── */
+  // 이 스크립트는 파일만 읽는다. 관리 화면에서 올린 Firestore 사본(admin_config/cue_pack)은 보지 않는다.
   const assetDir = (process.env.RESEARCH_ASSET_DIR || '').trim();
   if (!assetDir) missing.push('RESEARCH_ASSET_DIR 미설정');
 
@@ -243,12 +251,24 @@ async function main() {
   if (!irbApproval) missing.push('IRB_APPROVAL 미설정');
   if (!modelAccessVerified) missing.push('EVALUATION_MODEL_VERIFIED 미설정');
 
-  const blockers = collectBlockers({
+  // 논문 v12 연구 수업(연습)의 준비 조건 — 운영값 셋과 연습 L01~L36 단서 전부.
+  const blockers = collectPracticeBlockers({
+    consentVersion,
+    irbApproval,
+    modelAccessVerified,
+    cuePackLoaded,
+    cuePackError,
+    cuePackVersion: packState.cueVersion,
+    practiceCuesMissing: PRACTICE_QUESTION_IDS.filter((id) => !cueHashOf(id)),
+  });
+  // 옛 사전·사후 검사의 준비 조건(검사 경로만 쓴다).
+  const assessmentBlockers = collectAssessmentBlockers({
     researchAssetDir: assetDir,
     consentVersion,
     irbApproval,
     modelAccessVerified,
     cuePackLoaded,
+    cuePackVersion: packState.cueVersion,
     assessmentCuesMissing: [...assessmentCuesMissing],
     assessmentImagesMissing: imagesMissing,
     assessmentImageHashMismatch: imageMismatch,
@@ -278,6 +298,7 @@ async function main() {
     assessmentOrder: [...ASSESSMENT_ORDER],
     items,
     readiness: { researchReady: blockers.length === 0, blockers },
+    assessmentReadiness: { researchReady: assessmentBlockers.length === 0, blockers: assessmentBlockers },
     missing,
     note:
       '단서·앵커 본문과 검사 이미지는 이 파일에 담지 않는다. 단서는 해시로만 기록한다. ' +

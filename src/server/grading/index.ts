@@ -10,7 +10,7 @@ import 'server-only';
 
 import { z } from 'genkit';
 import { ai } from '@/ai/genkit';
-import { registry } from '@/server/registry';
+import { ensureCuePackLoaded, registry } from '@/server/registry';
 import { privacy } from '@/server/privacy';
 import { CODE_COMMIT, EVALUATION_MODEL_CONFIG, EVALUATION_MODEL_ID } from '@/server/config';
 import { createGrading, resolveModelConfig, type CallModel } from './operational';
@@ -82,7 +82,7 @@ export const genkitCallModel: CallModel = async (input) => {
   return { output: response.output, servedModel: servedModelOf(response.custom) };
 };
 
-export const grading: GradingApi = createGrading({
+const operationalGrading: GradingApi = createGrading({
   callModel: genkitCallModel,
   registry,
   privacy,
@@ -90,6 +90,18 @@ export const grading: GradingApi = createGrading({
   modelConfig: resolveModelConfig({ ...EVALUATION_MODEL_CONFIG }),
   codeCommit: CODE_COMMIT,
 });
+
+/**
+ * 채점기는 레지스트리를 동기로 읽는다. 단서 팩이 Firestore 사본이면(Vercel) 채점 전에 적재를 기다린다.
+ * 어느 경로(연습·연수·검사 사후 채점)로 부르든 같은 팩 상태로 채점하기 위해 여기서 한 번 더 기다린다.
+ * 채점 절차·판정은 바꾸지 않는다.
+ */
+export const grading: GradingApi = {
+  async runOperationalScoring(req) {
+    await ensureCuePackLoaded();
+    return operationalGrading.runOperationalScoring(req);
+  },
+};
 
 /* ────────────────────────── 옛 v7 — 게임·타임어택 전용 ────────────────────────── */
 
@@ -122,7 +134,7 @@ const legacyCallModel: LegacyCallModel = async (input) => {
 };
 
 /** 옛 공통 루브릭 v7(5수준·100점) 채점기. 게임·타임어택만 쓴다. 저장하지 않는다. */
-export const legacyV7Grading: LegacyGradingApi = createLegacyV7Grading({
+const legacyV7Operational: LegacyGradingApi = createLegacyV7Grading({
   callModel: legacyCallModel,
   registry,
   privacy,
@@ -130,3 +142,11 @@ export const legacyV7Grading: LegacyGradingApi = createLegacyV7Grading({
   modelConfig: resolveModelConfig({ ...EVALUATION_MODEL_CONFIG }),
   codeCommit: CODE_COMMIT,
 });
+
+/** 옛 v7 채점기도 같은 이유로 단서 팩 적재를 먼저 기다린다(게임·타임어택 문항은 단서가 없어 결과는 같다). */
+export const legacyV7Grading: LegacyGradingApi = {
+  async runOperationalScoring(req) {
+    await ensureCuePackLoaded();
+    return legacyV7Operational.runOperationalScoring(req);
+  },
+};
