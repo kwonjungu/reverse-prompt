@@ -41,6 +41,7 @@ import {
 } from '@/server/lessons/session-cookie';
 import { CONSENT_VERSION, SERVER_SESSION_SECRET } from '@/server/config';
 import { parseStudentNumber, verifyPassword } from '@/server/admin/core';
+import { entryKindOf, type EntryKind } from './entry-kind';
 import {
   COLLECTIONS,
   PARTICIPANTS_SUBCOLLECTION,
@@ -349,6 +350,26 @@ export interface IssueSessionInput {
  */
 export const CLASS_ENTRY_DENIED_MESSAGE = '열려 있는 수업이 아니거나 비밀번호가 맞지 않아요.';
 export const STUDENT_NUMBER_REQUIRED_MESSAGE = '번호(출석 번호)를 1~99 사이로 적어 주세요.';
+
+/**
+ * 입장 화면이 보여 줄 칸을 정하는 반 종류(99-1 B5). 반이 열려 있고 비밀번호가 맞을 때만 연구/일반을 알려 주고,
+ * 그 밖(없는 반·닫힌 반·틀린 비밀번호·설정 오류·쓸 수 없는 번호)은 모두 'unknown'이다(entry-kind.ts).
+ * 세션을 만들지 않고 아무것도 쓰지 않는다.
+ */
+async function lookupClassEntryKind(input: {
+  classResearchId: string;
+  entryPassword?: string | null;
+}): Promise<EntryKind> {
+  if (!isAdminConfigured()) return 'unknown';
+  const id = typeof input.classResearchId === 'string' ? input.classResearchId.trim() : '';
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return 'unknown';
+  try {
+    const snap = await getAdminFirestore().collection(COLLECTIONS.researchClasses).doc(id).get();
+    return await entryKindOf(snap.exists ? (snap.data() ?? null) : null, input.entryPassword ?? '', verifyPassword);
+  } catch {
+    return 'unknown';
+  }
+}
 
 /**
  * 학생 세션 토큰을 발급한다.
@@ -761,6 +782,7 @@ async function requireTeacherForClass(
 
 export const auth: AuthApi & {
   issueStudentSession: typeof issueStudentSession;
+  lookupClassEntryKind: typeof lookupClassEntryKind;
   refreshStudentSession: typeof refreshStudentSession;
   revokeStudentSession: typeof revokeStudentSession;
   createStaffSession: typeof createStaffSession;
@@ -778,6 +800,7 @@ export const auth: AuthApi & {
   getConsent,
   requireActiveResearchConsent,
   issueStudentSession,
+  lookupClassEntryKind,
   refreshStudentSession,
   revokeStudentSession,
   createStaffSession,

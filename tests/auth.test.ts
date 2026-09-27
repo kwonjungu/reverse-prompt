@@ -489,3 +489,44 @@ test('A3 두 경로 구분: 연구 자료 탭(loadResearchRecords)은 진행 레
   assert.equal('scoring' in blind, false);
 });
 
+
+/* ─────────────── 99-1 B5: 입장 화면 — 연구 수업은 참가 번호, 일반 수업은 출석 번호 ─────────────── */
+
+test('B5 반 종류: 열려 있고 비밀번호가 맞을 때만 연구/일반을 알려 주고 나머지는 모두 unknown', async () => {
+  const { entryKindOf } = await import('@/server/auth/entry-kind');
+  const verify = async (plain: string, hash: string) => hash === `hash:${plain}`;
+  const research = { active: true, sessionType: 'research_practice', entryPassword: 'hash:1234' };
+  assert.equal(await entryKindOf(research, '1234', verify), 'research');
+  assert.equal(await entryKindOf({ ...research, sessionType: 'research_assessment' }, '1234', verify), 'research');
+  assert.equal(await entryKindOf({ active: true, sessionType: 'experience' }, '', verify), 'general', '비밀번호 없는 반');
+  // 드러내지 않는 경우들 — 입장 거절 문구와 같이 모두 unknown
+  assert.equal(await entryKindOf(null, '1234', verify), 'unknown', '없는 반');
+  assert.equal(await entryKindOf({ ...research, active: false }, '1234', verify), 'unknown', '닫힌 반');
+  assert.equal(await entryKindOf(research, '9999', verify), 'unknown', '틀린 비밀번호');
+  assert.equal(await entryKindOf(research, '', verify), 'unknown', '비밀번호 안 적음');
+  assert.equal(
+    await entryKindOf(research, '1234', async () => {
+      throw new Error('해시 깨짐');
+    }),
+    'unknown'
+  );
+});
+
+test('B5 입장 화면: 참가 번호 칸은 연구 수업이면 바로 보이고(접힌 칸 아님), 출석 번호 칸은 일반 수업에서만', () => {
+  const page = readFileSync('src/app/page.tsx', 'utf8').replace(/\r\n/g, '\n');
+  assert.doesNotMatch(page, /<summary[^>]*>참가 번호를 받았어요<\/summary>/, '참가 번호가 접힌 칸 안에 있으면 안 된다');
+  assert.match(page, /\{entryKind === 'research' && \(\n\s*<div className="space-y-2">\n\s*<Label htmlFor="participantCode">/);
+  assert.match(page, /\{entryKind === 'general' && \(\n\s*<div className="space-y-2">\n\s*<Label htmlFor="studentNumber">/);
+  // 보내는 값도 반 종류에 맞춘다
+  assert.match(page, /studentNumber: kind === 'general' \? studentNumber\.trim\(\) \|\| null : null/);
+  assert.match(page, /participantCode: kind === 'research' \? participantCode\.trim\(\) \|\| null : null/);
+  // 모를 때 멈추는 문구는 서버의 입장 거절 문구와 같다(어느 번호가 있는지 드러내지 않는다)
+  const server = readFileSync('src/server/auth/index.ts', 'utf8');
+  const denied = /CLASS_ENTRY_DENIED_MESSAGE = '([^']+)'/.exec(server)?.[1];
+  assert.ok(denied);
+  assert.ok(page.includes(`setEntryNotice('${denied}')`));
+  // 조회 경로는 실패해도 unknown만 돌려주고 세션·쿠키를 만들지 않는다
+  const route = readFileSync('src/app/api/auth/class-kind/route.ts', 'utf8');
+  assert.match(route, /return NextResponse\.json\(\{ kind: 'unknown' \}\)/);
+  assert.doesNotMatch(route, /cookies\.set|issueStudentSession/);
+});

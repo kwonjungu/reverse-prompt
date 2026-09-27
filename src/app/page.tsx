@@ -86,8 +86,13 @@ export default function Home() {
   const [participantCode, setParticipantCode] = useState('');
   /** 반 입장 비밀번호. 서버가 해시로 대조하며 화면·저장소 어디에도 남기지 않는다. */
   const [entryPassword, setEntryPassword] = useState('');
-  /** 반 안에서 나를 구분하는 번호(출석 번호). 선생님 화면에서 진행을 볼 때 쓴다. */
+  /** 반 안에서 나를 구분하는 번호(출석 번호). 일반 수업에서만 받는다. 선생님 화면에서 진행을 볼 때 쓴다. */
   const [studentNumber, setStudentNumber] = useState('');
+  /**
+   * 반 종류(99-1 B5). 수업 번호와 비밀번호가 맞으면 서버가 알려 준다(/api/auth/class-kind).
+   * 연구 수업이면 참가 번호 칸, 일반 수업이면 번호 칸을 보인다. 모르면 둘 다 보이지 않는다.
+   */
+  const [entryKind, setEntryKind] = useState<EntryKind>('unknown');
   /** 수업으로 들어온 뒤 머리에 보일 이름(반 이름 + 번호). 신원이 아니라 표시용이다. */
   const [entryLabel, setEntryLabel] = useState<string | null>(null);
   const [isIssuing, setIsIssuing] = useState(false);
@@ -95,6 +100,25 @@ export default function Home() {
   /** 허용 모드가 비어 있을 때 서버가 준 안내. 구현 용어 없이 그대로 보여 준다. */
   const [modeNotice, setModeNotice] = useState<string | null>(null);
   const { toast } = useToast();
+
+  // 수업 번호·비밀번호를 적으면 잠시 뒤 반 종류를 묻는다. 맞지 않으면 'unknown'이라 칸이 나오지 않는다.
+  useEffect(() => {
+    const id = classResearchId.trim();
+    if (!id) {
+      setEntryKind('unknown');
+      return;
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => {
+      void fetchEntryKind(id, entryPassword, ctrl.signal).then((kind) => {
+        if (!ctrl.signal.aborted) setEntryKind(kind);
+      });
+    }, 400);
+    return () => {
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [classResearchId, entryPassword]);
 
   useEffect(() => {
     // 수업 번호로 들어온 뒤 새로 고침한 경우. 세션 자체는 HttpOnly 쿠키가 들고 있고,
@@ -192,7 +216,8 @@ export default function Home() {
    */
   const handleClassEntry = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!classResearchId.trim()) {
+    const typedId = classResearchId.trim();
+    if (!typedId) {
       toast({
         variant: 'destructive',
         title: '수업 번호가 필요해요',
@@ -203,6 +228,14 @@ export default function Home() {
     setIsIssuing(true);
     setEntryNotice(null);
     try {
+      // 반 종류를 다시 확인한다. 모르면(없는 반·닫힌 반·틀린 비밀번호) 서버 입장 거절과 같은 문구로 멈춘다 —
+      // 연구 수업에 참가 번호 칸 없이 들어가 기록이 남지 않는 일을 막는다.
+      const kind = await fetchEntryKind(typedId, entryPassword);
+      setEntryKind(kind);
+      if (kind === 'unknown') {
+        setEntryNotice('열려 있는 수업이 아니거나 비밀번호가 맞지 않아요.');
+        return;
+      }
       const res = await fetch('/api/auth/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -211,8 +244,9 @@ export default function Home() {
         body: JSON.stringify({
           classResearchId: classResearchId.trim(),
           entryPassword: entryPassword || null,
-          studentNumber: studentNumber.trim() || null,
-          participantCode: participantCode.trim() || null,
+          // 번호는 일반 수업에서만, 참가 번호는 연구 수업에서만 보낸다.
+          studentNumber: kind === 'general' ? studentNumber.trim() || null : null,
+          participantCode: kind === 'research' ? participantCode.trim() || null : null,
         }),
       });
       if (!res.ok) {
@@ -320,19 +354,38 @@ export default function Home() {
                     className="h-12 text-lg tracking-widest"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="entryPassword">비밀번호</Label>
+                  <Input
+                    id="entryPassword"
+                    type="password"
+                    value={entryPassword}
+                    onChange={(e) => setEntryPassword(e.target.value)}
+                    placeholder="반 비밀번호"
+                    autoComplete="off"
+                    className="h-12 text-lg"
+                  />
+                </div>
+                {/* 연구 수업: 참가 번호 칸을 바로 보인다. 출석 번호 칸은 없다(연구 신원은 참가 번호로만 정한다). */}
+                {entryKind === 'research' && (
                   <div className="space-y-2">
-                    <Label htmlFor="entryPassword">비밀번호</Label>
+                    <Label htmlFor="participantCode">참가 번호</Label>
                     <Input
-                      id="entryPassword"
-                      type="password"
-                      value={entryPassword}
-                      onChange={(e) => setEntryPassword(e.target.value)}
-                      placeholder="반 비밀번호"
+                      id="participantCode"
+                      value={participantCode}
+                      onChange={(e) => setParticipantCode(e.target.value)}
+                      placeholder="예: ABCD-EFGH"
                       autoComplete="off"
-                      className="h-12 text-lg"
+                      autoCapitalize="characters"
+                      className="h-12 text-lg tracking-widest"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      선생님께 받은 참가 번호를 적어요. 받지 않았으면 비워 두고 들어가요.
+                    </p>
                   </div>
+                )}
+                {/* 일반 수업: 반 안에서 나를 구분하는 번호(출석 번호) */}
+                {entryKind === 'general' && (
                   <div className="space-y-2">
                     <Label htmlFor="studentNumber">내 번호</Label>
                     <Input
@@ -346,20 +399,10 @@ export default function Home() {
                       className="h-12 text-lg"
                     />
                   </div>
-                </div>
-                <details className="text-sm">
-                  <summary className="cursor-pointer text-muted-foreground">참가 번호를 받았어요</summary>
-                  <div className="mt-2 space-y-2">
-                    <Label htmlFor="participantCode">참가 번호</Label>
-                    <Input
-                      id="participantCode"
-                      value={participantCode}
-                      onChange={(e) => setParticipantCode(e.target.value)}
-                      placeholder="받은 참가 번호"
-                      autoComplete="off"
-                    />
-                  </div>
-                </details>
+                )}
+                {entryKind === 'unknown' && classResearchId.trim() && (
+                  <p className="text-xs text-muted-foreground">수업 번호와 비밀번호를 적으면 번호 칸이 나와요.</p>
+                )}
                 <Button type="submit" className="w-full font-bold" size="lg" disabled={isIssuing}>
                   {isIssuing ? '들어가는 중이에요' : '수업으로 들어가기'} <ArrowRight className="ml-2" />
                 </Button>
@@ -537,4 +580,23 @@ export default function Home() {
       </main>
     </div>
   );
+}
+
+/** 반 종류(99-1 B5). 서버 조회가 실패하면 'unknown'. */
+type EntryKind = 'research' | 'general' | 'unknown';
+
+async function fetchEntryKind(classResearchId: string, entryPassword: string, signal?: AbortSignal): Promise<EntryKind> {
+  try {
+    const res = await fetch('/api/auth/class-kind', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ classResearchId, entryPassword }),
+      signal,
+    });
+    if (!res.ok) return 'unknown';
+    const data = (await res.json()) as { kind?: unknown };
+    return data.kind === 'research' || data.kind === 'general' ? data.kind : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
