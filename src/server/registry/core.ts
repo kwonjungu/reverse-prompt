@@ -77,7 +77,8 @@ export interface RegistryDeps {
 
 /* ────────────────────────── 단서 검증 ────────────────────────── */
 
-const ANCHOR_LEVELS = ['1', '2', '3', '4', '5'] as const;
+/** 공통 루브릭 v12-2는 4수준이다. 앵커도 1~4수준만 둔다(옛 v7 팩의 5수준 앵커는 받지 않는다). */
+const ANCHOR_LEVELS = ['1', '2', '3', '4'] as const;
 
 function nonEmptyStrings(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null;
@@ -105,14 +106,25 @@ function readAnchorAxis(value: unknown): Record<string, string> | null {
     if (typeof text !== 'string' || !text.trim()) return null;
     out[lv] = text.trim();
   }
+  // 1~4 밖의 수준(옛 5수준 앵커 등)이 섞여 있으면 받지 않는다.
+  if (Object.keys(src).some((k) => !(ANCHOR_LEVELS as readonly string[]).includes(k))) return null;
   return out;
 }
 
 /**
- * 문항 하나의 단서를 검증한다. 비어 있거나 형식이 어긋나면 사유 문자열을 돌려주고
- * 채점에 쓰지 않는다. 빈 단서를 통과시켜 채점하지 않기 위한 관문이다.
+ * 문항 하나의 단서를 검증한다(공통 루브릭 v12-2). 비어 있거나 형식이 어긋나면 사유 문자열을 돌려주고
+ * 채점에 쓰지 않는다. 빈 단서를 통과시켜 채점하지 않기 위한 관문이다. 팩의 필드 구조는 그대로다.
+ *
+ *   coreObjects         대상 영역. 비어 있으면 실격(대상은 늘 판정한다)
+ *   requiredAttributes  특징 영역. 비어 있으면 특징은 해당 없음(not_applicable)
+ *   requiredContext     관계 영역. 비어 있으면 관계는 해당 없음. A밴드는 대상 사이 공간 관계,
+ *                       B·C밴드는 장소·행동을 적는다
+ *   anchors             object(대상)·specificity(특징)·context(관계) 키에 1~4수준. 판정하는 영역에만 두고
+ *                       해당 없음인 영역에는 두지 않는다
+ * band는 형식 확인에 쓰지 않는다(관계의 범위는 지시문이 밴드별로 안내한다). 인자는 호출부 호환을 위해 남긴다.
  */
 export function validateCues(raw: unknown, band: Band): { cues: QuestionCues } | { reason: string } {
+  void band;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { reason: '단서 항목이 객체가 아닙니다.' };
   }
@@ -121,19 +133,10 @@ export function validateCues(raw: unknown, band: Band): { cues: QuestionCues } |
   const coreObjects = nonEmptyStrings(src.coreObjects);
   if (!coreObjects || !coreObjects.length) return { reason: '핵심 대상(coreObjects)이 비어 있습니다.' };
 
-  const requiredAttributes = nonEmptyStrings(src.requiredAttributes);
-  if (!requiredAttributes || !requiredAttributes.length) {
-    return { reason: '필수 속성(requiredAttributes)이 비어 있습니다.' };
-  }
-
+  const requiredAttributes = optionalStrings(src.requiredAttributes);
+  if (!requiredAttributes) return { reason: '필수 속성(requiredAttributes) 형식이 어긋납니다.' };
   const requiredContext = optionalStrings(src.requiredContext);
   if (!requiredContext) return { reason: '필수 맥락(requiredContext) 형식이 어긋납니다.' };
-  if (band === 'A' && requiredContext.length) {
-    return { reason: 'A밴드는 맥락 축을 적용하지 않으므로 requiredContext가 비어 있어야 합니다.' };
-  }
-  if (band !== 'A' && !requiredContext.length) {
-    return { reason: 'B·C밴드는 필수 맥락(requiredContext)이 있어야 합니다.' };
-  }
 
   const acceptedExpressions = optionalStrings(src.acceptedExpressions);
   const notRequired = optionalStrings(src.notRequired);
@@ -144,18 +147,24 @@ export function validateCues(raw: unknown, band: Band): { cues: QuestionCues } |
 
   const anchorsRaw = src.anchors;
   if (!anchorsRaw || typeof anchorsRaw !== 'object' || Array.isArray(anchorsRaw)) {
-    return { reason: '축별 앵커(anchors)가 없습니다.' };
+    return { reason: '영역별 앵커(anchors)가 없습니다.' };
   }
   const anchorSrc = anchorsRaw as Record<string, unknown>;
-  const axes = band === 'A' ? ['object', 'specificity'] : ['object', 'specificity', 'context'];
+  const judged: Array<[string, boolean]> = [
+    ['object', true],
+    ['specificity', requiredAttributes.length > 0],
+    ['context', requiredContext.length > 0],
+  ];
   const anchors: Record<string, Record<string, string>> = {};
-  for (const axis of axes) {
-    const parsed = readAnchorAxis(anchorSrc[axis]);
-    if (!parsed) return { reason: `${axis} 축의 1~5수준 앵커가 모두 채워지지 않았습니다.` };
-    anchors[axis] = parsed;
-  }
-  if (band === 'A' && anchorSrc.context !== undefined && anchorSrc.context !== null) {
-    return { reason: 'A밴드에는 맥락 축 앵커를 두지 않습니다.' };
+  for (const [key, applies] of judged) {
+    const present = anchorSrc[key] !== undefined && anchorSrc[key] !== null;
+    if (!applies) {
+      if (present) return { reason: `해당 없음인 영역(${key})에 앵커를 두지 않습니다.` };
+      continue;
+    }
+    const parsed = readAnchorAxis(anchorSrc[key]);
+    if (!parsed) return { reason: `${key} 영역의 1~4수준 앵커가 모두 채워지지 않았거나 1~4 밖의 수준이 있습니다.` };
+    anchors[key] = parsed;
   }
 
   return {

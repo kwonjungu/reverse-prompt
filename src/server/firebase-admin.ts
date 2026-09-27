@@ -79,7 +79,7 @@ export function getAdminAuth(): Auth {
  * 컬렉션 이름을 직접 적지 않고 여기의 값을 쓴다.
  */
 
-import { SCHEMA_VERSION } from '@/lib/research/types';
+import { RESEARCH_STORE_VERSION } from '@/lib/research/types';
 
 /** 계정·동의처럼 스키마 버전과 무관한 최상위 컬렉션 */
 export const COLLECTIONS = {
@@ -125,10 +125,11 @@ export type ResearchCollection =
 
 /**
  * 연구 자료 컬렉션의 전체 경로.
- * 스키마 버전을 경로에 두어 기존 자료를 덮어쓰거나 강제 이관하지 않는다.
+ * 경로의 버전 조각은 문서 스키마 버전(SCHEMA_VERSION)과 분리해 고정한다(RESEARCH_STORE_VERSION).
+ * 스키마를 올려도 이미 열린 차시·검사 자료가 새 경로로 갈라지지 않는다. 문서마다 schemaVersion이 따로 남는다.
  */
 export function researchPath(name: ResearchCollection): string {
-  return `research/${SCHEMA_VERSION}/${name}`;
+  return `research/${RESEARCH_STORE_VERSION}/${name}`;
 }
 
 /**

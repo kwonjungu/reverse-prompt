@@ -16,8 +16,8 @@ import {
   quoteAppearsInText,
   validateFeedback,
   type FeedbackDraft,
-} from '@/lib/feedback';
-import { FEEDBACK_GUIDE } from '@/lib/evaluation-prompt';
+} from '@/lib/legacy-v7/feedback';
+import { FEEDBACK_GUIDE } from '@/lib/legacy-v7/evaluation-prompt';
 
 const STUDENT = '노란 세모 블록의 밑면이 넓고 위쪽 꼭짓점이 뾰족하다';
 

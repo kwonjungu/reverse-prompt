@@ -17,7 +17,7 @@ import {
   withinOneLevel,
   WEIGHTS,
   type AxisLevels,
-} from '@/lib/scoring';
+} from '@/lib/legacy-v7/scoring';
 import {
   CUE_PLACEHOLDER,
   INPUT_CLOSE,
@@ -26,7 +26,7 @@ import {
   getEvaluationPromptForAudit,
   promptHash,
   sanitizeStudentInput,
-} from '@/lib/evaluation-prompt';
+} from '@/lib/legacy-v7/evaluation-prompt';
 import {
   RUBRIC_AXES,
   RUBRIC_VERSION,
@@ -34,7 +34,7 @@ import {
   renderForModel,
   renderForTeacher,
   rubricExportDocument,
-} from '@/lib/rubric';
+} from '@/lib/legacy-v7/rubric';
 import type { QuestionCues } from '@/server/registry/contract';
 
 test('수용시험 1 — A 5·5·null은 100점, 맥락 축은 항상 null', () => {

@@ -1,6 +1,6 @@
 # PromptGrader (reverse-prompt) — 개발 메모
 
-초등학생용 AI 프롬프트 엔지니어링 학습 웹앱. 그림을 보고 한국어로 설명을 적으면 Gemini가 축별로 채점하고 피드백을 준다.
+초등학생용 AI 프롬프트 엔지니어링 학습 웹앱. 그림을 보고 한국어로 설명을 적으면 Gemini가 공통 루브릭 v12-2의 세 영역(대상·특징·관계)을 4수준으로 판정하고 네 문장 피드백을 준다.
 석사 학위논문(역프롬프트, v7 계획서)의 연구 도구를 겸한다.
 
 **이 문서는 실제 코드와 맞춘 기술 메모다. 연구 승인·전문가 확정·실데이터 검증을 마쳤다는 뜻이 아니다.**
@@ -53,7 +53,7 @@ Firebase Emulator 권한 시험(`tests/rules/`)은 에뮬레이터가 없으면 
 | `GOOGLE_GENAI_API_KEY` | Genkit Gemini 호출 (서버) | 누락 시 `genkit.ts`에서 throw |
 | `NEXT_PUBLIC_FIREBASE_*` 6개 | Firebase 클라이언트 SDK | |
 | `NEIS_API_KEY` | 학교 검색 호출 한도 ↑ | 선택 |
-| `EVALUATION_MODEL_ID` | 채점 모델 | 비우면 기본 `googleai/gemini-3.8-flash` |
+| `EVALUATION_MODEL_ID` | 채점 모델 | 비우면 기본 `googleai/gemini-2.5-flash`(`src/server/config.ts`). 실제로 답한 모델은 채점 기록의 `servedModel` |
 | `EVALUATION_TEMPERATURE` | 채점 온도 | 기본 0.2 |
 | `EVALUATION_MODEL_VERIFIED` | 운영자가 모델 접근·출력 스키마를 확인함 | `true`가 아니면 연구 시작 차단 |
 | `RESEARCH_ASSET_DIR` | 비공개 연구 자산 경로 | 검사 이미지 + `cue-pack.json` |
@@ -95,16 +95,19 @@ src/
   middleware.ts                 # route 층 모드 차단
   ai/
     genkit.ts                   # 모델 ID는 src/server/config.ts 경유
-    flows/evaluate-prompt.ts    # 연습 화면용 얇은 서버 액션 (실채점은 server/grading)
+    flows/evaluate-prompt.ts    # 게임·타임어택 전용 채점 액션(옛 v7, 일반 체험 세션만)
     flows/audit-agent.ts        # 기본 합성 자료. 실데이터는 승인 기록 필요
   lib/
-    rubric.ts                   # 공통 5수준 문언의 단일 버전 리소스
-    evaluation-prompt.ts        # 공통 문언 + 문항별 단서로 지시문 조립
-    scoring.ts                  # 밴드·배점·환산·결합. 엄격 검증
-    feedback.ts                 # 피드백 형식·인용 검증 (점수와 분리)
-    questions.ts                # 연습 36문항의 공개 정보만
-    practice-hints.ts           # 문항별 힌트 초안(공개 문구). 검수(reviewed)를 마친 것만 화면에 나간다
-    practice-progress.ts        # 연습 순서 진행(안 낸 가장 앞 문항으로, 뒤 문항·단계 숨김). 순수
+    rubric.ts                   # 공통 루브릭 v12-2(3영역 4수준·운영 규칙)의 단일 리소스
+    evaluation-prompt.ts        # 공통 문언 + 문항별 필수 정보 + 판정 영역으로 지시문 조립, 피드백 전용 지시문
+    scoring.ts                  # 밴드·영역·수준 검증·종합 수준·다음 행동 영역. 엄격 검증
+    feedback.ts                 # 네 문장 피드백 검증(영역·인용·금지 표현) — 점수와 분리
+    quote.ts                    # 학생 원문 인용 확인(evidence·quote 공용)
+    stages.ts                   # 6단계 이름·문항 배치·제시 순서·초점 영역
+    questions.ts                # 연습 36문항의 공개 정보만(제시 순서로 정렬)
+    practice-hints.ts           # 문항별 힌트(목표 + 확인 질문, 규칙으로 생성). 검수(REVIEWED_QUESTIONS)를 마친 것만 화면에 나간다
+    practice-progress.ts        # 연습 순서 진행(제시 순서로 안 낸 가장 앞 문항, 뒤 문항·단계 숨김). 순수
+    legacy-v7/                  # 옛 공통 루브릭 v7(5수준·100점) — 게임·타임어택 전용
     research/                   # 공통 도메인 타입, 세션별 허용 모드
   server/                       # 서버 전용. 클라이언트 번들에 실리지 않는다
     admin/                      # 통합 관리: core(해시·토큰 순수) · auth(관리자 세션) · actions · research-actions
@@ -114,7 +117,7 @@ src/
     auth/                       # 역할·학급 범위·동의·세션 토큰·비식별
     privacy/                    # 전송 전 개인정보 점검
     registry/                   # 문항 레지스트리, 비공개 단서 팩, 제작 프롬프트
-    grading/                    # 운영 채점 1회(2+1 호출)
+    grading/                    # 운영 채점 1회(v12-2, 모델 1회) · legacy-v7(게임·타임어택)
     lessons/                    # 차시 개방 판정·저장
     assessment/                 # 검사 세션·제출·사후 일괄 채점
     export/                     # CSV 내보내기, 중복·완전성 점검, practice-summary(v12 요약·추출, 순수)
@@ -122,71 +125,97 @@ research-assets/                # 형식과 절차만. 실제 단서·이미지�
 firestore.rules                 # 기본 거부
 ```
 
-## 채점 (설계서 §2·§3)
+## 채점 — 공통 루브릭 v12-2 (3영역 4수준)
+
+연습(연구·일반)·검사·연수는 **공통 루브릭 v12-2**로 채점한다. 논문이 검증하는 AI 평가 에이전트와 학생이 실제로 쓰는
+앱 채점이 같아야 하기 때문이다. **게임·타임어택만 옛 v7(축별 5수준·100점)을 그대로 쓴다**(`src/lib/legacy-v7/`,
+`src/server/grading/legacy-v7.ts`, `src/ai/flows/evaluate-prompt.ts` — 일반 체험 세션의 game-XX·ta-XX 문항만 받는다).
 
 ### 공통 루브릭은 하나의 리소스에서만 나온다
-`src/lib/rubric.ts`가 논문 공통 루브릭 v7의 문언을 그대로 담고, AI 지시문·교사 화면·내보내기 문서를
-`renderForModel/renderForTeacher/renderForExport`로 **같은 원본에서 생성**한다. 사본을 손으로 동기화하지 않는다.
+`src/lib/rubric.ts`(`RUBRIC_VERSION='v12-2'`)가 세 영역의 4수준 기준과 운영 규칙을 **연구자가 준 문장 그대로** 담고,
+AI 지시문·교사 화면·내보내기 문서를 `renderForModel/renderForTeacher/renderForExport`로 **같은 원본에서 생성**한다.
 
-### 밴드와 배점 (<표 Ⅲ-5>)
-- **A** Lv.1~12 — 대상 50 / 구체성 50, 맥락 축 미적용(`contextLevel`은 **반드시 null**)
-- **B** Lv.13~24 — 대상 35 / 구체성 35 / 배경·행동 30
-- **C** Lv.25~36 — 대상 35 / 구체성 35 / 맥락·분위기 30
-- 축 점수 = `(수준 − 1) / 4 × 축 배점`. **중간 계산은 반올림하지 않는다.**
+### 영역과 수준 (모든 밴드 공통)
+- `object` 대상의 명확성 / `feature` 특징의 구체성 / `relation` 관계의 명확성. 각 **정수 1~4 또는 `'not_applicable'`**.
+- 관계 범위: A밴드(L01–12)는 대상 사이 공간 관계, B·C밴드는 장소와 행동이 필수(C의 시간대·분위기는 선택).
+- **100점 환산·밴드별 배점·반수준 결합은 쓰지 않는다.** 점수를 합산하지 않는다.
+- 밴드(`bandOf`)는 문항 번호로 정한다: A=L01–12, B=L13–24, C=L25–36(연구 표집의 A·B·C와 같다). 단계와 무관하다.
+- **앱 종합 수준** = 해당 영역 수준 평균(not_applicable 제외)을 반올림(0.5 올림)한 1~4(`overallLevelOf`).
+  연구 표집의 층을 나누는 값이며 학생 화면에는 보이지 않는다. 저장하지 않고 필요할 때 계산한다.
+
+### 해당 없음(not_applicable)은 누가 정하나
+- 비공개 단서 팩이 있으면 **코드가 정한다**(`applicabilityOf`): 대상은 늘 판정, 필수 속성이 비면 특징 해당 없음,
+  필수 맥락(`requiredContext`)이 비면 관계 해당 없음. 모델 출력이 이와 다르면 형식 오류다. 단서 팩 구조는 바꾸지 않았다.
+- 단서 팩이 없는 일반 체험은 모델이 정한다(대상은 늘 판정). `ScoringRun.applicabilitySource`에 `'cue_pack' | 'model'`로 남는다.
 
 ### 형식 오류를 유효 값으로 바꾸지 않는다
-`clampLevel`은 **제거되었다.** 개별 호출의 적용 축은 정수 1~5여야 하며 6·0·2.5·문자열·NaN·Infinity·
-B/C밴드의 null은 모두 형식 오류(`schema_error`)다. 결측은 0점이 아니라 `score: null`이다.
+영역마다 `{level, evidence, missing, evidence_missing}`를 받고 `validateAreaCall`이 검사한다. 0·5·2.5·`'3'`·NaN·null은
+형식 오류다. **evidence는 학생 원문에 그대로 있어야 한다**(공백만 다른 것은 허용) — 없으면 형식 오류.
+해당 없음 영역은 evidence가 null이고 missing이 비어야 한다. 결측은 최저 수준이 아니라 `areas: null`이다.
 
 ```ts
 type OperationalResult =
-  | { status: 'scored';  levels; score; axisScores; feedbackStatus }
-  | { status: 'missing'; levels: null; score: null; axisScores: null;
-      reason: 'model_error' | 'schema_error' | 'required_call_failed' }
+  | { status: 'scored';  areas: { object|feature|relation: { level; evidence; missing; evidenceMissing } }; feedbackStatus }
+  | { status: 'missing'; areas: null; reason: 'model_error' | 'schema_error' | 'required_call_failed' }
 ```
 
-### 운영 채점 1회 (<표 Ⅲ-7>)
-1. 같은 고정 입력으로 **독립 2회**. **실패한 호출만 1회 재시도.**
-2. 두 유효 호출의 모든 적용 축 차이가 1 이하 → 축별 평균(반수준 유지).
-3. 하나라도 1 초과 → **세 번째 유효 호출** 후 축별 중앙값. 세 번째도 실패하면 운영 결측.
-4. 일부 성공 값만으로 정상 결과를 반환하지 않는다.
-5. 점수가 확정되면 **피드백 실패 때문에 재채점하거나 점수를 바꾸지 않는다.**
+### 운영 채점 1회 — 모델 1회 호출 (`src/server/grading/operational.ts`)
+1. 같은 고정 입력으로 모델을 **1회** 부른다. **호출 실패·형식 오류일 때만 1회 다시 부른다.**
+2. 유리한 출력을 고르려고 다시 부르지 않고, 여러 호출을 결합(평균·중앙값)하지 않는다(옛 2+1 절차는 없앴다).
+3. 다시 불러도 실패하면 운영 결측. 일부 값으로 정상 결과를 만들지 않는다.
+4. 판정이 확정되면 **피드백 실패 때문에 재채점하거나 판정을 바꾸지 않는다.**
+5. 반복 채점(검사의 `repeatIndex` 2·3)은 그대로이며 영역별 수준을 저장한다.
 
-호출별 `callId`·`retryIndex`·검증된 levels·`failureReason`·시각을 모두 남긴다.
-호출 기록에 학생 개인정보·비밀키·원시 인증토큰을 남기지 않는다.
+호출마다 `callId`·`retryIndex`·`purpose('score'|'feedback')`·검증된 levels·`failureReason`·**`servedModel`**(모델 API가
+응답에 밝힌 실제 모델, Gemini `modelVersion`)·시각을 남긴다. 실행 단위에는 설정한 `modelId`와 점수를 낸 호출의 `servedModel`이 함께 남는다.
+호출 기록에 학생 개인정보·비밀키·원시 인증토큰·학생 글 인용을 남기지 않는다.
 
 ### 문항별 단서
-채점에는 실제 이미지와 그 문항의 필수 단서·경계·앵커를 함께 쓴다. 단서는 **비공개 자산**이며
+채점에는 실제 이미지와 그 문항의 필수 정보(핵심 대상·필수 속성·필수 관계·앵커)를 함께 쓴다. 단서는 **비공개 자산**이며
 `RESEARCH_ASSET_DIR/cue-pack.json`에서 읽는다. 단서가 없으면 연구 세션 채점을 거부한다(`cues_missing`).
-일반 체험은 사전 확정 단서가 없으면 공통 문언만으로 채점하고 **그 점수는 연구 자료로 쓰지 않는다.**
-이미지 제작 프롬프트(`sourcePrompt`)는 정답 문장이 아니므로 채점 지시문에 넣지 않으며,
-`src/server/registry/practice-source-prompts.ts`(서버 전용)로 옮겼다.
+앵커는 **1~4수준 키만** 지시문에 들어간다(옛 5수준 앵커는 v12-2용으로 다시 써야 한다). 앵커 키 `specificity`·`context`는
+각각 특징·관계로 읽어 준다. 일반 체험은 단서가 없으면 공통 문언만으로 채점하고 **그 결과는 연구 자료로 쓰지 않는다.**
+이미지 제작 프롬프트(`sourcePrompt`)는 정답 문장이 아니므로 지시문에 넣지 않는다(`src/server/registry/practice-source-prompts.ts`).
 
 ### 학생 입력은 데이터이지 지시가 아니다
 지시문이 학생 응답을 `<<<학생응답 시작>>> … <<<학생응답 끝>>>`으로 감싸고, 그 안의 명령·점수 요구를
-실행하지 않는다. 그런 문장만 제출되면 유효한 과제 단서가 없으므로 적용 축을 수준 1로 판정한다.
+실행하지 않는다. 그런 문장만 제출되면 유효한 과제 정보가 없으므로 판정하는 영역을 수준 1로 판정한다.
 
-### 피드백은 4줄, 점수와 분리
-Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참고한 배열이다.
+### 피드백은 4문장, 점수와 분리 (`src/lib/feedback.ts`)
+Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참고한 배열이다. 한 줄에 한 문장.
 
-1. 목표 — 이 문항에서 무엇을 하려는지
-2. 현재 수행 — 학생이 실제로 쓴 표현에 근거한 장점 또는 현재 상태
-3. 다음 행동 — 필요한 수정 단서 하나. 없으면 중립적 확인
-4. 활용할 수 있는 표현 제안. 고칠 것이 없으면 자기 점검
+1. 이번 목표(단계 초점)
+2. 잘 쓴 점 — 어느 영역인지 밝히고 학생 글의 표현을 그대로 넣는다(`quote`, `strengthArea`)
+3. 다음 행동 한 가지 — 해당 영역 가운데 **가장 낮은 영역**(같으면 단계 초점 영역, 그다음 대상→특징→관계)에서 하나만.
+   이 영역은 **코드가 정하고**(`nextActionArea`) 모델이 다르게 고르면 탈락이다. 겨냥한 정보(`nextTarget`)는 그 영역
+   `missing` 목록의 문구여야 한다 — 그림에 없는 정보를 요구하지 않게 하는 **구조 점검**이며 문장 뜻까지 확인하지는 않는다.
+4. 쓸 수 있는 표현 제안 또는 스스로 확인할 질문
 
-**네 줄 형식과 제안 수는 아동의 처리 부담을 고려한 설계 선택이며 효과가 검증된 최적값이 아니다.**
-모든 응답에 누락 지적을 강제하지 않는다. 인용은 문장에 섞지 않고 구조화된 `quote` 필드로 받아
-**코드가 원문 포함 여부를 확인**한다(한 글자도 허용). 인용이 없는 중립 안내와 인용 검증 실패는 다른 상태다.
-검증에 실패하면 **피드백만 1회 재생성**하고, 다시 실패하면 고정 안내 `표현을 선생님과 함께 확인해 보세요`를
-쓰고 `feedbackStatus='fallback'`으로 남긴다. **점수는 그대로다.**
+코드가 확인하는 것: 네 줄·줄마다 한 문장(넘으면 탈락), 인용이 원문에 있고 2문장 안에 있음, 칭찬·비교·점수 언급 없음.
+2·3문장 앞에는 코드가 영역 이름을 붙인다(`[대상] …`). 탈락하면 **확정된 판정을 알려 주는 피드백 전용 호출로 1회만** 다시 만들고,
+그래도 탈락하면 고정 안내 `표현을 선생님과 함께 확인해 보세요`와 `feedbackStatus='fallback'`. 탈락 사유는 `feedback.rejections`에 남는다.
+**네 문장 형식과 제안 수는 아동의 처리 부담을 고려한 설계 선택이며 효과가 검증된 최적값이 아니다.**
 형식 검사를 통과한 것이 그림 부합이나 내용 정확성을 뜻하지 않는다.
 
 ## 차시와 모드 (설계서 §4)
 
+- **6단계(논문 v12).** 정의는 `src/lib/stages.ts` 하나에 있다. 문항 ID·이미지는 그대로이고 단계와 제시 순서만 이 표로 정한다.
+
+  | 단계 | 이름 | 문항 | 초점 영역 |
+  |---|---|---|---|
+  | 1 | 도구와 작성 방식 이해 | L01–L06 | 세 영역 |
+  | 2 | 대상과 수량 | L07–L12 | 대상 |
+  | 3 | 특징 | L19–L24 | 특징 |
+  | 4 | 관계 | L13–L18 | 관계 |
+  | 5 | 피드백 검토와 재작성 | L25–L30 | 세 영역 |
+  | 6 | 종합 | L31–L36 | 세 영역 |
+
+  초점은 힌트의 질문 순서와 피드백(1문장 목표, 3문장 영역의 동점 처리)에만 쓴다. **채점은 모든 단계에서 세 영역(해당 없음 포함)을 기록한다.**
+  레지스트리의 연습 문항 `lesson`은 이 단계 값이다(L13은 4, L19는 3). 옛 제출 문서의 `lesson`은 저장된 값 그대로다.
 - 차시 기록은 서버에 있다(`LessonSession`: classResearchId, currentLesson, allowedLessons,
   openedAt, closedAt, openedBy, reason). **관리 화면의 수업 시작이 1~6차시를 한 번에 연다.**
   교사·관리자가 단계를 하나씩 열고 닫는 화면은 없앴다(교사 API `lessons/open·close`는 남아 있다).
-- **순서 진행(학생 화면).** 열린 단계 안에서 아직 내지 않은 **가장 낮은 번호 문항**으로 들어가고,
+- **순서 진행(학생 화면).** 열린 단계 안에서 **제시 순서로** 아직 내지 않은 가장 앞 문항으로 들어가고(L12 다음은 L19),
   그보다 뒤 문항·단계는 **보이지도 고르지도 못한다.** 한 문항을 내야(저장 성공) 다음 문항이 열린다.
   단계 단추도 열린 문항이 있는 단계만 보인다. 규칙은 `src/lib/practice-progress.ts`(순수)에 있다.
   이것은 화면 표시다. 서버는 열린 차시인지만 판정하며 문항 순서를 강제하지 않는다.
@@ -264,30 +293,38 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 ### 교사 학생 현황 (LMS)
 - `loadClassProgress`(교사, 배정된 반만)가 반 기록·차시 기록·학생 세션·제출을 다시 읽어 `src/server/lms/progress.ts`로 묶는다.
   다시 들어와 세션이 바뀌어도 같은 번호면 한 줄이다. 30초마다 새로 읽는다.
-- 일반 수업은 점수·최근 답안까지 보인다. 결측 점수는 0점이 아니며 평균에 넣지 않는다.
+- 일반 수업은 영역별 수준·종합 수준(1~4)·최근 답안까지 보인다. 결측은 수준 1이 아니며 평균에 넣지 않는다.
+  옛 v7 기록은 '옛 채점'으로 따로 보이고 v12-2 평균에 섞지 않는다.
 - **연구 수업은 교사 블라인드 채점을 흐리지 않도록 AI 점수·답안·시각을 보여 주지 않는다.** 참가자별 진행 수만 보인다.
 
 ## 논문 v12 반영 — 시도 기록·문항별 힌트·연구 추출
 
 연구 흐름: 학생이 연습 36문항에 쓰고 피드백을 보고 다시 쓴다 → 연구자가 A·B·C에서 대표 문항 셋을 고른다 →
-부적절한 행을 제외하고 앱 AI 5수준별로 문항마다 4개씩(60개) 뽑는다 → AI 평가 에이전트와 전문가 3명이 따로 채점한다.
+부적절한 행을 제외하고 앱 종합 4수준별로 문항마다 5개씩(3 × 4 × 5 = 60개) 뽑는다 → AI 평가 에이전트와 전문가 3명이 따로 채점한다.
 
 ### 시도별 저장 (이미 있던 것 + 보완)
 - 연구 세션 연습은 제출마다 `research/v7.0/practice_submissions`에 새 문서로 남고 덮어쓰지 않는다(submit-core).
   researchId·classResearchId·questionId·questionLevel(=level)·lesson(=chasi)·band·attemptNo, 개인정보 점검을 거친 text,
-  scoring.feedback(text·status), scoring.result(축별 수준·총점), rubricVersion·cueVersion·modelId·promptHash·imageHash,
+  scoring.feedback(text·status·strengthArea·nextArea·nextTarget·rejections), scoring.result.areas(영역별 level·evidence·missing·evidenceMissing),
+  rubricVersion('v12-2')·cueVersion·scoring.modelId(설정값)·scoring.servedModel(실제 모델)·promptHash·imageHash,
   startedAt·submittedAt·durationMs, responseStatus·missingReason·persistStatus.
 - 연습 문항은 레지스트리에 이미지 해시가 없어 예전에는 `imageHash`가 null이었다. 이제 채점 때 실제로 읽은 해시를 남긴다
   (채점 전에 끝난 결측이면 여전히 null — 지어내지 않는다).
-- **`SCHEMA_VERSION`(v7.0)은 올리지 않았다.** 이 값이 저장 경로 `research/{SCHEMA_VERSION}`에도 쓰여, 올리면 열린 차시·검사 자료가
-  새 경로로 갈라진다. 기존 문서에 필드를 더하지 않았고, 새 기록(제외·추출)에는 `schemaVersion: 'v12-extraction-1'`을 따로 붙인다.
+- **`SCHEMA_VERSION`을 `v12.2`로 올렸다**(문서의 `schemaVersion`, 예: `v12.2-practice-submission`). 저장 경로의 버전 조각은
+  `RESEARCH_STORE_VERSION`(`v7.0`)으로 분리해 고정했다 — 올리면 열린 차시·검사 자료가 새 경로로 갈라지기 때문이다.
+  옛 `v7.0-…` 문서는 강제 이관하지 않고 그대로 읽는다(옛 5수준 결과는 연구 요약·추출에서 빠지고 표시된다).
 
-### 문항별 힌트
-- `src/lib/practice-hints.ts`에 36문항 초안이 있다. 실제 그림을 보고 썼고 정답 값(색 이름·개수·대상 이름)은 적지 않는다
-  (`tests/hints.test.ts`가 색·개수 낱말과 숫자를 막는다). C밴드는 분위기를 근거와 함께 쓰라고 안내한다.
-- **`reviewed: true`인 힌트만 학생 화면에 나간다.** 검수 전에는 차시 공통 안내(`GUIDE`)가 그대로 나간다.
-  검수표: `docs/practice-hints-review.md`(`npm run hints:table`). 검수 메모는 학생 번들에 싣지 않으려고 스크립트에만 둔다.
-- 연습 화면만 문항 힌트를 쓴다. 게임·시간 제한·연수 화면은 `rubric`(차시 공통 안내)을 그대로 쓴다.
+### 문항별 힌트 — 목표 + 확인 기준 (설계 원리 1)
+- `src/lib/practice-hints.ts`가 36문항 힌트를 **규칙으로 만든다**(손으로 쓰지 않는다). 힌트 = 목표 한 문장
+  (`이 그림을 못 본 친구가 똑같이 떠올릴 수 있게 써요.`) + 영역마다 확인 질문 한 문장(루브릭 4수준 기준을 학생 말로).
+  관계 질문은 A밴드는 공간 관계, B·C밴드는 장소·행동. C밴드는 시간대·분위기에 관한 선택 안내를 덧붙인다.
+- **단계 초점 영역의 질문이 맨 앞**이다. 정답 값(대상 이름·색 이름·개수)과 특정 부위는 말하지 않는다(`tests/hints.test.ts`).
+- 비공개 단서 팩에서 해당 없음인 영역의 질문은 뺀다 — 서버가 차시 상태(`notApplicableAreas`)로 **영역 이름만** 알려 주고
+  화면이 `withoutAreas`로 거른다. 단서 팩 내용은 클라이언트로 가지 않는다.
+- **`REVIEWED_QUESTIONS`에 넣은 문항의 힌트만 학생 화면에 나간다.** 검수 전에는 단계 공통 안내(`GUIDE`)가 나간다.
+  검수표: `docs/practice-hints-review.md`(`npm run hints:table`). 예전 문항별 초안 문구는 지우지 않고 검수표의 참고 열로 남겼다
+  (그림의 부위를 짚는 문구라 학생 번들에 싣지 않고 `scripts/print-practice-hints.mjs`에만 둔다).
+- 연습 화면만 문항 힌트를 쓴다. 게임·시간 제한·연수 화면은 `rubric`(단계 공통 안내)을 그대로 쓴다.
 
 ### 요약·연구 추출 (`/admin` → 연구 자료)
 - 계산은 `src/server/export/practice-summary.ts`(순수), 배선은 `src/server/admin/research-actions.ts`.
@@ -317,8 +354,8 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   여기 점수는 연구 자료가 아니며 교사 화면·내보내기에 나타나지 않는다. 화면에도 그렇게 적는다.
 - 문항은 연습 36개에서 뽑은 **고정 20개**(`src/lib/lecture-questions.ts`)뿐이다. 목록 밖 ID는
   서버가 거절한다. 검사 문항은 레지스트리가 `research_assessment`에만 허용하므로 애초에 열리지 않는다.
-- 채점은 일반 체험과 같은 `sessionType: 'experience'` 규칙이다. 문항별 비공개 단서가 없으므로
-  **공통 루브릭 문언만으로** 채점된다.
+- 채점은 일반 체험과 같은 `sessionType: 'experience'` 규칙(공통 루브릭 v12-2)이다. 문항별 비공개 단서가 없으므로
+  **공통 루브릭 문언만으로** 채점된다. 화면은 연습 화면과 같이 영역별 단계(●●●○)와 네 문장 피드백만 보이고 점수는 없다.
 - 이 쿠키로는 연구 화면(`/practice`·`/assessment`·`/admin`)에 들어갈 수 없다. `middleware.ts`의
   matcher와 `session-modes.ts`는 손대지 않았고, 그쪽은 그대로 서버 세션을 요구한다.
   `/lecture`는 matcher 밖이라 통과하는 것이며, 우회로를 뚫어 준 것이 아니다.
@@ -334,8 +371,9 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 - 시간 종료 미제출은 `timeout_unsubmitted`. 장애·철회·미동의는 **서로 다른 상태**이며 빈 응답을 최저 점수로 만들지 않는다.
 - 채점은 수집이 끝난 뒤 **사전·사후를 섞어** 별도 작업(`scripts/score-assessments.mjs`)으로 한다.
   채점자 payload에 **시점·학생·학급·자동 점수가 없다.**
-- **최초 운영 점수(`repeatIndex: 1`)가 주 자료로 잠긴다.** 반복 2·3은 신뢰도 분석용으로 따로 저장하며
-  3회 평균이 주 자료를 덮어쓰지 않는다. 시점 혼합 순서는 시드로 재현한다.
+- 채점은 공통 루브릭 v12-2(영역별 1~4 또는 해당 없음)다. **최초 운영 채점(`repeatIndex: 1`)이 주 자료로 잠긴다.**
+  반복 2·3은 신뢰도 분석용으로 영역별 수준을 따로 저장하며 주 자료를 덮어쓰지 않는다. 시점 혼합 순서는 시드로 재현한다.
+- 논문 v12는 사전·사후 검사를 쓰지 않는다. 검사 반(`research_assessment`)은 준비 조건(`readiness`) 때문에 지금 만들 수 없다.
 - 검사 이미지는 `public/`에 두지 않는다. `/api/research/asset/[questionId]`가 인증을 확인하고
   `private, no-store`로 스트리밍한다. **학생이 화면의 이미지를 복사하는 것까지 막았다고 주장하지 않는다.**
 
@@ -423,7 +461,12 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 
 - Firebase Emulator 권한 시험과 브라우저 통합 시험은 **작성만 하고 실행하지 않았다.**
   `npm test`에서 skip으로 나오며 **skip은 통과가 아니다.**
-- 실제 모델 연동 시험을 하지 않았다. 모델 호출은 전부 가짜 구현으로 시험했다.
+- 실제 모델 연동 시험을 하지 않았다. 모델 호출은 전부 가짜 구현으로 시험했다. 특히 v12-2의 엄격한 형식 검사
+  (evidence 원문 일치, 네 문장·한 줄 한 문장, 인용이 2문장 안에, 다음 행동 영역 일치)를 실제 모델이 얼마나 자주 통과하는지는
+  아직 모른다. 운영에서 결측(schema_error)·피드백 fallback 비율과 `feedback.rejections`를 먼저 확인할 것.
+- `servedModel`은 Gemini 응답의 `modelVersion`을 읽는다. 플러그인이 그 값을 넘기지 않으면 null로 남는다(지어내지 않는다).
+- A밴드 관계 영역: 대상이 하나뿐인 그림은 관계가 해당 없음이어야 하는데, 단서 팩이 없으면 모델이 정한다.
+  단서 팩을 쓸 때는 필수 맥락(`requiredContext`)을 비워 두면 코드가 해당 없음으로 정한다. 검수표에 문항별 판단 거리를 적어 두었다.
 - 검사 단서 노출 점검은 비공개 단서 팩이 있을 때만 실제 문장으로 훑는다. 팩이 없으면 건너뛴다.
 - edge middleware는 힌트 쿠키만 읽는다(힌트가 없으면 열지 않는다). 실제 판정은 server action·API가 다시 한다.
 - 교사 블라인드·연구자 화면이 아직 연습 제출만 읽는다. 검사 6응답은 내보내기 경로로 받아야 한다.
@@ -456,11 +499,13 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 
 | 원하는 변경 | 건드릴 파일 |
 |---|---|
-| 공통 5수준 문언 | `src/lib/rubric.ts` (여기 하나뿐) |
+| 공통 루브릭 v12-2 문언·운영 규칙 | `src/lib/rubric.ts` (여기 하나뿐) |
+| 6단계 이름·문항 배치·초점 영역 | `src/lib/stages.ts` |
 | 지시문 조립·입력 취급 규칙 | `src/lib/evaluation-prompt.ts` |
-| 밴드·배점·환산·형식 검증 | `src/lib/scoring.ts` |
-| 운영 채점 결합 규칙 | `src/server/grading/operational.ts` |
-| 피드백 형식·인용 검증 | `src/lib/feedback.ts` |
+| 밴드·영역·형식 검증·종합 수준·다음 행동 영역 | `src/lib/scoring.ts` |
+| 운영 채점 절차(모델 1회·재시도·피드백 재생성) | `src/server/grading/operational.ts` |
+| 게임·타임어택의 옛 v7 채점 | `src/lib/legacy-v7/`, `src/server/grading/legacy-v7.ts` |
+| 피드백 네 문장·영역·인용·금지 표현 검증 | `src/lib/feedback.ts` |
 | 문항 등록·검사 메타데이터 | `src/server/registry/entries.ts` |
 | 문항별 단서 | `RESEARCH_ASSET_DIR/cue-pack.json` (저장소 밖) |
 | 연습 문항 추가/수정 | `src/lib/questions.ts` + `public/questions/L01~L36.jpg` |
@@ -478,7 +523,7 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 | 학생 현황 집계(보이는 범위) | `src/server/lms/progress.ts` |
 | 문항별 힌트·검수 상태 | `src/lib/practice-hints.ts` (고친 뒤 `npm run hints:table`) |
 | 연습 순서 진행(어디로 들어가고 무엇이 보이는가) | `src/lib/practice-progress.ts` |
-| 앱 AI 5수준·요약·층화 추출 규칙 | `src/server/export/practice-summary.ts` |
+| 요약·층화 추출 규칙(앱 종합 4수준 산정은 `scoring.ts`의 `overallLevelOf`) | `src/server/export/practice-summary.ts` |
 | 모델 교체 | `src/server/config.ts`의 `EVALUATION_MODEL_ID` |
 
 ## 복구 기록

@@ -40,9 +40,9 @@ class FakeRegistryError extends Error {
 
 const hasCode = (code: string) => (e: unknown) => e instanceof FakeRegistryError && e.code === code;
 
-/** 필수 항목이 모두 채워진 단서 한 벌. 실제 정답이 아니라 형식 확인용 자리표시다. */
+/** 필수 항목이 모두 채워진 단서 한 벌(공통 루브릭 v12-2, 앵커 1~4수준). 실제 정답이 아니라 형식 확인용 자리표시다. */
 function filledCues(band: Band) {
-  const anchor = { '1': 'a1', '2': 'a2', '3': 'a3', '4': 'a4', '5': 'a5' };
+  const anchor = { '1': 'a1', '2': 'a2', '3': 'a3', '4': 'a4' };
   const anchors: Record<string, Record<string, string>> = {
     object: { ...anchor },
     specificity: { ...anchor },
@@ -214,18 +214,40 @@ test('단서가 채워진 문항만 cuesLoaded=true가 되고 나머지는 거�
   assert.throws(() => registry.getCues('T3'), hasCode('cues_missing'));
 });
 
-test('밴드에 맞지 않는 단서 형식을 거른다', () => {
-  // A밴드에 맥락 필수 단서를 넣으면 실격
-  const aWithContext = { ...filledCues('A'), requiredContext: ['교실'] };
-  assert.ok('reason' in validateCues(aWithContext, 'A'));
+test('단서 형식을 공통 루브릭 v12-2 규칙으로 거른다', () => {
+  // A밴드도 대상 사이 공간 관계를 필수 관계로 둘 수 있다(앵커 context를 함께 둔다).
+  const aWithRelation = filledCues('A');
+  aWithRelation.requiredContext = ['대상1의 왼쪽에 대상2'];
+  aWithRelation.anchors.context = { '1': 'r1', '2': 'r2', '3': 'r3', '4': 'r4' };
+  assert.ok('cues' in validateCues(aWithRelation, 'A'));
 
-  // B밴드에 맥락 단서·앵커가 없으면 실격
-  assert.ok('reason' in validateCues(filledCues('A'), 'B'));
+  // 필수 관계가 있는데 관계 앵커가 없으면 실격
+  const relationWithoutAnchor = { ...filledCues('A'), requiredContext: ['교실'] };
+  assert.ok('reason' in validateCues(relationWithoutAnchor, 'A'));
+
+  // 필수 관계가 비어 있으면 관계는 해당 없음 — 그 영역에 앵커를 두면 실격
+  const naWithAnchor = filledCues('B');
+  naWithAnchor.requiredContext = [];
+  assert.ok('reason' in validateCues(naWithAnchor, 'B'));
+
+  // 필수 속성이 비어 있으면 특징은 해당 없음(앵커 없이 통과)
+  const noFeature = filledCues('A');
+  noFeature.requiredAttributes = [];
+  delete noFeature.anchors.specificity;
+  assert.ok('cues' in validateCues(noFeature, 'A'));
+
+  // 핵심 대상은 비울 수 없다
+  assert.ok('reason' in validateCues({ ...filledCues('A'), coreObjects: [] }, 'A'));
 
   // 앵커의 한 수준이라도 비면 실격
   const missingAnchor = filledCues('A');
   missingAnchor.anchors.specificity['4'] = '   ';
   assert.ok('reason' in validateCues(missingAnchor, 'A'));
+
+  // 옛 v7의 5수준 앵커가 섞이면 실격
+  const fiveLevel = filledCues('A');
+  fiveLevel.anchors.object['5'] = 'a5';
+  assert.ok('reason' in validateCues(fiveLevel, 'A'));
 
   // 정상 형식은 통과
   assert.ok('cues' in validateCues(filledCues('C'), 'C'));

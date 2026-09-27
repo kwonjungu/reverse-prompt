@@ -42,7 +42,7 @@ const ASSESSMENT_ENTRIES: RegistryEntry[] = [
     imageVersion: 'v7',
     imageSha256: 'f4734f7d626c58835c18d5c1a6f5362e7a23c9c9cd4b35b48c49971d5636755a',
     cueVersion: 'v7-candidate',
-    rubricVersion: 'v7-candidate',
+    rubricVersion: 'v12-2',
     status: 'candidate',
     approvedAt: null,
     allowedSessionTypes: ['research_assessment'],
@@ -57,7 +57,7 @@ const ASSESSMENT_ENTRIES: RegistryEntry[] = [
     imageVersion: 'v7',
     imageSha256: '629dcc35322913f73c5db308b9ab3d6ac1ce4f9b47a701ad736720307de685f7',
     cueVersion: 'v7-candidate',
-    rubricVersion: 'v7-candidate',
+    rubricVersion: 'v12-2',
     status: 'candidate',
     approvedAt: null,
     allowedSessionTypes: ['research_assessment'],
@@ -72,7 +72,7 @@ const ASSESSMENT_ENTRIES: RegistryEntry[] = [
     imageVersion: 'v7',
     imageSha256: 'e5f3e07939c55e44ea33e4cca1f0f5a36573f62c01697a366ed29a94fbda5cb9',
     cueVersion: 'v7-candidate',
-    rubricVersion: 'v7-candidate',
+    rubricVersion: 'v12-2',
     status: 'candidate',
     approvedAt: null,
     allowedSessionTypes: ['research_assessment'],
@@ -86,7 +86,8 @@ const ASSESSMENT_ENTRIES: RegistryEntry[] = [
  * 연습 문항의 단서도 같은 팩에서 읽으므로 같은 버전 문자열을 쓴다.
  */
 const PRACTICE_CUE_VERSION = 'v7-candidate';
-const PRACTICE_RUBRIC_VERSION = 'v7-candidate';
+/** 연습·검사 채점은 공통 루브릭 v12-2로 한다(src/lib/rubric.ts의 RUBRIC_VERSION과 같다). */
+const PRACTICE_RUBRIC_VERSION = 'v12-2';
 
 /** 연습 문항 ID는 L01~L36. 이미지 파일명과 같은 규칙을 쓴다. */
 export function practiceQuestionId(level: number): string {
@@ -138,7 +139,7 @@ const EXPERIENCE_ENTRIES: RegistryEntry[] = Object.entries(EXPERIENCE_BANDS).map
     imageVersion: 'v7',
     imageSha256: '',
     cueVersion: PRACTICE_CUE_VERSION,
-    rubricVersion: PRACTICE_RUBRIC_VERSION,
+    rubricVersion: 'v7', // 게임·타임어택은 옛 v7 채점(legacy-v7)을 쓴다
     status: 'candidate',
     approvedAt: null,
     allowedSessionTypes: ['experience'],

@@ -6,7 +6,7 @@
  * 교육학적 적절성 / 채점 공정성 / 피드백 품질 / 문제 난이도 / 이미지 프롬프트 편향을
  * 자동으로 검토하고 개선안을 제시합니다.
  *
- * 모델: src/server/config.ts의 EVALUATION_MODEL_ID(기본값 googleai/gemini-3.8-flash).
+ * 모델: src/server/config.ts의 EVALUATION_MODEL_ID(기본값은 그 파일에 있다). 채점과 같은 값이다.
  * 모델명을 이 파일에 따로 적지 않는다. 운영자가 접근을 확인한 값을 한곳에서만 바꾼다.
  *
  * 이 경로는 학생 응답을 다른 AI에 보내는 경로다. 그러므로 기본은 합성 자료(설정만)

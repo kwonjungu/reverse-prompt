@@ -16,9 +16,9 @@ import {
   resolveModelConfig,
   type CallModel,
   type GradingDeps,
-} from '@/server/grading/operational';
+} from '@/server/grading/legacy-v7';
 import { privacy as realPrivacy } from '@/server/privacy';
-import type { Band } from '@/lib/scoring';
+import type { Band } from '@/lib/legacy-v7/scoring';
 import type { GradingRequest } from '@/server/grading/contract';
 import type { QuestionCues, RegistryEntry } from '@/server/registry/contract';
 
@@ -465,11 +465,12 @@ test('D1 — 승인 기록을 실제로 저장하는 경로가 있다', () => {
   assert.match(src, /requireRole\('admin'\)/, '요청자와 승인자를 분리한다');
 });
 
-test('D2 — 연습 채점 서버 액션이 차시 개방과 동의를 서버에서 확인한다', () => {
+test('D2 — 게임·타임어택 채점 액션은 일반 체험 세션과 게임 문항만 받는다', () => {
   const src = readSource('src/ai/flows/evaluate-prompt.ts');
   assert.match(src, /assertModeAllowed/, '허용되지 않은 세션의 채점을 막는다');
-  assert.match(src, /getLessonStateAction/, '차시 개방을 서버 기록으로 확인한다');
-  assert.match(src, /requireActiveResearchConsent/, '미동의·철회자의 전송을 막는다');
+  assert.match(src, /sessionType !== 'experience'/, '연구 세션은 게임·타임어택 채점을 쓰지 않는다');
+  assert.match(src, /GAME_QUESTION_ID/, '연습 문항(L01~L36)을 옛 v7 채점으로 받지 않는다');
+  assert.match(src, /legacyV7Grading/, '게임·타임어택은 옛 v7 채점을 그대로 쓴다');
 });
 
 test('D3 — 감수 경로가 제작 프롬프트를 타입 안전하게 읽는다', () => {
