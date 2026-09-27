@@ -1,88 +1,93 @@
 /**
- * 연습 문항별 힌트 — 학생 화면에 그대로 나가는 공개 문구만 둔다.
+ * 연습 문항별 힌트 — '목표 + 확인 기준'(설계 원리 1). 학생 화면에 그대로 나가는 공개 문구만 둔다.
  *
- * 논문 v12 반영. 차시 공통 안내(questions.ts의 GUIDE) 대신 그 사진에서 써야 할 정보가
- * 무엇인지 알려 준다. 정답 문장·값(색 이름·개수·대상 이름)은 적지 않고 "무엇이 몇 개인지,
- * 어떤 색인지 써 봐요."처럼 무엇을 써야 하는지만 말한다.
+ * 힌트 = 목표 한 문장 + 확인 질문(영역마다 한 문장, 그 문항에서 판정하는 영역만).
+ * 확인 질문은 공통 루브릭 v12-2의 4수준 기준을 학생 말로 옮긴 것이다. 정답 값(대상 이름·색 이름·개수)이나
+ * 그림의 특정 부위를 짚지 않는다. 36문항 모두 아래 규칙으로 만든다(손으로 쓰지 않는다).
  *
- * 밴드별 범위
- *   A(Lv.1~12)  대상 이름·기본 색·모양·크기·개수
- *   B(Lv.13~24) A + 배경·행동
- *   C(Lv.25~36) B + 시간대. 분위기는 근거와 함께 쓰라고 안내하되 필수로 두지 않는다.
- *
- * 공개 범위
- *   이 파일은 클라이언트 번들에 실린다. 허용 표현 목록·채점 경계·요구하지 않는 정보는
- *   여기 두지 않고 서버의 비공개 단서 팩에만 둔다. 연구자 검수 메모도 여기 두지 않는다
- *   (scripts/print-practice-hints.mjs에 있다).
+ *   - 단계 초점 영역의 질문을 맨 앞에 둔다(2단계 대상, 3단계 특징, 4단계 관계). 1·5·6단계는 대상→특징→관계.
+ *   - 관계 질문은 A밴드(L01–L12)는 공간 관계, B·C밴드는 장소·행동이다.
+ *   - C밴드(L25–L36)는 시간대·분위기에 관한 선택 안내를 덧붙인다(필수 아님).
+ *   - 비공개 단서 팩에서 해당 없음(not_applicable)인 영역의 질문은 서버가 알려 준 대로 화면에서 뺀다
+ *     (withoutAreas). 단서 팩 내용은 이 파일에 두지 않는다.
  *
  * 검수
- *   초안은 실제 그림(public/questions/L01~L36.jpg)을 보고 썼다. 제작 프롬프트를 옮기지 않았다.
- *   reviewed가 true인 힌트만 학생 화면에 나간다. false면 차시 공통 안내를 그대로 쓴다.
- *   검수표: docs/practice-hints-review.md (npm run hints:table 로 다시 만든다)
+ *   REVIEWED_QUESTIONS에 들어간 문항의 힌트만 학생 화면에 나간다. 아니면 단계 공통 안내를 쓴다.
+ *   검수표: docs/practice-hints-review.md (npm run hints:table). 예전 초안 문구는 검수표의 참고 열로 남긴다
+ *   (scripts/print-practice-hints.mjs — 그림의 부위를 짚는 문구라 학생 번들에 싣지 않는다).
  */
 
-export interface PracticeHintDraft {
-  /** 학생에게 보일 문구. 그림을 보고 쓸 수 없었던 문항은 null로 둔다(지어내지 않는다). */
-  hint: string | null;
+import { AREA_IDS, bandOf, type AreaId } from '@/lib/scoring';
+import { chasiOfLevel, stageFocusArea } from '@/lib/stages';
+
+/** 확인 질문 하나. area가 null이면 영역에 딸리지 않은 선택 안내다(C밴드). */
+export interface HintCheck {
+  area: AreaId | null;
+  text: string;
+}
+
+/** 학생 화면에 나가는 힌트 */
+export interface PracticeHint {
+  goal: string;
+  checks: HintCheck[];
+}
+
+export interface PracticeHintDraft extends PracticeHint {
   /** 연구자가 검수를 마쳤는가. 마치기 전에는 학생 화면에 나가지 않는다. */
   reviewed: boolean;
 }
 
-const MOOD = '분위기를 쓴다면 무엇을 보고 그렇게 느꼈는지도 써요.';
+/** 목표 문장(공통) */
+export const HINT_GOAL = '이 그림을 못 본 친구가 똑같이 떠올릴 수 있게 써요.';
+
+/** 확인 질문 — 루브릭 4수준 기준을 학생 말로 */
+export const HINT_CHECK = {
+  object: '무엇이 몇 개 있는지 빠짐없이 썼나요?',
+  feature: '색과 모양이 어느 것의 것인지 알 수 있게 썼나요?',
+  relationA: '서로 어디에 있는지(위·아래·왼쪽·오른쪽) 썼나요?',
+  relationBC: '어디에서 무엇을 하고 있는지 썼나요?',
+} as const;
+
+/** C밴드 선택 안내 */
+export const HINT_C_OPTIONAL =
+  '언제인지 알 수 있다면 써도 좋아요. 분위기를 쓸 때는 무엇을 보고 그렇게 느꼈는지도 써요.';
+
+/** 문항 번호(1~36)로 확인 질문을 만든다. 단계 초점 영역을 맨 앞에 둔다. */
+export function buildHintChecks(level: number): HintCheck[] {
+  const band = bandOf(level);
+  const text: Record<AreaId, string> = {
+    object: HINT_CHECK.object,
+    feature: HINT_CHECK.feature,
+    relation: band === 'A' ? HINT_CHECK.relationA : HINT_CHECK.relationBC,
+  };
+  const focus = stageFocusArea(chasiOfLevel(level));
+  const order: AreaId[] = focus ? [focus, ...AREA_IDS.filter((a) => a !== focus)] : [...AREA_IDS];
+  const checks: HintCheck[] = order.map((area) => ({ area, text: text[area] }));
+  if (band === 'C') checks.push({ area: null, text: HINT_C_OPTIONAL });
+  return checks;
+}
+
+/** 연구자가 검수를 마친 문항(L01~L36). 검수표를 보고 여기에 문항 ID를 더한다. */
+export const REVIEWED_QUESTIONS: readonly string[] = [];
+
+const questionIdOf = (level: number) => `L${String(level).padStart(2, '0')}`;
 
 /** questionId(L01~L36) → 힌트 초안 */
-export const PRACTICE_HINTS: Record<string, PracticeHintDraft> = {
-  /* ── A밴드 · 1차시: 이름 + 기본 색·모양 ── */
-  L01: { reviewed: false, hint: '그림 속 물건이 무엇이고 몇 개인지 써 봐요. 어떤 색이고 어떤 모양인지도 함께 써요. 위쪽에 붙은 작은 부분도 살펴봐요.' },
-  L02: { reviewed: false, hint: '그림 속 물건이 무엇이고 몇 개인지 써 봐요. 어떤 색인지, 펼쳐져 있는지 접혀 있는지도 함께 써요. 손잡이 쪽도 살펴봐요.' },
-  L03: { reviewed: false, hint: '그림 속 물건이 무엇이고 몇 개인지 써 봐요. 어떤 색이고 어떤 모양인지도 함께 써요. 가운데를 꿰맨 줄은 어떤 색인지도 살펴봐요.' },
-  L04: { reviewed: false, hint: '그림 속 물건이 무엇이고 몇 개인지 써 봐요. 어떤 색이고 어떤 모양인지도 함께 써요. 길게 뻗은 부분과 손잡이도 살펴봐요.' },
-  L05: { reviewed: false, hint: '무엇이 무엇에 담겨 있는지 써 봐요. 담긴 것과 담은 것이 각각 어떤 색이고 어떤 모양인지도 함께 써요.' },
-  L06: { reviewed: false, hint: '그림 속 물건이 무엇이고 몇 개인지 써 봐요. 어떤 색인지, 위쪽 머리 부분은 어떤 모양인지도 함께 써요.' },
+export const PRACTICE_HINTS: Record<string, PracticeHintDraft> = Object.fromEntries(
+  Array.from({ length: 36 }, (_, i) => i + 1).map((level) => {
+    const id = questionIdOf(level);
+    return [id, { goal: HINT_GOAL, checks: buildHintChecks(level), reviewed: REVIEWED_QUESTIONS.includes(id) }];
+  })
+);
 
-  /* ── A밴드 · 2차시: 크기·개수로 좁히기 ── */
-  L07: { reviewed: false, hint: '무엇이 몇 개 있는지 써 봐요. 어떤 색인지, 크기가 서로 어떻게 다른지도 함께 써요.' },
-  L08: { reviewed: false, hint: '그림 속 물건이 무엇이고 몇 개인지 써 봐요. 겉에 어떤 무늬가 있는지, 그 무늬에 어떤 색들이 있는지도 함께 써요.' },
-  L09: { reviewed: false, hint: '무엇이 몇 개 있는지 써 봐요. 각각 어떤 색인지, 키와 굵기가 서로 어떻게 다른지도 함께 써요.' },
-  L10: { reviewed: false, hint: '무엇이 몇 개 있는지 세어 봐요. 어떤 모양이고 어떤 색인지도 함께 써요.' },
-  L11: { reviewed: false, hint: '무엇이 몇 마리 있는지 써 봐요. 어떤 색이고 어떤 모양인지, 그림 안에서 얼마나 크게 보이는지도 함께 써요.' },
-  L12: { reviewed: false, hint: '무엇이 몇 개 있는지 세어 봐요. 어떤 색인지, 크기와 모양이 서로 어떻게 다른지도 함께 써요.' },
+/** 해당 없음인 영역의 질문을 뺀다. 영역에 딸리지 않은 선택 안내는 남긴다. */
+export function withoutAreas(hint: PracticeHint, skip: readonly AreaId[]): PracticeHint {
+  if (!skip.length) return hint;
+  return { goal: hint.goal, checks: hint.checks.filter((c) => c.area === null || !skip.includes(c.area)) };
+}
 
-  /* ── B밴드 · 3차시: 배경·행동 ── */
-  L13: { reviewed: false, hint: '어떤 동물이 몇 마리 있는지, 어떤 색인지 써 봐요. 그 동물이 무엇을 하고 있는지, 어디에 있는지도 함께 써요.' },
-  L14: { reviewed: false, hint: '어떤 동물이 몇 마리 있는지, 어떤 색인지 써 봐요. 무엇 위에서 무엇을 하고 있는지도 함께 써요.' },
-  L15: { reviewed: false, hint: '어떤 동물이 몇 마리 있는지, 어떤 색인지 써 봐요. 무엇을 하고 있는지, 어떤 곳에 있는지도 함께 써요. 곁에 있는 것도 살펴봐요.' },
-  L16: { reviewed: false, hint: '사람이 몇 명 있는지, 무엇을 하고 있는지 써 봐요. 어떤 자세인지, 옷은 어떤 색인지도 함께 써요. 곁에 있는 가구와 물건도 살펴봐요.' },
-  L17: { reviewed: false, hint: '어떤 동물이 몇 마리 있는지, 어떤 색인지 써 봐요. 몸과 다리가 어떤지 보고 무엇을 하고 있는지 써요. 뒤쪽 배경은 어떤 색인지도 살펴봐요.' },
-  L18: { reviewed: false, hint: '사람이 몇 명 있는지, 무엇을 하고 있는지 써 봐요. 날씨가 어떤지, 무엇을 입고 무엇을 들고 있는지, 각각 어떤 색인지도 함께 써요.' },
-
-  /* ── B밴드 · 4차시: 배경·행동(자세) ── */
-  L19: { reviewed: false, hint: '어떤 동물이 몇 마리 있는지, 어떤 색인지 써 봐요. 어떤 자세로 무엇을 하고 있는지, 무엇 위에 있는지도 함께 써요.' },
-  L20: { reviewed: false, hint: '그림 속 물건이 무엇이고 몇 개인지 써 봐요. 몸통과 손잡이가 각각 어떤 색이고 어떤 모양인지, 무엇 위에 놓여 있는지도 함께 써요.' },
-  L21: { reviewed: false, hint: '사람이 몇 명 있는지, 어떤 자세로 무엇을 하고 있는지 써 봐요. 어디에 있는지, 옷과 신발은 어떤 색인지도 함께 써요.' },
-  L22: { reviewed: false, hint: '그림 가운데에 무엇이 있는지, 어떤 색인지 써 봐요. 아래쪽은 어떤 모양인지, 주변 땅과 뒤쪽에 무엇이 있는지도 함께 써요.' },
-  L23: { reviewed: false, hint: '그림 속 물건이 무엇이고 몇 개인지 써 봐요. 무엇으로 만들었는지, 겉이 반듯한지 아닌지도 함께 써요. 뒤쪽 배경에 어떤 색과 모양이 있는지도 살펴봐요.' },
-  L24: { reviewed: false, hint: '그림 속 물건이 무엇이고 어떤 색인지 써 봐요. 어디에 어떤 상태로 있는지, 그 아래 바닥에는 무엇이 있는지도 함께 써요. 여기가 어떤 곳인지도 살펴봐요.' },
-
-  /* ── C밴드 · 5차시: 시간대·분위기 ── */
-  L25: { reviewed: false, hint: `여기가 어떤 곳인지, 하루 중 언제쯤인지 써 봐요. 하늘과 물이 어떤 색인지, 모래 위와 물가에 무엇이 몇 개 있는지도 함께 써요. ${MOOD}` },
-  L26: { reviewed: false, hint: `창밖 날씨가 어떤지, 창가에 무엇이 몇 개 있는지 써 봐요. 창가의 동물은 어떤 색이고 무엇을 하고 있는지도 함께 써요. ${MOOD}` },
-  L27: { reviewed: false, hint: `하루 중 언제인지, 날씨가 어떤지 써 봐요. 무엇이 빛을 비추고 있는지, 사람이 몇 명이고 무엇을 하고 있는지도 함께 써요. ${MOOD}` },
-  L28: { reviewed: false, hint: `여기가 어떤 곳인지, 사람이 있는지 써 봐요. 빛이 어디로 들어오는지 보고 하루 중 언제쯤인지, 무엇이 놓여 있는지도 함께 써요. ${MOOD}` },
-  L29: { reviewed: false, hint: `여기가 어떤 곳인지, 하루 중 언제쯤인지 써 봐요. 멀리까지 또렷하게 보이는지, 길 위에 어떤 동물이 몇 마리 있고 무엇을 하는지도 함께 써요. ${MOOD}` },
-  L30: { reviewed: false, hint: `여기가 어떤 곳인지, 하늘 색을 보고 하루 중 언제쯤인지 써 봐요. 무엇들이 놓여 있는지, 사람이 있는지도 함께 써요. ${MOOD}` },
-
-  /* ── C밴드 · 6차시: 세 가지 모두 ── */
-  L31: { reviewed: false, hint: `사람과 동물이 각각 몇인지, 어디에서 무엇을 하고 있는지 써 봐요. 하늘을 보고 하루 중 언제쯤인지, 발밑에 무엇이 놓여 있는지도 함께 써요. ${MOOD}` },
-  L32: { reviewed: false, hint: `사람이 몇 명인지, 함께 무엇을 하고 있는지 써 봐요. 날씨가 어떤지, 각자 무엇을 입었는지, 바닥에 무엇이 있는지도 써요. 하늘 색과 창문 불빛을 보고 언제쯤인지 생각해 봐요. ${MOOD}` },
-  L33: { reviewed: false, hint: `사람이 몇 명인지, 어디에서 무엇을 하고 있는지 써 봐요. 창으로 들어오는 빛을 보고 하루 중 언제쯤인지, 식탁 위에 무엇이 있는지도 함께 써요. ${MOOD}` },
-  L34: { reviewed: false, hint: `사람이 몇 명인지, 함께 무엇을 하고 있는지 써 봐요. 날씨와 계절이 어떤지, 각자 어떤 색 옷을 입었는지, 주변에 무엇이 있는지도 써요. 하늘 색을 보고 언제쯤인지 생각해 봐요. ${MOOD}` },
-  L35: { reviewed: false, hint: `여기가 어떤 곳인지, 사람이 몇 명이고 어떤 자세로 무엇을 하고 있는지 써 봐요. 창밖 빛을 보고 하루 중 언제쯤인지, 바닥에 무엇이 있는지도 함께 써요. ${MOOD}` },
-  L36: { reviewed: false, hint: `여기가 어떤 곳인지, 하늘을 보고 하루 중 언제쯤인지 써 봐요. 사람이 몇 명이고 무엇을 들고 있는지, 주변 바닥에 무엇이 놓여 있는지도 함께 써요. ${MOOD}` },
-};
-
-/** 학생 화면에 낼 힌트. 검수를 마친 것만 돌려주고, 아니면 null(차시 공통 안내를 쓴다). */
-export function reviewedHintOf(questionId: string): string | null {
+/** 학생 화면에 낼 힌트. 검수를 마친 것만 돌려주고, 아니면 null(단계 공통 안내를 쓴다). */
+export function reviewedHintOf(questionId: string): PracticeHint | null {
   const draft = PRACTICE_HINTS[questionId];
-  return draft && draft.reviewed && draft.hint ? draft.hint : null;
+  return draft && draft.reviewed ? { goal: draft.goal, checks: draft.checks } : null;
 }

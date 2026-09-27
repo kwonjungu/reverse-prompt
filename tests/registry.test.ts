@@ -10,6 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import type { Band } from '@/lib/scoring';
+import { chasiOfLevel } from '@/lib/stages';
 import {
   ASSESSMENT_INSTRUCTION,
   ASSESSMENT_ORDER,
@@ -40,9 +41,9 @@ class FakeRegistryError extends Error {
 
 const hasCode = (code: string) => (e: unknown) => e instanceof FakeRegistryError && e.code === code;
 
-/** 필수 항목이 모두 채워진 단서 한 벌. 실제 정답이 아니라 형식 확인용 자리표시다. */
+/** 필수 항목이 모두 채워진 단서 한 벌(공통 루브릭 v12-2, 앵커 1~4수준). 실제 정답이 아니라 형식 확인용 자리표시다. */
 function filledCues(band: Band) {
-  const anchor = { '1': 'a1', '2': 'a2', '3': 'a3', '4': 'a4', '5': 'a5' };
+  const anchor = { '1': 'a1', '2': 'a2', '3': 'a3', '4': 'a4' };
   const anchors: Record<string, Record<string, string>> = {
     object: { ...anchor },
     specificity: { ...anchor },
@@ -146,29 +147,44 @@ test('검사 문항은 명세 그대로 candidate·approvedAt null 상태로 둔
     assert.equal(entry.status, 'candidate');
     assert.equal(entry.approvedAt, null);
     assert.equal(entry.cueVersion, 'v7-candidate');
-    assert.equal(entry.rubricVersion, 'v7-candidate');
+    // 검사 채점도 공통 루브릭 v12-2(3영역 4수준)로 한다.
+    assert.equal(entry.rubricVersion, 'v12-2');
     assert.match(entry.imageSha256, /^[0-9a-f]{64}$/);
   }
 });
 
 /* ────────────────────────── 연습 문항 ────────────────────────── */
 
-test('연습 문항 36개가 L01~L36으로 등록되고 차시·밴드가 이어진다', () => {
+test('연습 문항 36개가 L01~L36으로 등록되고 6단계 배치·밴드를 따른다', () => {
   // 게임·시간 제한 모드의 체험 문항도 kind는 practice이므로 L 접두로 구분한다.
   const practice = baseEntries().filter(
     (e) => e.kind === 'practice' && /^L\d{2}$/.test(e.questionId),
   );
   assert.equal(practice.length, 36);
 
+  // 논문 v12 6단계: L01–06→1, L07–12→2, L19–24→3, L13–18→4, L25–30→5, L31–36→6
+  const wantLesson = (level: number) =>
+    level <= 6 ? 1 : level <= 12 ? 2 : level <= 18 ? 4 : level <= 24 ? 3 : level <= 30 ? 5 : 6;
+
   for (let level = 1; level <= 36; level += 1) {
     const entry = findBaseEntry(practiceQuestionId(level));
     assert.ok(entry, `L${level}이 등록되어 있어야 한다`);
-    assert.equal(entry.lesson, Math.ceil(level / 6));
+    assert.equal(entry.lesson, wantLesson(level), `L${level}의 단계`);
+    assert.equal(entry.lesson, chasiOfLevel(level), '단계 정의(src/lib/stages.ts)와 같다');
     assert.equal(entry.durationSeconds, null);
     assert.deepEqual(entry.allowedSessionTypes, ['experience', 'research_practice']);
+    // 밴드는 단계와 무관하게 문항 번호로 정한다.
     const wantBand: Band = level <= 12 ? 'A' : level <= 24 ? 'B' : 'C';
     assert.equal(entry.band, wantBand);
+    // 연습 채점은 공통 루브릭 v12-2로 한다.
+    assert.equal(entry.rubricVersion, 'v12-2');
   }
+
+  // 3단계(특징)와 4단계(관계)의 문항이 뒤바뀌었다.
+  assert.equal(findBaseEntry('L13')?.lesson, 4);
+  assert.equal(findBaseEntry('L18')?.lesson, 4);
+  assert.equal(findBaseEntry('L19')?.lesson, 3);
+  assert.equal(findBaseEntry('L24')?.lesson, 3);
 });
 
 /* ────────────────────────── 단서 ────────────────────────── */
@@ -214,18 +230,40 @@ test('단서가 채워진 문항만 cuesLoaded=true가 되고 나머지는 거�
   assert.throws(() => registry.getCues('T3'), hasCode('cues_missing'));
 });
 
-test('밴드에 맞지 않는 단서 형식을 거른다', () => {
-  // A밴드에 맥락 필수 단서를 넣으면 실격
-  const aWithContext = { ...filledCues('A'), requiredContext: ['교실'] };
-  assert.ok('reason' in validateCues(aWithContext, 'A'));
+test('단서 형식을 공통 루브릭 v12-2 규칙으로 거른다', () => {
+  // A밴드도 대상 사이 공간 관계를 필수 관계로 둘 수 있다(앵커 context를 함께 둔다).
+  const aWithRelation = filledCues('A');
+  aWithRelation.requiredContext = ['대상1의 왼쪽에 대상2'];
+  aWithRelation.anchors.context = { '1': 'r1', '2': 'r2', '3': 'r3', '4': 'r4' };
+  assert.ok('cues' in validateCues(aWithRelation, 'A'));
 
-  // B밴드에 맥락 단서·앵커가 없으면 실격
-  assert.ok('reason' in validateCues(filledCues('A'), 'B'));
+  // 필수 관계가 있는데 관계 앵커가 없으면 실격
+  const relationWithoutAnchor = { ...filledCues('A'), requiredContext: ['교실'] };
+  assert.ok('reason' in validateCues(relationWithoutAnchor, 'A'));
+
+  // 필수 관계가 비어 있으면 관계는 해당 없음 — 그 영역에 앵커를 두면 실격
+  const naWithAnchor = filledCues('B');
+  naWithAnchor.requiredContext = [];
+  assert.ok('reason' in validateCues(naWithAnchor, 'B'));
+
+  // 필수 속성이 비어 있으면 특징은 해당 없음(앵커 없이 통과)
+  const noFeature = filledCues('A');
+  noFeature.requiredAttributes = [];
+  delete noFeature.anchors.specificity;
+  assert.ok('cues' in validateCues(noFeature, 'A'));
+
+  // 핵심 대상은 비울 수 없다
+  assert.ok('reason' in validateCues({ ...filledCues('A'), coreObjects: [] }, 'A'));
 
   // 앵커의 한 수준이라도 비면 실격
   const missingAnchor = filledCues('A');
   missingAnchor.anchors.specificity['4'] = '   ';
   assert.ok('reason' in validateCues(missingAnchor, 'A'));
+
+  // 옛 v7의 5수준 앵커가 섞이면 실격
+  const fiveLevel = filledCues('A');
+  fiveLevel.anchors.object['5'] = 'a5';
+  assert.ok('reason' in validateCues(fiveLevel, 'A'));
 
   // 정상 형식은 통과
   assert.ok('cues' in validateCues(filledCues('C'), 'C'));
@@ -349,6 +387,14 @@ test('학생에게 내려보내는 view에 단서·앵커·해시가 없다 (수
   assert.equal(practice.durationSeconds, null);
   assert.equal(practice.lesson, 1);
   assert.ok(practice.instruction.length > 0);
+
+  // 이미지는 문항 번호 그대로이고 단계만 6단계 배치를 따른다.
+  const l13 = registry.toPublicView(registry.getEntry('L13'));
+  assert.equal(l13.imageUrl, '/questions/L13.jpg');
+  assert.equal(l13.lesson, 4);
+  const l19 = registry.toPublicView(registry.getEntry('L19'));
+  assert.equal(l19.imageUrl, '/questions/L19.jpg');
+  assert.equal(l19.lesson, 3);
 });
 
 test('이미지 바이트를 열지 못하면 asset_missing으로 거부한다', async () => {
@@ -365,10 +411,27 @@ test('게임·시간 제한 모드 문항은 일반 체험에서만 쓰이고 �
     assert.deepEqual(entry.allowedSessionTypes, ['experience']);
     assert.equal(entry.lesson, null);
     assert.equal(entry.durationSeconds, null);
+    // 게임·타임어택은 옛 v7 채점(src/server/grading/legacy-v7.ts)을 그대로 쓴다.
+    assert.equal(entry.rubricVersion, 'v7');
     // 연구 세션에서는 레지스트리 단계에서 막힌다.
     assert.throws(() => registry.requireEntry(id, 'research_practice'), /쓸 수 없는 문항/);
     assert.throws(() => registry.requireEntry(id, 'research_assessment'), /쓸 수 없는 문항/);
   }
+});
+
+test('루브릭 버전 — 연습·검사 문항은 v12-2, 게임·타임어택 문항은 옛 v7이다', () => {
+  const entries = baseEntries();
+  const games = entries.filter((e) => /^(game|ta)-\d{2}$/.test(e.questionId));
+  assert.ok(games.length > 0);
+  for (const e of games) {
+    assert.equal(e.rubricVersion, 'v7', e.questionId);
+    assert.deepEqual(e.allowedSessionTypes, ['experience'], e.questionId);
+  }
+  for (const e of entries.filter((x) => /^L\d{2}$/.test(x.questionId) || x.kind === 'assessment')) {
+    assert.equal(e.rubricVersion, 'v12-2', e.questionId);
+  }
+  // 등록된 문항은 이 세 부류뿐이다(옛 v7 채점이 연습·검사에 섞여 들지 않는다).
+  assert.equal(entries.length, 36 + ASSESSMENT_ORDER.length + games.length);
 });
 
 /* ────────────── D4 적재한 단서 팩의 버전이 기록에 반영된다 ────────────── */

@@ -521,6 +521,40 @@ async function refreshStudentSession(): Promise<IssuedSession> {
   };
 }
 
+/** 한 학생의 세션을 이을 때 읽는 최대 세션 수. 한 반·한 번호가 이만큼 다시 들어오는 일은 드물다. */
+const MAX_LINKED_SESSIONS = 200;
+
+/**
+ * 같은 반·같은 번호로 들어온 세션 소유자 목록(session:<sid>). 지금 세션을 늘 포함한다.
+ *
+ * 일반 수업은 다시 들어오면 세션(sid)이 바뀐다. 연습 화면이 "어디까지 냈는지"를 이어 보이려면
+ * 번호로 이어야 한다. 교사 학생 현황(LMS)이 제출을 번호로 묶는 것과 같은 규칙이다.
+ * 번호가 없는 세션(연구 수업·옛 반)은 지금 세션 하나만 돌려주고 linkedByNumber=false다.
+ * 번호는 학생이 적은 값이므로 신원 확인이 아니다. 여기서는 제출 여부(문항 ID)만 잇는 데 쓴다.
+ */
+async function linkedSessionOwners(
+  classResearchId: string,
+  sessionOwner: string
+): Promise<{ owners: string[]; linkedByNumber: boolean }> {
+  const alone = { owners: [sessionOwner], linkedByNumber: false };
+  if (!sessionOwner.startsWith('session:') || !isAdminConfigured()) return alone;
+  const sid = assertSafeDocId(sessionOwner.slice('session:'.length), '세션');
+  const db = getAdminFirestore();
+  const own = (await db.collection(COLLECTIONS.studentSessions).doc(sid).get()).data();
+  if (!own || own.classResearchId !== classResearchId) return alone;
+  const studentNumber = parseStudentNumber(own.studentNumber);
+  if (studentNumber === null) return alone;
+  const snap = await db
+    .collection(COLLECTIONS.studentSessions)
+    .where('classResearchId', '==', classResearchId)
+    .where('studentNumber', '==', studentNumber)
+    .limit(MAX_LINKED_SESSIONS)
+    .get();
+  const owners = new Set([sessionOwner]);
+  for (const doc of snap.docs) owners.add(`session:${doc.id}`);
+  return { owners: [...owners], linkedByNumber: true };
+}
+
 /** 세션 폐기. 자료를 지우지 않고 세션만 무효화한다. */
 async function revokeStudentSession(): Promise<void> {
   const token = await readCookie(SESSION_TOKEN_COOKIE);
@@ -725,6 +759,7 @@ export const auth: AuthApi & {
   resolveSessionContext: typeof resolveSessionContext;
   requireTeacherForClass: typeof requireTeacherForClass;
   getClassSessionType: typeof getClassSessionType;
+  linkedSessionOwners: typeof linkedSessionOwners;
 } = {
   getPrincipal,
   requirePrincipal,
@@ -741,6 +776,7 @@ export const auth: AuthApi & {
   resolveSessionContext,
   requireTeacherForClass,
   getClassSessionType,
+  linkedSessionOwners,
 };
 
 export { AuthError } from './contract';

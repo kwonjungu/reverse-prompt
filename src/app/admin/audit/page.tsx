@@ -131,7 +131,9 @@ export default function AdminPage() {
               <ShieldCheck className="h-8 w-8 text-primary" />
               <h1 className="text-3xl font-black font-headline">감수 에이전트</h1>
             </div>
-            <p className="text-muted-foreground">설정(문항·채점 문언·이미지 프롬프트)을 검토합니다.</p>
+            <p className="text-muted-foreground">
+              설정(6단계 문항·공통 루브릭 {RUBRIC_VERSION} 채점 문언·이미지 프롬프트)을 검토합니다.
+            </p>
           </div>
           <Link href="/">
             <Button variant="outline" size="sm"><ArrowLeft className="mr-2 h-4 w-4" />홈</Button>
@@ -216,7 +218,9 @@ export default function AdminPage() {
           <CardHeader>
             <CardTitle className="text-lg">공통 루브릭 문서 ({RUBRIC_VERSION})</CardTitle>
             <CardDescription>
-              채점 지시문·교사 화면·내보내기가 함께 쓰는 원본입니다. 문항별 단서·앵커는 담기지 않습니다.
+              대상·특징·관계 세 영역을 모든 밴드에서 각각 1~4수준(과제가 요구하지 않으면 해당 없음)으로
+              판정하는 공통 루브릭입니다. 점수로 바꾸거나 더하지 않습니다. 채점 지시문·교사 화면·내보내기가
+              함께 쓰는 원본이며, 문항별 필수 정보·앵커는 담기지 않습니다.
             </CardDescription>
           </CardHeader>
           <CardContent>

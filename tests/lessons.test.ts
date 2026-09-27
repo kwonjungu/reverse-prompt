@@ -24,22 +24,30 @@ import {
   visibleLessons,
   type LessonOpenState,
 } from '@/server/lessons/policy';
-import { checkMode, modeForPath, parseAppMode } from '@/server/lessons/mode-policy';
+import { ROUTE_MODES, checkMode, modeForPath, parseAppMode } from '@/server/lessons/mode-policy';
 import { allowedModes, isModeAllowed, MODE_BLOCKED_MESSAGE } from '@/lib/research/session-modes';
 import type { AppMode, ScoringRun, SessionType } from '@/lib/research/types';
+import type { AreaLevel } from '@/lib/scoring';
 import {
+  PRACTICE_SUBMISSION_SCHEMA_VERSION,
   createLessonStore,
   createMemoryBackend,
+  isLegacyPracticeRecord,
+  storedAreaLevels,
   toOpenState,
+  withoutUndefined,
   type LessonPaths,
   type LessonSessionRecord,
   type LessonStore,
   type PracticeSubmissionRecord,
 } from '@/server/lessons/store-core';
 import {
+  LEGACY_SCORING_MESSAGE,
   NOT_OWNER_MESSAGE,
   REVIEW_NOTE_NOT_COLLECTED_MESSAGE,
+  SCORING_MISSING_MESSAGE,
   deriveSubmissionId,
+  viewOf,
   recordFeedbackReviewCore,
   resolveClassKey,
   submitPracticeCore,
@@ -105,25 +113,59 @@ function newStore(): { store: LessonStore; dump: () => Map<string, unknown> } {
   return { store, dump: backend.dump };
 }
 
-function scoredRun(score: number): ScoringRun {
+/** 가짜 채점이 밝히는 실제 모델 이름(설정한 modelId와 다르다). */
+const FAKE_SERVED_MODEL = 'fake-model-served-001';
+
+/** 공통 루브릭 v12-2(3영역 4수준) 모양의 가짜 채점 결과. 실제 모델을 부르지 않는다. */
+function scoredRun(objectLevel: AreaLevel = 3): ScoringRun {
   return {
     operationId: 'op-1',
     repeatIndex: 1,
     band: 'A',
     result: {
       status: 'scored',
-      levels: { objectLevel: 3, specificityLevel: 3, contextLevel: null },
-      score,
-      axisScores: { object: score / 2, specificity: score / 2, context: null },
+      areas: {
+        object: { level: objectLevel, evidence: '파란 상자', missing: [], evidenceMissing: [] },
+        feature: {
+          level: 2,
+          evidence: '파란',
+          missing: ['상자의 모양'],
+          evidenceMissing: [],
+        },
+        relation: { level: 'not_applicable', evidence: null, missing: [], evidenceMissing: [] },
+      },
       feedbackStatus: 'verified',
     },
-    calls: [],
+    calls: [
+      {
+        callId: 'op-1:c1',
+        retryIndex: 0,
+        purpose: 'score',
+        levels: { object: objectLevel, feature: 2, relation: 'not_applicable' },
+        failureReason: null,
+        servedModel: FAKE_SERVED_MODEL,
+        startedAt: '2026-09-07T00:00:00.000Z',
+        finishedAt: '2026-09-07T00:00:01.000Z',
+        durationMs: 1000,
+      },
+    ],
     extraCall: false,
-    feedback: { status: 'verified', text: '네 줄 피드백(합성)', quote: null, regenerated: false },
+    feedback: {
+      status: 'verified',
+      text: '이번 목표(합성)\n[대상] 잘 쓴 점(합성)\n[특징] 다음 행동(합성)\n표현 제안(합성)',
+      quote: '파란 상자',
+      regenerated: false,
+      strengthArea: 'object',
+      nextArea: 'feature',
+      nextTarget: '상자의 모양',
+    },
     modelId: 'fake-model',
+    servedModel: FAKE_SERVED_MODEL,
     modelConfig: { temperature: 0 },
-    rubricVersion: 'synthetic-rubric',
+    rubricVersion: 'v12-2',
     cueVersion: 'synthetic-cue',
+    applicabilitySource: 'cue_pack',
+    focusArea: null,
     imageHash: 'synthetic-hash',
     promptHash: 'synthetic-prompt-hash',
     codeCommit: 'test',
@@ -146,7 +188,7 @@ function submissionRows(h: Harness): PracticeSubmissionRecord[] {
 }
 
 function newHarness(options?: {
-  score?: number;
+  objectLevel?: AreaLevel;
   failSave?: boolean;
   gradeThrows?: boolean;
 }): Harness {
@@ -173,7 +215,7 @@ function newHarness(options?: {
     grade: async () => {
       calls += 1;
       if (options?.gradeThrows) throw new Error('모델 호출 실패(합성)');
-      return scoredRun(options?.score ?? 50);
+      return scoredRun(options?.objectLevel ?? 3);
     },
     newOperationId: () => `op-${calls}`,
     now: () => new Date('2026-09-07T00:10:00.000Z'),
@@ -187,7 +229,7 @@ function newHarness(options?: {
  * 연구 세션은 교사가 연 차시에서만 제출할 수 있으므로 1차시를 열어 둔다.
  */
 async function newResearchHarness(options?: {
-  score?: number;
+  objectLevel?: AreaLevel;
   failSave?: boolean;
   gradeThrows?: boolean;
 }): Promise<Harness> {
@@ -571,7 +613,7 @@ test('A-7 저장에 실패하면 성공 화면으로 바꾸지 않는다', async
 /* ────────────────── A-8: 중복 판정을 채점보다 먼저 ────────────────── */
 
 test('A-8 같은 제출을 다시 보내도 모델을 다시 부르지 않는다', async () => {
-  const h = await newResearchHarness({ score: 50 });
+  const h = await newResearchHarness({ objectLevel: 3 });
   const first = await submitPracticeCore(h.deps, researchCtx, baseInput);
   const second = await submitPracticeCore(h.deps, researchCtx, baseInput);
 
@@ -686,6 +728,45 @@ test('제출 이력은 소유 키로 찾는다. 기기를 바꿔도 복원된다
   assert.deepEqual(other.attemptsByQuestion, {});
 });
 
+test('다시 들어와 세션이 바뀌어도 소유 키를 여럿 주면 한 학생의 기록으로 합쳐 센다', async () => {
+  const h = newHarness();
+  await submitPracticeCore(h.deps, experienceCtx, { ...baseInput, submissionId: 'first-entry' });
+  await submitPracticeCore(
+    h.deps,
+    { ...experienceCtx, ownerKey: 'session:sid-2' },
+    { ...baseInput, submissionId: 'second-entry' }
+  );
+  const classKey = experienceCtx.classCode as string;
+  const one = await h.store.readStudentSubmissions('experience', classKey, 'session:sid-2');
+  assert.deepEqual(one.attemptsByQuestion, { L01: 1 });
+  const both = await h.store.readStudentSubmissions('experience', classKey, [
+    'session:sid-1',
+    'session:sid-2',
+    'session:sid-2',
+  ]);
+  assert.deepEqual(both.attemptsByQuestion, { L01: 2 });
+  assert.deepEqual(
+    (await h.store.readStudentSubmissions('experience', classKey, [])).attemptsByQuestion,
+    {}
+  );
+});
+
+test('수업 시작은 1~6차시를 한 번에 연다(단계를 하나씩 열지 않는다)', async () => {
+  const h = newHarness();
+  await openLessonFor(h.store, 2, 'experience');
+  const { session } = await h.store.openLessonSession({
+    classResearchId: 'CLS-AAA',
+    sessionType: 'experience',
+    lesson: 1,
+    alsoOpen: [1, 2, 3, 4, 5, 6],
+    openedBy: 'admin_console',
+    reason: null,
+  });
+  assert.deepEqual(session.allowedLessons, [1, 2, 3, 4, 5, 6]);
+  assert.equal(session.currentLesson, 1);
+  assert.equal(session.closedAt, null);
+});
+
 test('미동의 연구 학생의 제출은 수집 단계에서 막는다', async () => {
   const h = await newResearchHarness();
   const res = await submitPracticeCore(
@@ -718,6 +799,181 @@ test('채점이 실패해도 글은 저장하고 점수를 만들지 않는다',
   assert.ok(rows[0].scoring.failureReason);
 });
 
+/* ────────────────── 공통 루브릭 v12-2: 화면 결과와 저장 ────────────────── */
+
+test('v12-2 화면 결과는 영역별 수준만 담고 100점·종합 수준이 없다', async () => {
+  const h = await newResearchHarness({ objectLevel: 3 });
+  const res = await submitPracticeCore(h.deps, researchCtx, baseInput);
+  assert.equal(res.status, 'done');
+  if (res.status !== 'done') return;
+  assert.deepEqual(res.scoring, {
+    status: 'scored',
+    levels: { object: 3, feature: 2, relation: 'not_applicable' },
+    band: 'A',
+  });
+  for (const key of ['score', 'axisScores', 'overallLevel', 'appLevel', 'areas']) {
+    assert.equal(key in res.scoring, false, `화면 결과에 ${key}가 있으면 안 된다`);
+  }
+  assert.equal(res.feedback?.status, 'verified');
+  assert.equal(res.feedback?.text.split('\n').length, 4);
+});
+
+test('채점 기록에 설정 모델과 실제로 답한 모델을 함께 남긴다', async () => {
+  const h = await newResearchHarness();
+  await submitPracticeCore(h.deps, researchCtx, baseInput);
+  const [row] = submissionRows(h);
+  assert.equal(row.scoring.modelId, 'fake-model');
+  assert.equal(row.scoring.servedModel, FAKE_SERVED_MODEL);
+  assert.equal(row.scoring.extraCall, false, 'v12-2는 추가 호출이 없다');
+  assert.equal(row.scoring.applicabilitySource, 'cue_pack');
+  // 루브릭 버전은 레지스트리 값('synthetic-rubric')보다 채점 절차가 실제로 쓴 값을 먼저 쓴다.
+  assert.equal(row.rubricVersion, 'v12-2');
+  assert.equal(row.schemaVersion, PRACTICE_SUBMISSION_SCHEMA_VERSION);
+  assert.ok(row.schemaVersion.startsWith('v12.2'));
+  // 영역별 수준·근거·빠진 정보와 피드백 원문이 그대로 남는다.
+  const result = row.scoring.result;
+  assert.ok(result && 'areas' in result && result.status === 'scored');
+  if (result && 'areas' in result && result.status === 'scored') {
+    assert.equal(result.areas.object.level, 3);
+    assert.equal(result.areas.feature.evidence, '파란');
+    assert.deepEqual(result.areas.feature.missing, ['상자의 모양']);
+    assert.equal(result.areas.relation.level, 'not_applicable');
+  }
+  assert.equal(row.scoring.feedback?.nextArea, 'feature');
+  assert.ok(row.scoring.feedback?.text.includes('[특징]'));
+  assert.equal(row.scoring.calls[0] && 'servedModel' in row.scoring.calls[0], true);
+});
+
+test('채점 전에 실패하면 실제 모델을 지어내지 않고 레지스트리의 루브릭 버전을 남긴다', async () => {
+  const h = await newResearchHarness({ gradeThrows: true });
+  await submitPracticeCore(h.deps, researchCtx, baseInput);
+  const [row] = submissionRows(h);
+  assert.equal(row.scoring.result, null);
+  assert.equal(row.scoring.servedModel, null);
+  assert.equal(row.scoring.modelId, null);
+  assert.equal(row.scoring.extraCall, null);
+  assert.equal(row.rubricVersion, SYNTH_ENTRY.rubricVersion);
+});
+
+/** 저장소에 남아 있는 옛 v7(축별 5수준·100점) 연습 기록. 새 필드(servedModel)가 없다. */
+function legacyRecord(overrides?: Partial<PracticeSubmissionRecord>): PracticeSubmissionRecord {
+  const base = baseRecord();
+  const { servedModel: _dropped, ...oldScoring } = base.scoring;
+  void _dropped;
+  return {
+    ...base,
+    schemaVersion: 'v7.0-practice-submission',
+    rubricVersion: 'v7-candidate',
+    persistStatus: 'stored',
+    scoring: {
+      ...oldScoring,
+      result: {
+        status: 'scored',
+        levels: { objectLevel: 4, specificityLevel: 3, contextLevel: null },
+        score: 87.5,
+        axisScores: { object: 50, specificity: 37.5, context: null },
+        feedbackStatus: 'verified',
+      },
+      extraCall: false,
+      feedback: { status: 'verified', text: '옛 피드백(합성)', quote: null, regenerated: false },
+      modelId: 'old-model',
+    } as PracticeSubmissionRecord['scoring'],
+    ...overrides,
+  };
+}
+
+test('옛 v7 연습 기록은 읽히되 영역 수준을 지어내지 않는다', () => {
+  const view = viewOf(legacyRecord());
+  assert.deepEqual(view.scoring, { status: 'missing', message: LEGACY_SCORING_MESSAGE });
+  assert.equal('levels' in view.scoring, false);
+  // 옛 기준의 피드백 문장은 새 화면에 보여 주지 않는다.
+  assert.equal(view.feedback, null);
+
+  // 옛 방식에서 채점하지 못한 기록도 수준 없이 읽힌다.
+  const oldMissing = legacyRecord();
+  oldMissing.scoring = {
+    ...oldMissing.scoring,
+    result: {
+      status: 'missing',
+      levels: null,
+      score: null,
+      axisScores: null,
+      reason: 'required_call_failed',
+    },
+  };
+  assert.equal(viewOf(oldMissing).scoring.status, 'missing');
+});
+
+test('옛 v7 기록을 같은 제출로 다시 보내도 모델을 부르지 않고 수준을 만들지 않는다', async () => {
+  const h = await newResearchHarness();
+  const submissionId = deriveSubmissionId({
+    ownerKey: researchCtx.ownerKey,
+    questionId: baseInput.questionId,
+    startedAt: baseInput.startedAt,
+    text: SYNTH_TEXT,
+  });
+  const saved = await h.store.saveSubmission(legacyRecord({ submissionId }));
+  assert.equal(saved.ok, true);
+
+  const res = await submitPracticeCore(h.deps, researchCtx, baseInput);
+  assert.equal(h.gradeCalls(), 0, '저장된 제출이면 다시 채점하지 않는다');
+  assert.equal(res.status, 'done');
+  if (res.status !== 'done') return;
+  assert.equal(res.save.duplicate, true);
+  assert.deepEqual(res.scoring, { status: 'missing', message: LEGACY_SCORING_MESSAGE });
+  assert.equal(res.feedback, null);
+  // 옛 기록이 있어도 시도 횟수 집계는 그대로 된다.
+  const summary = await h.store.readStudentSubmissions('research_practice', 'CLS-AAA', 'R-001');
+  assert.equal(summary.attemptsByQuestion.L01, 1);
+});
+
+test('옛 기록 판정 — 결과 모양, 없으면 루브릭 버전, 그다음 스키마 버전', () => {
+  const v12Missing = {
+    rubricVersion: 'v12-2',
+    scoring: { result: { status: 'missing', areas: null, reason: 'model_error' } },
+  };
+  assert.equal(isLegacyPracticeRecord(v12Missing), false);
+  assert.equal(isLegacyPracticeRecord(legacyRecord()), true);
+  // 채점 전 실패(result null)는 루브릭 버전으로 가른다.
+  assert.equal(isLegacyPracticeRecord({ rubricVersion: 'v7-candidate', scoring: { result: null } }), true);
+  assert.equal(isLegacyPracticeRecord({ rubricVersion: 'v12-2', scoring: { result: null } }), false);
+  // 루브릭 버전도 없으면 스키마 버전을 본다. 알 수 없으면 옛 기록으로 보지 않는다.
+  assert.equal(
+    isLegacyPracticeRecord({ rubricVersion: null, schemaVersion: 'v7.0-practice-submission', scoring: null }),
+    true
+  );
+  assert.equal(
+    isLegacyPracticeRecord({ rubricVersion: null, schemaVersion: PRACTICE_SUBMISSION_SCHEMA_VERSION, scoring: null }),
+    false
+  );
+});
+
+test('저장된 영역 판정이 형식에 맞지 않으면 보정하지 않고 결측으로 읽는다', () => {
+  const run = scoredRun(3);
+  const broken = {
+    ...run.result,
+    areas: { ...(run.result as { areas: object }).areas, feature: { level: 5, evidence: null, missing: [] } },
+  };
+  assert.equal(storedAreaLevels(broken), null);
+  assert.equal(storedAreaLevels({ status: 'scored', areas: { object: { level: 2 } } }), null);
+  assert.equal(storedAreaLevels({ ...run.result, areas: { ...(run.result as { areas: object }).areas, object: { level: '3' } } }), null);
+  assert.deepEqual(storedAreaLevels(run.result), { object: 3, feature: 2, relation: 'not_applicable' });
+
+  const record = { ...baseRecord(), rubricVersion: 'v12-2', persistStatus: 'stored' as const };
+  record.scoring = { ...record.scoring, result: broken as never };
+  assert.deepEqual(viewOf(record).scoring, { status: 'missing', message: SCORING_MISSING_MESSAGE });
+});
+
+test('저장 전에 undefined 키만 빼고 null은 그대로 둔다', () => {
+  const cleaned = withoutUndefined({
+    a: 1,
+    b: undefined,
+    c: null,
+    nested: { d: undefined, e: 'x', list: [{ f: undefined, g: null }] },
+  });
+  assert.deepEqual(cleaned, { a: 1, c: null, nested: { e: 'x', list: [{ g: null }] } });
+});
+
 /* ────────────────── 수용시험 7: 모드 차단 ────────────────── */
 
 test('연구 수업에서는 게임·타임어택·감수·생성을 거부한다', () => {
@@ -729,6 +985,21 @@ test('연구 수업에서는 게임·타임어택·감수·생성을 거부한�
   }
   assert.equal(checkMode('research_practice', 'guide').allowed, true);
   assert.equal(checkMode('research_practice', 'practice').allowed, true);
+});
+
+test('연구 수업에서는 설명·연습만 열리고 사전·사후 검사도 열리지 않는다', async () => {
+  assert.deepEqual(allowedModes('research_practice').sort(), ['guide', 'practice']);
+  assert.equal(checkMode('research_practice', 'assessment').allowed, false);
+
+  // 검사 세션으로는 연습 제출이 서버에서 막힌다(모델을 부르지 않는다).
+  const h = await newResearchHarness();
+  const res = await submitPracticeCore(
+    h.deps,
+    { ...researchCtx, sessionType: 'research_assessment' },
+    baseInput
+  );
+  assert.equal(res.status, 'blocked');
+  assert.equal(h.gradeCalls(), 0);
 });
 
 test('연구 검사 중에는 검사 화면만 열린다', () => {
@@ -787,6 +1058,39 @@ test('실제로 있는 제한 경로가 모두 모드 표에 있다', () => {
   }
 });
 
+test('검사 학생용 API도 모드 표에 있고 연구 수업(연습)·일반 체험에서는 막힌다', () => {
+  for (const api of ['state', 'start', 'submit', 'failure']) {
+    const p = `/api/assessment/${api}`;
+    assert.equal(modeForPath(p), 'assessment', `${p} 경로가 모드 표에 없다`);
+    assert.equal(isModeAllowed('research_practice', 'assessment'), false);
+    assert.equal(isModeAllowed('experience', 'assessment'), false);
+    assert.equal(isModeAllowed('research_assessment', 'assessment'), true);
+  }
+  // 연구자 내려받기는 학생 활동이 아니므로 모드 표 밖이다(권한은 server action이 다시 확인한다).
+  assert.equal(modeForPath('/api/assessment/export'), null);
+  // 비슷한 이름이 접두어로 잘못 걸리지 않는다.
+  assert.equal(modeForPath('/api/assessment/statement'), null);
+});
+
+test('middleware matcher가 모드 표의 모든 경로를 잡는다', () => {
+  // 표에만 있고 matcher에 없으면 edge 단계가 그 경로를 아예 보지 못한다.
+  const source = readFileSync(path.join(ROOT, 'src', 'middleware.ts'), 'utf8');
+  for (const { prefix } of ROUTE_MODES) {
+    assert.ok(source.includes(`'${prefix}/:path*'`), `matcher에 ${prefix}가 없다`);
+  }
+});
+
+test('연구 세션에서는 연습·설명만 열리고 게임·타임어택·검사·감수는 막힌다', () => {
+  const research_practice: AppMode[] = ['guide', 'practice'];
+  for (const mode of ['guide', 'practice', 'assessment', 'game', 'time-attack', 'audit', 'generate'] as AppMode[]) {
+    assert.equal(
+      isModeAllowed('research_practice', mode),
+      research_practice.includes(mode),
+      `research_practice / ${mode}`
+    );
+  }
+});
+
 test('모르는 모드 이름은 허용하지 않는다', () => {
   assert.equal(parseAppMode('game'), 'game');
   assert.equal(parseAppMode('games'), null);
@@ -831,6 +1135,7 @@ function baseRecord(): PracticeSubmissionRecord {
       extraCall: null,
       feedback: null,
       modelId: null,
+      servedModel: null,
       modelConfig: null,
       promptHash: null,
       codeCommit: 'test',

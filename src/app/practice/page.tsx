@@ -12,16 +12,41 @@
  *   - 같은 제출ID로 다시 보내도 이중 저장되지 않는다. 저장 실패를 완료로 표시하지 않는다.
  *   - 채점 결측은 0점·수준1로 보이게 하지 않는다.
  *   - 연구 세션에서는 고치지 않은 까닭을 묻지 않는다(논문 v12). 수정 과정은 제출할 때마다
- *     자동으로 남는 시도 기록으로만 본다. 일반 체험에서는 예전처럼 까닭을 남길 수 있다.
- *   - 힌트는 문항별 힌트(검수를 마친 것만)를 먼저 쓰고, 없으면 차시 공통 안내를 쓴다.
+ *     자동으로 남는 시도 기록으로만 본다. 일반 체험에서는 '다음 문제'를 누를 때 까닭을 적거나
+ *     건너뛸 수 있다. 적지 않아도 넘어갈 수 있다.
+ *   - 제출 뒤 완료 수를 새로 받아 와도 보고 있는 문항과 결과는 그대로 둔다.
+ *   - 순서 진행: 열린 단계(관리 화면의 수업 시작이 1~6단계를 모두 연다) 안에서 아직 내지 않은
+ *     제시 순서상 가장 앞 문항으로 들어가고, 그보다 뒤 문항·단계는 보이지도 고르지도 못한다
+ *     (src/lib/practice-progress.ts). 교사가 단계를 하나씩 열지 않는다.
+ *   - 힌트는 문항별 힌트(목표 + 확인 질문, 검수를 마친 것만)를 먼저 쓰고, 없으면 단계 공통 안내를 쓴다.
+ *     비공개 단서 팩에서 해당 없음인 영역의 확인 질문은 뺀다(서버가 영역 ID만 알려 준다).
+ *   - 결과는 100점 점수 없이 영역별 단계(대상 ●●●○)와 4줄 피드백만 보여 준다(공통 루브릭 v12-2).
+ *     해당 없음 영역은 숨긴다. 단계 이름은 src/lib/stages.ts의 6단계 구성을 따른다.
  *   - 학급·신원은 서버 세션이 정한다. 화면이 sessionStorage의 학급코드·출석번호를 보내지 않는다.
  */
 
-import { useState, useTransition, useMemo, useEffect, useCallback } from 'react';
+import { useState, useTransition, useMemo, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { PRACTICE_QUESTIONS } from '@/lib/questions';
 import { FEEDBACK_FALLBACK_TEXT } from '@/lib/feedback';
+import { STAGE_TITLE } from '@/lib/stages';
+import { withoutAreas, type PracticeHint } from '@/lib/practice-hints';
+import {
+  AREA_IDS,
+  AREA_LABEL,
+  parseAreaLevel,
+  type AreaId,
+  type AreaLevel,
+  type AreaLevels,
+} from '@/lib/scoring';
+import {
+  landingQuestion,
+  nextQuestionInOrder,
+  openQuestionsInOrder,
+  progressFrontier,
+  reachableLessons,
+} from '@/lib/practice-progress';
 import {
   getLessonStateAction,
   recordFeedbackReviewAction,
@@ -32,7 +57,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
-import { PII_NOTICE } from '@/server/privacy';
+import { PII_STUDENT_NOTICE } from '@/server/privacy';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -40,7 +65,6 @@ import {
   Wand2,
   RefreshCw,
   BookOpen,
-  Star,
   Home,
   RotateCcw,
   AlertTriangle,
@@ -53,28 +77,106 @@ import { Badge } from '@/components/ui/badge';
 
 const questions = PRACTICE_QUESTIONS;
 
-/** 차시 이름. 논문 <부록 표 2> 차시별 문항 구간 배정과 같다. */
-const CHASI_TITLE: Record<number, string> = {
-  1: '이름과 눈에 보이는 색·모양 함께 쓰기',
-  2: '색과 모양을 더 자세히',
-  3: '어디에서 무엇을 하고 있나',
-  4: '질감과 자세까지 말하기',
-  5: '분위기를 담아 쓰기',
-  6: '내 문장이 어떻게 달라졌나',
-};
+// 단계 이름(STAGE_TITLE)은 논문 v12의 6단계 구성이며 정의는 src/lib/stages.ts 하나에 있다.
 
-/** 한 차시의 문항 수. 정보 표시용이며 잠금 조건이 아니다. */
+/** 한 단계의 문항 수. 정보 표시용이며 잠금 조건이 아니다. */
 const QUESTIONS_PER_CHASI = 6;
 
 /** 연습 문항 ID는 레지스트리와 같은 규칙(L01~L36)을 쓴다. */
 const questionIdOf = (level: number) => `L${String(level).padStart(2, '0')}`;
 
 /**
- * 일반 체험의 진행 캐시.
+ * 순서 진행 계산에 쓰는 목록. index는 questions 배열의 위치다.
+ * 진행은 문항 번호(level)가 아니라 제시 순서(order)를 따른다(3단계 L19–L24 → 4단계 L13–L18).
+ */
+const PROGRESS_LIST = questions.map((q, index) => ({
+  id: questionIdOf(q.level),
+  level: q.level,
+  chasi: q.chasi,
+  order: q.order,
+  index,
+}));
+
+/**
+ * 화면에 보일 영역 단계. 해당 없음(not_applicable) 영역은 숨긴다.
+ * 정수 1~4가 아닌 값은 고쳐 보이지 않고 그 영역을 빼 둔다(형식 오류를 유효 값으로 바꾸지 않는다).
+ */
+function visibleAreaLevels(levels: AreaLevels): { area: AreaId; level: AreaLevel }[] {
+  const out: { area: AreaId; level: AreaLevel }[] = [];
+  for (const area of AREA_IDS) {
+    const level = parseAreaLevel(levels[area]);
+    if (typeof level === 'number') out.push({ area, level });
+  }
+  return out;
+}
+
+/** 저장된 피드백 문장(4줄, \n으로 이음)을 줄로 나눈다. 빈 줄은 뺀다. */
+function feedbackLines(text: string): string[] {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+/** 영역 단계 점 — 채운 점(●)이 단계, 빈 점(○)이 남은 단계. 숫자·점수는 보이지 않는다. */
+function AreaDots({ area, level }: { area: AreaId; level: AreaLevel }) {
+  const label = AREA_LABEL[area];
+  return (
+    <li className="flex items-center gap-3">
+      <span className="w-10 shrink-0 font-semibold">{label}</span>
+      <span
+        role="img"
+        aria-label={`${label} 4단계 중 ${level}단계`}
+        className="text-xl leading-none tracking-[0.2em]"
+      >
+        <span aria-hidden="true" className="text-primary">
+          {'●'.repeat(level)}
+        </span>
+        <span aria-hidden="true" className="text-muted-foreground/40">
+          {'○'.repeat(4 - level)}
+        </span>
+      </span>
+    </li>
+  );
+}
+
+/** 힌트 상자 — 목표 한 문장과 확인 질문. 영역에 딸리지 않은 선택 안내(C밴드)는 목록 아래에 둔다. */
+function HintBody({ hint }: { hint: PracticeHint }) {
+  const areaChecks = hint.checks.filter((c) => c.area !== null);
+  const optional = hint.checks.filter((c) => c.area === null);
+  return (
+    <div className="space-y-2">
+      <p className="font-medium">{hint.goal}</p>
+      {areaChecks.length > 0 && (
+        <ul className="list-disc space-y-1 pl-5">
+          {areaChecks.map((c) => (
+            <li key={`${c.area}:${c.text}`}>{c.text}</li>
+          ))}
+        </ul>
+      )}
+      {optional.map((c) => (
+        <p key={c.text} className="text-xs opacity-80">
+          {c.text}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/** 서버 제출 기록 + 이 화면에서 방금 낸 문항(+ 번호 없는 옛 반이면 이 기기 캐시). */
+function submittedSetOf(state: LessonStateView | null, local: Iterable<string>): Set<string> {
+  const set = new Set(local);
+  for (const [id, n] of Object.entries(state?.attemptsByQuestion ?? {})) if (n > 0) set.add(id);
+  return set;
+}
+
+/**
+ * 번호 없는 옛 체험 반의 진행 캐시.
  *
- * 연구 세션의 진행은 서버의 제출 이력이 근거다. 일반 체험은 서버에 학생 식별이 없어
- * 새로 고치면 무엇을 했는지 알 수 없으므로, 이 기기에만 남는 캐시로 화면 안에서
- * 이어 보여 준다. 이 값은 접근 권한·동의·완료의 근거가 아니며 잠금에 쓰지 않는다.
+ * 연구 세션과 번호가 있는 일반 수업은 서버의 제출 기록이 근거다(다시 들어와도 번호로 이어진다).
+ * 번호 없는 옛 반만 다시 들어오면 무엇을 했는지 서버가 알 수 없어, 이 기기에만 남는 캐시로
+ * 이어 보여 준다. 한 기기를 여러 학생이 쓰므로 번호로 이어지는 반에서는 읽지도 쓰지도 않는다.
+ * 이 값은 접근 권한·동의·완료의 근거가 아니다.
  */
 const PRACTICE_PROGRESS_KEY = 'experience:practice:v1';
 /** 오래된 기록으로 엉뚱한 안내를 하지 않도록 하루만 둔다. */
@@ -128,9 +230,12 @@ export default function PracticePage() {
   /** 저장에 실패하면 같은 제출ID로 다시 보낸다. 새 응답으로 세지 않기 위함이다. */
   const [pendingSubmissionId, setPendingSubmissionId] = useState<string | null>(null);
   const [reviewNote, setReviewNote] = useState('');
-  const [reviewSaved, setReviewSaved] = useState(false);
-  /** 이 기기에서 낸 문항. 일반 체험의 표시를 이어 주기 위한 캐시일 뿐이다. */
+  /** 일반 체험에서 '다음 문제'를 눌렀을 때 고치지 않은 까닭을 묻는 칸을 띄운다. */
+  const [askingReason, setAskingReason] = useState(false);
+  const [savingReason, setSavingReason] = useState(false);
+  /** 이 화면에서 낸 문항(+ 번호 없는 옛 반이면 이 기기 캐시). 서버 기록을 새로 받기 전에도 순서 진행에 쓴다. */
   const [cachedQuestionIds, setCachedQuestionIds] = useState<string[]>([]);
+  const localSubmittedRef = useRef<Set<string>>(new Set());
   const { toast } = useToast();
 
   /** URL의 lesson 값은 요청일 뿐이다. 허용 여부는 서버가 정한다. */
@@ -141,17 +246,36 @@ export default function PracticePage() {
     return raw !== null && Number.isFinite(n) ? n : null;
   };
 
-  const loadLessonState = useCallback(async (requested: number | null) => {
+  /**
+   * keepPosition: 제출·기록 뒤 완료 수만 새로 받아 온다. 보고 있는 문항과 결과를 건드리지 않는다.
+   * (예전에는 여기서 문항을 단계 첫 문항으로 되돌려, 2번째 문항부터 제출하면 결과가 사라지고
+   * 첫 문항 빈 칸으로 튕겼다.)
+   */
+  const loadLessonState = useCallback(async (
+    requested: number | null,
+    opts?: { keepPosition?: boolean; initial?: boolean }
+  ) => {
     try {
       const state = await getLessonStateAction(requested);
+      if (opts?.initial && !state.progressAcrossEntries) {
+        for (const id of readCachedQuestionIds()) localSubmittedRef.current.add(id);
+        setCachedQuestionIds([...localSubmittedRef.current]);
+      }
       setLessonState(state);
       setLoadError(null);
+      if (opts?.keepPosition) return state;
       if (state.deniedMessage) setBlockedMessage(state.deniedMessage);
-      const entry = state.entryLesson;
-      setCurrentChasi(entry);
-      if (entry !== null) {
-        const idx = questions.findIndex((q) => q.chasi === entry);
-        setCurrentQuestionIndex(idx >= 0 ? idx : 0);
+      // 아직 내지 않은 제시 순서상 가장 앞 문항(단계 단추를 눌렀으면 그 단계 안에서)으로 들어간다.
+      const target = landingQuestion(
+        openQuestionsInOrder(PROGRESS_LIST, state.allowedLessons),
+        submittedSetOf(state, localSubmittedRef.current),
+        { lesson: requested, fallbackLesson: state.entryLesson }
+      );
+      if (target) {
+        setCurrentChasi(target.chasi);
+        setCurrentQuestionIndex(target.index);
+      } else {
+        setCurrentChasi(state.entryLesson);
       }
       return state;
     } catch {
@@ -161,8 +285,7 @@ export default function PracticePage() {
   }, []);
 
   useEffect(() => {
-    void loadLessonState(requestedLessonFromUrl());
-    setCachedQuestionIds(readCachedQuestionIds());
+    void loadLessonState(requestedLessonFromUrl(), { initial: true });
   }, [loadLessonState]);
 
   const currentQuestion = questions[currentQuestionIndex];
@@ -175,18 +298,24 @@ export default function PracticePage() {
     ? chasiQuestions.findIndex((q) => q.level === currentQuestion.level)
     : -1;
 
-  /** 차시별 제출 문항 수. 서버의 제출 이력이 근거이며 잠금에 쓰지 않는다. */
-  const attemptedCount = useCallback(
-    (chasi: number) => {
-      const attempts = lessonState?.attemptsByQuestion ?? {};
-      return questions.filter((q) => {
-        if (q.chasi !== chasi) return false;
-        const id = questionIdOf(q.level);
-        // 서버 이력이 먼저다. 일반 체험에서는 이 기기의 캐시로 표시만 이어 준다.
-        return (attempts[id] ?? 0) > 0 || cachedQuestionIds.includes(id);
-      }).length;
-    },
+  const submittedIds = useMemo(
+    () => submittedSetOf(lessonState, cachedQuestionIds),
     [lessonState, cachedQuestionIds]
+  );
+  /** 열린 단계의 문항(제시 순서)과, 그 가운데 아직 내지 않은 가장 앞 문항. */
+  const orderedOpen = useMemo(
+    () => openQuestionsInOrder(PROGRESS_LIST, lessonState?.allowedLessons ?? []),
+    [lessonState]
+  );
+  const frontier = useMemo(() => progressFrontier(orderedOpen, submittedIds), [orderedOpen, submittedIds]);
+  /** 단추를 보여 줄 단계. 진행 위치보다 뒤 단계는 보이지 않는다. */
+  const visibleLessons = useMemo(() => reachableLessons(orderedOpen, frontier), [orderedOpen, frontier]);
+
+  /** 차시별 제출 문항 수. 서버의 제출 기록이 근거다. */
+  const attemptedCount = useCallback(
+    (chasi: number) =>
+      questions.filter((q) => q.chasi === chasi && submittedIds.has(questionIdOf(q.level))).length,
+    [submittedIds]
   );
 
   const goToChasi = async (c: number) => {
@@ -204,7 +333,7 @@ export default function PracticePage() {
     setStudentPrompt('');
     setPendingSubmissionId(null);
     setReviewNote('');
-    setReviewSaved(false);
+    setAskingReason(false);
     setStartedAt(new Date().toISOString());
   }, [currentQuestionIndex]);
 
@@ -229,14 +358,13 @@ export default function PracticePage() {
         // 저장에 실패했으면 같은 제출ID를 남겨 두어 다시 보낼 때 이중 저장되지 않게 한다.
         setPendingSubmissionId(res.save.ok ? null : submissionId);
         if (res.save.ok) {
-          void loadLessonState(currentChasi);
-          // 새로 고쳐도 무엇을 냈는지 화면에서 이어 보이도록 이 기기에만 남긴다.
-          const questionId = questionIdOf(currentQuestion.level);
-          if (!cachedQuestionIds.includes(questionId)) {
-            const next = [...cachedQuestionIds, questionId];
-            setCachedQuestionIds(next);
-            writeCachedQuestionIds(next);
-          }
+          void loadLessonState(currentChasi, { keepPosition: true });
+          // 서버 기록을 새로 받기 전에도 다음 문항이 열리도록 이 화면에 바로 남긴다.
+          localSubmittedRef.current.add(questionIdOf(currentQuestion.level));
+          const next = [...localSubmittedRef.current];
+          setCachedQuestionIds(next);
+          // 번호 없는 옛 반만 이 기기에 남긴다(다시 들어오면 서버가 이어 주지 못하므로).
+          if (lessonState && !lessonState.progressAcrossEntries) writeCachedQuestionIds(next);
         }
       } catch {
         setResult(null);
@@ -277,47 +405,79 @@ export default function PracticePage() {
     }
     setResult(null);
     setPendingSubmissionId(null);
+    setAskingReason(false);
     setStartedAt(new Date().toISOString());
   };
 
-  const handleKeepAsIs = async () => {
-    if (!result) return;
-    if (!reviewNote.trim()) {
-      toast({
-        variant: 'destructive',
-        title: '한 줄만 적어 주세요',
-        description: '고치지 않기로 한 까닭을 짧게 써 주세요.',
-      });
+  /** 제시 순서의 다음 문항. 단계를 넘어갈 수 있고, 지금 문항을 내지 못했으면 넘어가지 않는다. */
+  const handleNextQuestion = () => {
+    if (!currentQuestion) return;
+    const next = nextQuestionInOrder(
+      orderedOpen,
+      submittedSetOf(lessonState, localSubmittedRef.current),
+      currentQuestion.level
+    );
+    if (!next) {
+      setAskingReason(false);
+      toast({ title: '이 문항을 먼저 내 주세요', description: '글이 저장되면 다음 문제가 열려요.' });
       return;
     }
-    const res = await recordFeedbackReviewAction({
-      submissionId: result.submissionId,
-      kind: 'kept',
-      note: reviewNote,
-    });
-    if (res.ok) {
-      setReviewSaved(true);
-      void loadLessonState(currentChasi);
-    } else {
-      toast({ variant: 'destructive', title: '기록하지 못했어요', description: res.message ?? '' });
+    setCurrentChasi(next.chasi);
+    setCurrentQuestionIndex(next.index);
+  };
+
+  /**
+   * '다음 문제'. 일반 체험에서 저장된 결과가 있으면 먼저 고치지 않은 까닭을 물어본다(건너뛸 수 있다).
+   * 연구 세션은 까닭을 받지 않으므로 바로 넘어간다.
+   */
+  const handleNextClick = () => {
+    if (lessonState?.sessionType === 'experience' && result?.save.ok) {
+      setAskingReason(true);
+      return;
+    }
+    handleNextQuestion();
+  };
+
+  const handleSaveReasonAndNext = async () => {
+    if (!result || !reviewNote.trim() || savingReason) return;
+    setSavingReason(true);
+    try {
+      const res = await recordFeedbackReviewAction({
+        submissionId: result.submissionId,
+        kind: 'kept',
+        note: reviewNote,
+      });
+      if (!res.ok) {
+        toast({
+          variant: 'destructive',
+          title: '기록하지 못했어요',
+          description: `${res.message ?? ''} 건너뛰기를 눌러도 괜찮아요.`.trim(),
+        });
+        return;
+      }
+      void loadLessonState(currentChasi, { keepPosition: true });
+      handleNextQuestion();
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: '기록하지 못했어요',
+        description: '건너뛰기를 눌러도 괜찮아요.',
+      });
+    } finally {
+      setSavingReason(false);
     }
   };
 
-  const handleNextQuestion = () => {
-    const idxs = questions
-      .map((q, i) => ({ q, i }))
-      .filter(({ q }) => q.chasi === currentChasi)
-      .map(({ i }) => i);
-    if (!idxs.length) return;
-    const at = idxs.indexOf(currentQuestionIndex);
-    setCurrentQuestionIndex(idxs[(at + 1) % idxs.length]);
-  };
-
-  const levelColor = (lv: number) => {
-    if (lv <= 6) return 'bg-green-100 text-green-800 border-green-200';
-    if (lv <= 12) return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-    if (lv <= 18) return 'bg-orange-100 text-orange-800 border-orange-200';
-    if (lv <= 24) return 'bg-red-100 text-red-800 border-red-200';
+  /**
+   * 배지 색은 단계를 따른다. 제시 순서가 문항 번호와 다르므로(3단계 L19–L24 → 4단계 L13–L18)
+   * 번호로 색을 정하면 단계가 올라가도 색이 거꾸로 간다.
+   */
+  const stageColor = (chasi: number) => {
+    if (chasi <= 1) return 'bg-green-100 text-green-800 border-green-200';
+    if (chasi === 2) return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+    if (chasi === 3) return 'bg-orange-100 text-orange-800 border-orange-200';
+    if (chasi === 4) return 'bg-red-100 text-red-800 border-red-200';
+    if (chasi === 5) return 'bg-pink-100 text-pink-800 border-pink-200';
     return 'bg-purple-100 text-purple-800 border-purple-200';
   };
 
@@ -358,16 +518,31 @@ export default function PracticePage() {
   const doneInChasi = attemptedCount(currentChasi);
   /** 연구 세션이면 고치지 않은 까닭을 묻지 않는다. 세션 성격은 서버가 정한 값이다. */
   const asksReviewNote = lessonState.sessionType === 'experience';
+  /**
+   * 검수를 마친 문항 힌트. 비공개 단서 팩에서 해당 없음인 영역의 확인 질문은 뺀다.
+   * 서버는 영역 ID만 알려 준다(단서 내용은 오지 않는다).
+   */
+  const hint = currentQuestion.hint
+    ? withoutAreas(
+        currentQuestion.hint,
+        lessonState.notApplicableAreas?.[questionIdOf(currentQuestion.level)] ?? []
+      )
+    : null;
+  const areaRows = result?.scoring.status === 'scored' ? visibleAreaLevels(result.scoring.levels) : [];
 
   return (
     <div className="min-h-screen bg-background font-sans">
       <header className="p-4 flex justify-between items-center">
         <div className="flex items-center gap-3">
+          {/*
+            문항 번호(level)로 'Lv.' 표시를 하면 3단계 L19–L24 → 4단계 L13–L18에서 숫자가 거꾸로 가
+            난이도가 내려가는 것처럼 보인다. 제시 순서(order)로 전체 가운데 몇 번째인지만 보인다.
+          */}
           <Badge
             variant="outline"
-            className={`text-sm px-3 py-1 border ${levelColor(currentQuestion.level)}`}
+            className={`text-sm px-3 py-1 border ${stageColor(currentQuestion.chasi)}`}
           >
-            Lv.{currentQuestion.level}
+            {currentQuestion.order} / {questions.length}
           </Badge>
           <span className="text-sm text-muted-foreground">
             {currentChasi}단계 · {posInChasi + 1}번째 문항
@@ -380,10 +555,10 @@ export default function PracticePage() {
         </Link>
       </header>
 
-      {/* 단계 선택 — 서버가 연 단계만 나온다. 완료 수는 정보일 뿐이다. */}
+      {/* 단계 선택 — 열린 단계 가운데 진행 위치까지만 나온다(practice-progress). */}
       <nav className="px-4 pb-4" aria-label="단계 선택">
         <ol className="mx-auto flex max-w-4xl flex-wrap justify-center gap-2">
-          {lessonState.allowedLessons.map((c) => {
+          {visibleLessons.map((c) => {
             const active = c === currentChasi;
             return (
               <li key={c}>
@@ -391,7 +566,7 @@ export default function PracticePage() {
                   type="button"
                   onClick={() => void goToChasi(c)}
                   aria-current={active ? 'step' : undefined}
-                  title={CHASI_TITLE[c]}
+                  title={STAGE_TITLE[c]}
                   className={[
                     'flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition',
                     active
@@ -400,7 +575,7 @@ export default function PracticePage() {
                   ].join(' ')}
                 >
                   <span className="font-semibold">{c}단계</span>
-                  <span className="hidden sm:inline opacity-80">{CHASI_TITLE[c]}</span>
+                  <span className="hidden sm:inline opacity-80">{STAGE_TITLE[c]}</span>
                   <span className="tabular-nums opacity-70">
                     {attemptedCount(c)}/{QUESTIONS_PER_CHASI} 문항
                   </span>
@@ -409,11 +584,9 @@ export default function PracticePage() {
             );
           })}
         </ol>
-        {lessonState.scheduleControlled && (
-          <p className="mt-2 text-center text-xs text-muted-foreground">
-            단계는 선생님이 열어 주세요. 지금 열린 단계만 보여요.
-          </p>
-        )}
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          앞 문항을 내면 다음 문항이 열려요.
+        </p>
       </nav>
 
       {blockedMessage && (
@@ -432,18 +605,17 @@ export default function PracticePage() {
             연습 모드
           </h1>
           <p className="mt-2 text-muted-foreground">
-            {currentChasi}단계 · {CHASI_TITLE[currentChasi]}
+            {currentChasi}단계 · {STAGE_TITLE[currentChasi]}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
             그림을 보고 설명을 써 보세요. 몇 번이든 다시 도전할 수 있어요.
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            지금까지 이 단계에서 {doneInChasi}/{QUESTIONS_PER_CHASI} 문항을 냈어요. 다 하지 않아도
-            괜찮아요.
+            지금까지 이 단계에서 {doneInChasi}/{QUESTIONS_PER_CHASI} 문항을 냈어요.
           </p>
           {asksReviewNote && lessonState.reviewedQuestionCount === 0 && (
             <p className="mt-1 text-sm text-primary">
-              한 문항은 피드백을 읽고 고쳐 쓰거나, 고치지 않은 까닭을 적어 보세요.
+              피드백을 읽고 고쳐 써 보세요. 고치지 않는다면 다음 문제로 갈 때 까닭을 적을 수 있어요.
             </p>
           )}
         </div>
@@ -469,7 +641,7 @@ export default function PracticePage() {
                   <BookOpen className="h-4 w-4 text-accent-foreground" />
                   <AlertTitle className="font-semibold text-accent-foreground">힌트</AlertTitle>
                   <AlertDescription className="text-accent-foreground/90 font-body whitespace-pre-line text-sm">
-                    {currentQuestion.hint ?? currentQuestion.rubric}
+                    {hint ? <HintBody hint={hint} /> : currentQuestion.rubric}
                   </AlertDescription>
                 </Alert>
 
@@ -487,8 +659,8 @@ export default function PracticePage() {
                       className="text-base flex-grow bg-input/50 focus:bg-input/80 transition-colors"
                       disabled={isSubmitting}
                     />
-                    {/* 전송 전 점검의 한계를 문구 사본이 아니라 원문 상수로 알린다. */}
-                    <p className="mt-2 text-xs text-muted-foreground">{PII_NOTICE}</p>
+                    {/* 학생에게는 짧은 행동 안내만. 문구 사본이 아니라 원문 상수를 쓴다. */}
+                    <p className="mt-2 text-xs text-muted-foreground">{PII_STUDENT_NOTICE}</p>
                   </div>
                   <Button type="submit" size="lg" className="mt-4 w-full" disabled={isSubmitting}>
                     {isSubmitting ? (
@@ -506,12 +678,14 @@ export default function PracticePage() {
           {isSubmitting && (
             <div className="p-6 space-y-4">
               <Skeleton className="h-8 w-1/3" />
-              <div className="flex items-center gap-6">
-                <Skeleton className="h-24 w-24 rounded-full" />
-                <div className="space-y-2 flex-1">
-                  <Skeleton className="h-6 w-full" />
-                  <Skeleton className="h-6 w-5/6" />
-                </div>
+              <div className="space-y-2">
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="h-5 w-40" />
+              </div>
+              <div className="space-y-2">
+                <Skeleton className="h-6 w-full" />
+                <Skeleton className="h-6 w-5/6" />
               </div>
             </div>
           )}
@@ -551,88 +725,94 @@ export default function PracticePage() {
                     AI 선생님의 피드백
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="flex flex-col sm:flex-row items-center gap-6">
-                  <div className="flex flex-col items-center">
-                    {result.scoring.status === 'scored' ? (
-                      <>
-                        <div className="relative flex items-center justify-center size-32 bg-gradient-to-br from-primary/20 to-accent/30 rounded-full">
-                          <p className="text-5xl font-bold text-primary">
-                            {Math.round(result.scoring.score)}
-                          </p>
-                        </div>
-                        <p className="text-muted-foreground mt-2 font-semibold">/ 100점</p>
-                      </>
-                    ) : (
-                      <div className="flex size-32 items-center justify-center rounded-full bg-muted/60 px-4 text-center">
-                        <p className="text-sm text-muted-foreground">점수 없음</p>
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    {result.scoring.status === 'missing' ? (
-                      <p className="text-base leading-loose text-muted-foreground">
-                        {result.scoring.message}
-                      </p>
-                    ) : (
-                      <>
-                        <h4 className="font-semibold text-lg mb-2 flex items-center gap-2">
-                          <Star className="text-yellow-400" fill="currentColor" />
-                          칭찬 및 개선점
-                        </h4>
-                        <p className="mt-2 text-muted-foreground whitespace-pre-wrap font-body text-base leading-loose">
-                          {result.feedback?.text ?? FEEDBACK_FALLBACK_TEXT}
-                        </p>
-                      </>
-                    )}
-                  </div>
-                </CardContent>
-
-                {/* 피드백 검토 — 일반 체험에서만 고치지 않은 까닭을 남긴다. */}
-                {asksReviewNote && (
-                <CardContent className="border-t pt-4">
-                  {reviewSaved ? (
-                    <p className="text-sm text-muted-foreground">
-                      고치지 않은 까닭을 남겼어요. 다음 문항으로 가도 좋아요.
+                <CardContent className="space-y-5">
+                  {/*
+                    100점 점수는 보여 주지 않는다(공통 루브릭 v12-2). 영역별 단계(●●●○)와 4줄 피드백만.
+                    해당 없음 영역은 숨긴다. 결측이면 단계를 만들지 않고 안내만 한다(0점·1단계로 보이지 않게).
+                  */}
+                  {result.scoring.status === 'missing' ? (
+                    <p className="text-base leading-loose text-muted-foreground">
+                      {result.scoring.message}
                     </p>
                   ) : (
-                    <div className="space-y-3">
-                      <p className="text-sm font-medium">
-                        피드백을 읽고 어떻게 할까요?
-                      </p>
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                        <div className="flex-1 space-y-1">
-                          <Label htmlFor="keep-note" className="text-xs text-muted-foreground">
-                            고치지 않는다면 그 까닭을 한 줄로 적어 주세요
-                          </Label>
-                          <Input
-                            id="keep-note"
-                            value={reviewNote}
-                            onChange={(e) => setReviewNote(e.target.value)}
-                            placeholder="예: 그림에 없는 것이라 넣지 않았어요"
-                          />
-                        </div>
-                        <Button variant="outline" onClick={() => void handleKeepAsIs()}>
-                          까닭 남기기
-                        </Button>
+                    <>
+                      {areaRows.length > 0 && (
+                        <ul className="space-y-2" aria-label="영역별 단계">
+                          {areaRows.map(({ area, level }) => (
+                            <AreaDots key={area} area={area} level={level} />
+                          ))}
+                        </ul>
+                      )}
+                      <div className="space-y-2 font-body text-base leading-relaxed text-muted-foreground">
+                        {feedbackLines(result.feedback?.text ?? FEEDBACK_FALLBACK_TEXT).map((line, i) => (
+                          <p key={i}>{line}</p>
+                        ))}
                       </div>
-                    </div>
+                    </>
                   )}
                 </CardContent>
-                )}
 
-                <CardFooter className="flex flex-col sm:flex-row gap-3">
-                  <Button onClick={handleRevise} variant="outline" className="w-full sm:w-auto">
-                    <RotateCcw className="mr-2 h-4 w-4" />
-                    고쳐서 다시 쓰기
-                  </Button>
-                  <Button
-                    onClick={handleNextQuestion}
-                    className="w-full sm:w-auto ml-auto"
-                    variant="outline"
-                  >
-                    다음 문제 <ArrowRight className="ml-2 h-4 w-4" />
-                  </Button>
-                </CardFooter>
+                {askingReason ? (
+                  // 일반 체험에서만 뜬다. 적고 넘어가거나 건너뛸 수 있다. 적지 않아도 불이익이 없다.
+                  <CardFooter className="flex flex-col items-stretch gap-3 border-t pt-4">
+                    <Label htmlFor="keep-note" className="text-sm font-medium">
+                      고치지 않고 넘어가는 까닭이 있나요? 한 줄로 적어 보세요. 안 적어도 괜찮아요.
+                    </Label>
+                    <Input
+                      id="keep-note"
+                      value={reviewNote}
+                      onChange={(e) => setReviewNote(e.target.value)}
+                      placeholder="예: 그림에 없는 것이라 넣지 않았어요"
+                      maxLength={200}
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                          e.preventDefault();
+                          void handleSaveReasonAndNext();
+                        }
+                      }}
+                    />
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Button
+                        onClick={() => setAskingReason(false)}
+                        variant="ghost"
+                        className="w-full sm:w-auto"
+                        disabled={savingReason}
+                      >
+                        돌아가기
+                      </Button>
+                      <Button
+                        onClick={handleNextQuestion}
+                        variant="outline"
+                        className="w-full sm:w-auto sm:ml-auto"
+                        disabled={savingReason}
+                      >
+                        건너뛰기
+                      </Button>
+                      <Button
+                        onClick={() => void handleSaveReasonAndNext()}
+                        className="w-full sm:w-auto"
+                        disabled={savingReason || !reviewNote.trim()}
+                      >
+                        적고 다음 문제로 <ArrowRight className="ml-2 h-4 w-4" />
+                      </Button>
+                    </div>
+                  </CardFooter>
+                ) : (
+                  <CardFooter className="flex flex-col sm:flex-row gap-3">
+                    <Button onClick={handleRevise} variant="outline" className="w-full sm:w-auto">
+                      <RotateCcw className="mr-2 h-4 w-4" />
+                      고쳐서 다시 쓰기
+                    </Button>
+                    <Button
+                      onClick={handleNextClick}
+                      className="w-full sm:w-auto ml-auto"
+                      variant="outline"
+                    >
+                      다음 문제 <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  </CardFooter>
+                )}
               </Card>
             </div>
           )}

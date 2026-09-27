@@ -4,7 +4,7 @@ import 'server-only';
  * 운영 채점 진입점 계약. 구현은 src/server/grading/index.ts.
  * 연습 화면(즉시 채점)과 검사 사후 일괄 채점이 같은 함수를 쓴다.
  *
- * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §3
+ * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §3, 논문 v12 공통 루브릭 v12-2
  */
 
 import type { ScoringRun, SessionType } from '@/lib/research/types';
@@ -29,6 +29,11 @@ export interface GradingRequest {
 }
 
 export interface GradingApi {
-  /** 운영 채점 1회(독립 2회 + 조건부 3회)를 수행하고 전체 호출 이력을 남긴다. */
+  /**
+   * 운영 채점 1회(공통 루브릭 v12-2)를 수행하고 전체 호출 이력을 남긴다.
+   * 모델 호출 1회로 세 영역을 판정하고, 호출이 실패(모델 오류·형식 오류)했을 때만 1회 재시도한다.
+   * 유리한 출력을 고르려고 다시 부르지 않는다. 피드백 검증 실패는 피드백만 1회 다시 만들며 수준은 바꾸지 않는다.
+   * (옛 v7 '독립 2회 + 조건부 3회'는 게임·타임어택 전용 legacyV7Grading에만 남아 있다.)
+   */
   runOperationalScoring(req: GradingRequest): Promise<ScoringRun>;
 }

@@ -7,10 +7,13 @@ import 'server-only';
  *   1. 서버 자격증명(서비스 계정)과 웹 설정(NEXT_PUBLIC_FIREBASE_PROJECT_ID)이 같은 프로젝트인가.
  *      다르면 관리 화면이 만든 교사 계정으로 교사가 로그인하지 못한다.
  *   2. 교사 로그인(이메일/비밀번호) 방식이 켜져 있는가. 없는 계정으로 로그인을 시도해 오류 코드로 판정한다.
- *      계정을 만들거나 바꾸지 않는다.
+ *      계정을 만들거나 바꾸지 않는다. Authentication을 한 번도 시작하지 않은 프로젝트(not_initialized)는
+ *      교사 계정 자체를 만들 수 없으므로 따로 알린다.
  *
  * 꺼져 있으면 서비스 계정 권한으로 켜기를 시도한다(Identity Toolkit 설정 API).
  * 권한이 없거나 실패하면 콘솔 링크를 안내한다. 실패를 성공으로 보고하지 않는다.
+ * 시작하지 않은 Authentication은 코드로 시작하지 않는다. API로 시작하면 Identity Platform으로 올라가
+ * 요금 체계가 달라질 수 있어, 운영자가 콘솔에서 '시작하기'를 누르게 안내만 한다.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -29,6 +32,8 @@ export interface FirebaseSetupCheck {
   teacherLogin: TeacherLoginState;
   /** 교사 로그인 방식을 켜는 Firebase 콘솔 화면 */
   providersUrl: string | null;
+  /** Authentication '시작하기' 단추가 있는 Firebase 콘솔 화면 */
+  authStartUrl: string | null;
 }
 
 const PROBE_TIMEOUT_MS = 5000;
@@ -74,15 +79,17 @@ export async function checkFirebaseSetup(): Promise<FirebaseSetupCheck> {
   const clientProjectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID?.trim() || null;
   const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY?.trim() || '';
   const projectId = clientProjectId ?? serverProjectId;
+  const consoleBase = projectId
+    ? `https://console.firebase.google.com/project/${encodeURIComponent(projectId)}/authentication`
+    : null;
   return {
     serverProjectId,
     clientProjectId,
     projectMatch:
       serverProjectId && clientProjectId ? serverProjectId === clientProjectId : null,
     teacherLogin: apiKey ? await probeTeacherLogin(apiKey) : 'unknown',
-    providersUrl: projectId
-      ? `https://console.firebase.google.com/project/${encodeURIComponent(projectId)}/authentication/providers`
-      : null,
+    providersUrl: consoleBase ? `${consoleBase}/providers` : null,
+    authStartUrl: consoleBase,
   };
 }
 

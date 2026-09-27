@@ -18,7 +18,7 @@
 import { auth } from '@/server/auth';
 import { AuthError } from '@/server/auth/contract';
 import { evaluateAccess } from '@/server/auth/access';
-import { toResearcherView, toTeacherBlindRecord } from '@/server/auth/deidentify';
+import { stripIdentifiers, toResearcherView, toTeacherBlindRecord } from '@/server/auth/deidentify';
 import {
   COLLECTIONS,
   RESEARCH_COLLECTIONS,
@@ -29,11 +29,15 @@ import {
 import type { QueryDocumentSnapshot } from 'firebase-admin/firestore';
 import { experienceSubmissionsPath, getLessonStore } from '@/server/lessons/store';
 import {
+  scoringViewOf,
   summarizeClassProgress,
   toProgressSession,
   toProgressSubmission,
+  toResearchRecordRow,
   type ClassProgress,
   type ProgressSubmission,
+  type ResearchRecordRow,
+  type ScoringView,
 } from '@/server/lms/progress';
 import type { SessionType } from '@/lib/research/types';
 
@@ -104,9 +108,13 @@ async function requireLessonClass(classCode: string) {
   return principal;
 }
 
-/** 비연구 수업 기록 조회. 소속 교사만, 자기 학급만. */
+/**
+ * 비연구 수업 기록 조회. 소속 교사만, 자기 학급만.
+ * 연습 기록에는 화면이 쓸 채점 결과(scoringView)를 덧붙인다. 이 모음(practice_attempts)은
+ * 옛 방식 기록이라 대개 '옛 채점'(100점)이고, 공통 루브릭 v12-2 결과가 있으면 영역 수준으로 읽는다.
+ */
 export async function loadLessonRecords(classCode: string): Promise<{
-  practiceAttempts: Record<string, unknown>[];
+  practiceAttempts: (Record<string, unknown> & { scoringView: ScoringView })[];
   submissions: Record<string, unknown>[];
 }> {
   await requireLessonClass(classCode);
@@ -127,7 +135,10 @@ export async function loadLessonRecords(classCode: string): Promise<{
     return { ...raw, createdAt, id: d.id } as Record<string, unknown>;
   };
   return {
-    practiceAttempts: practiceSnap.docs.map(toPlain),
+    practiceAttempts: practiceSnap.docs.map((d) => {
+      const plain = toPlain(d);
+      return { ...plain, scoringView: scoringViewOf(plain) };
+    }),
     submissions: submissionSnap.docs.map(toPlain),
   };
 }
@@ -155,20 +166,39 @@ export async function deleteLessonRecord(
 /**
  * 연구 저장소의 비식별 읽기.
  * 학교 실명 대응표·출석번호·학교명은 여기서 걸러 낸다.
+ *
+ * 연구자는 비식별 문서 전체(공통 루브릭 v12-2 영역별 수준·근거·피드백 포함)를 본다.
+ * 교사는 학생 현황과 같은 규칙으로 AI 채점 결과·피드백·제출 시각을 보지 않는다
+ * (교사 블라인드 채점 보호, toTeacherBlindRecord). 진행 수를 셀 연구ID·문항·제출 상태만 남는다.
  */
 export async function loadResearchRecords(classResearchId: string): Promise<{
   records: Record<string, unknown>[];
+  /** 화면 표용 요약 줄. 교사(blind)면 채점 결과가 비어 있다. */
+  rows: ResearchRecordRow[];
+  /** AI 채점 결과를 가렸는가(교사) */
+  blind: boolean;
   notice: string;
 }> {
   // 읽기 전용 화면이므로 행위를 명시한다. 연구자의 비식별 읽기는 여기서 허용된다(감사 A-4).
-  await auth.requireClassAccess(classResearchId, { action: 'read' }, 'teacher', 'researcher');
+  const principal = await auth.requireClassAccess(
+    classResearchId,
+    { action: 'read' },
+    'teacher',
+    'researcher'
+  );
+  const blind = principal.role !== 'researcher';
   const snap = await getAdminFirestore()
     .collection(researchPath(RESEARCH_COLLECTIONS.practiceSubmissions))
     .where('classResearchId', '==', classResearchId)
     .get();
+  const docs = snap.docs.map((d) => ({ ...d.data(), id: d.id }) as Record<string, unknown>);
   return {
-    records: snap.docs.map((d) => toResearcherView({ ...d.data(), id: d.id })),
-    notice: '연구ID 자료입니다. 학교명·출석번호·실명 대응표는 포함하지 않습니다.',
+    records: docs.map((r) => (blind ? toTeacherBlindRecord(r) : toResearcherView(r))),
+    rows: docs.map((r) => toResearchRecordRow(stripIdentifiers(r), { blind })),
+    blind,
+    notice: blind
+      ? '연구ID 자료입니다. 학교명·출석번호·실명 대응표는 포함하지 않습니다. 교사 블라인드 채점을 흐리지 않도록 AI 채점 결과·피드백·제출 시각은 보여 주지 않습니다.'
+      : '연구ID 자료입니다. 학교명·출석번호·실명 대응표는 포함하지 않습니다.',
   };
 }
 
@@ -254,8 +284,9 @@ export interface ClassProgressView extends ClassProgress {
 /**
  * 담당 교사가 보는 반의 학생 진행.
  *
- * 배정된 반만 연다(requireClassAccess). 일반 수업은 번호별 점수·최근 답안까지 보여 주고,
- * 연구 수업은 블라인드 채점을 위해 점수·답안·시각을 빼고 진행 수만 보여 준다.
+ * 배정된 반만 연다(requireClassAccess). 일반 수업은 번호별 영역 수준(공통 루브릭 v12-2)·
+ * 종합 수준·최근 답안까지 보여 주고(옛 v7 기록은 '옛 채점'으로 따로),
+ * 연구 수업은 블라인드 채점을 위해 채점 결과·답안·시각을 빼고 진행 수만 보여 준다.
  * 학생 입장 세션 문서는 번호를 잇는 데만 쓰고 그대로 내보내지 않는다.
  */
 export async function loadClassProgress(classResearchId: string): Promise<ClassProgressView> {

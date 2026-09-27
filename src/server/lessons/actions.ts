@@ -22,11 +22,14 @@ import { grading } from '@/server/grading';
 import { registry } from '@/server/registry';
 import { privacy } from '@/server/privacy';
 import { AuthError } from '@/server/auth/contract';
+import { applicabilityOf } from '@/lib/evaluation-prompt';
+import { AREA_IDS, type AreaId } from '@/lib/scoring';
 import type { AppMode, SessionType } from '@/lib/research/types';
 
 import { allowedModes } from '@/lib/research/session-modes';
 import {
   NO_SESSION_MESSAGE,
+  progressOwnerKeys,
   requireStudentSession,
   requireTeacher,
   resolveClassSessionType,
@@ -104,6 +107,17 @@ export interface LessonStateView {
   attemptsByQuestion: Record<string, number>;
   /** 피드백 검토를 남긴 문항 수. */
   reviewedQuestionCount: number;
+  /**
+   * attemptsByQuestion이 다시 들어와도 이어지는 이 학생의 기록인가.
+   * 연구 세션(researchId)과 번호가 있는 일반 수업은 true. 번호 없는 옛 반은 이번 세션뿐이라 false.
+   */
+  progressAcrossEntries: boolean;
+  /**
+   * questionId → 해당 없음(not_applicable) 영역. 비공개 단서 팩이 그 문항에서 특징(필수 속성)이나
+   * 관계(필수 관계)를 비워 둔 경우만 담는다. 화면은 이 영역의 힌트 확인 질문을 뺀다.
+   * 영역 ID만 내려보내고 단서 내용은 서버 밖으로 나가지 않는다. 단서 팩이 없으면 빈 객체다.
+   */
+  notApplicableAreas: Record<string, AreaId[]>;
 }
 
 /** 세션이 없거나 모드가 막힌 상태. 일반 체험으로 강등하지 않는다. */
@@ -118,7 +132,38 @@ function closedState(sessionType: SessionType, message: string, verified: boolea
     deniedMessage: message,
     attemptsByQuestion: {},
     reviewedQuestionCount: 0,
+    progressAcrossEntries: false,
+    notApplicableAreas: {},
   };
+}
+
+/** 연습 문항 ID(L01~L36). 레지스트리와 같은 규칙이다. */
+const PRACTICE_QUESTION_IDS = Array.from(
+  { length: 36 },
+  (_, i) => `L${String(i + 1).padStart(2, '0')}`
+);
+
+/**
+ * 연습 문항별 해당 없음 영역 — 채점이 쓰는 규칙(applicabilityOf)과 같은 근거다.
+ *
+ * 이 세션에서 쓸 수 있고 단서가 적재된 문항만 본다. 단서가 없는 문항은 넣지 않는다
+ * (해당 여부를 모델이 정하므로 화면은 세 영역의 질문을 모두 보여 준다).
+ * 단서 팩을 읽지 못해도 차시 상태는 깨지지 않게 그 문항만 건너뛴다.
+ */
+function notApplicableAreasFor(sessionType: SessionType): Record<string, AreaId[]> {
+  const out: Record<string, AreaId[]> = {};
+  for (const questionId of PRACTICE_QUESTION_IDS) {
+    try {
+      const entry = registry.requireEntry(questionId, sessionType);
+      if (entry.kind !== 'practice' || !entry.cuesLoaded) continue;
+      const applicability = applicabilityOf(registry.getCues(questionId));
+      const skip = AREA_IDS.filter((area) => applicability[area] === false);
+      if (skip.length) out[questionId] = skip;
+    } catch {
+      // 등록되지 않았거나 이 세션에서 쓸 수 없거나 단서를 읽지 못한 문항은 빼고 계속한다.
+    }
+  }
+  return out;
 }
 
 /**
@@ -150,8 +195,9 @@ export async function getLessonStateAction(
   const entryLesson = resolveEntryLesson(state, requestedLesson ?? null);
 
   const classKey = resolveClassKey(toSubmitContext(ctx));
+  const progress = await progressOwnerKeys(ctx);
   const summary = classKey
-    ? await store.readStudentSubmissions(ctx.sessionType, classKey, ctx.ownerKey)
+    ? await store.readStudentSubmissions(ctx.sessionType, classKey, progress.ownerKeys)
     : { attemptsByQuestion: {}, reviewedQuestionCount: 0 };
 
   return {
@@ -168,6 +214,8 @@ export async function getLessonStateAction(
         : decision.message,
     attemptsByQuestion: summary.attemptsByQuestion,
     reviewedQuestionCount: summary.reviewedQuestionCount,
+    progressAcrossEntries: progress.acrossEntries,
+    notApplicableAreas: notApplicableAreasFor(ctx.sessionType),
   };
 }
 

@@ -34,9 +34,9 @@ import {
   getAdminFirestore,
 } from '@/server/firebase-admin';
 import { getLessonStore } from '@/server/lessons/store';
-import { isValidLessonNumber } from '@/server/lessons/policy';
 import { registry } from '@/server/registry';
 import type { SessionType } from '@/lib/research/types';
+import { parseCreatableSessionType } from '@/lib/research/session-modes';
 
 import {
   ADMIN_ACTOR,
@@ -54,6 +54,7 @@ import {
   type FirebaseSetupCheck,
 } from './firebase-setup';
 import {
+  describeFirebaseError,
   generateClassId,
   hashPassword,
   normalizeClassLabel,
@@ -77,15 +78,6 @@ export type AdminResult<T = null> =
 /** 화면에 그대로 보여 줄 입력 오류. */
 class AdminInputError extends Error {}
 
-const FIREBASE_AUTH_MESSAGES: Record<string, string> = {
-  'auth/email-already-exists': '이미 있는 계정입니다. 목록에서 담당 반을 바꾸거나 비밀번호를 다시 정해 주세요.',
-  'auth/invalid-email': '계정(이메일) 형식이 올바르지 않습니다.',
-  'auth/invalid-password': '비밀번호 형식이 올바르지 않습니다.',
-  'auth/user-not-found': '계정을 찾지 못했습니다.',
-  'auth/operation-not-allowed':
-    'Firebase 콘솔에서 이메일/비밀번호 로그인이 꺼져 있습니다. Authentication → 로그인 방법에서 켜 주세요.',
-};
-
 function toFailure(err: unknown): Extract<AdminResult, { ok: false }> {
   if (err instanceof AuthError) {
     return { ok: false, error: err.message, signedOut: err.code === 'unauthenticated' };
@@ -94,12 +86,16 @@ function toFailure(err: unknown): Extract<AdminResult, { ok: false }> {
     return { ok: false, error: err.message, signedOut: false };
   }
   const code = (err as { code?: unknown } | null)?.code;
-  if (typeof code === 'string' && FIREBASE_AUTH_MESSAGES[code]) {
-    return { ok: false, error: FIREBASE_AUTH_MESSAGES[code], signedOut: false };
-  }
-  // 상세는 서버 로그에만 남긴다. 입력값·비밀번호를 로그에 싣지 않는다.
-  console.error('[admin] 처리 실패', typeof code === 'string' ? code : '');
-  return { ok: false, error: '처리하지 못했습니다. 잠시 뒤 다시 해 주세요.', signedOut: false };
+  const message = (err as { message?: unknown } | null)?.message;
+  // 원인을 찾을 수 있도록 오류 코드와 Firebase가 준 문구를 서버 로그에 남긴다.
+  // 입력값·비밀번호는 싣지 않는다(Firebase 오류 문구에도 비밀번호는 들어가지 않는다).
+  console.error('[admin] 처리 실패', code ?? '', typeof message === 'string' ? message.slice(0, 300) : '');
+  const described = describeFirebaseError(code, message);
+  return {
+    ok: false,
+    error: described ?? '처리하지 못했습니다. 잠시 뒤 다시 해 주세요.',
+    signedOut: false,
+  };
 }
 
 async function run<T>(fn: () => Promise<T>): Promise<AdminResult<T>> {
@@ -341,7 +337,12 @@ export async function createClassAction(input: {
     const label = normalizeClassLabel(input.label);
     if (!label) throw new AdminInputError('반 이름을 적어 주세요.');
 
-    const sessionType = toSessionType(input.sessionType);
+    // 연구 세션은 연습 모드만 연다(논문 v12). 사전·사후 검사가 열리는 연구 검사 반과
+    // 모르는 값은 체험으로 바꾸지 않고 거절한다.
+    const sessionType = parseCreatableSessionType(input.sessionType);
+    if (sessionType === null) {
+      throw new AdminInputError('만들 수 없는 반 성격입니다. 일반 수업 또는 연구 수업을 골라 주세요.');
+    }
     if (sessionType !== 'experience') {
       // 연구 성격의 반은 연구 시작 조건이 모두 갖춰졌을 때만 만든다.
       const readiness = registry.readiness();
@@ -434,63 +435,29 @@ export async function setClassPasswordAction(
 /* ────────────────────────── 수업 시작·차시·종료 ────────────────────────── */
 
 /** 수업 시작: 학생 입장을 열고 그 차시를 연다. 닫혀 있던 수업이면 다시 연다. */
-export async function startClassAction(classId: string, lesson: number): Promise<AdminResult> {
+/** 관리 화면이 여는 차시. 수업을 시작하면 모두 열고, 학생은 1번부터 순서대로 푼다. */
+const ALL_LESSONS = [1, 2, 3, 4, 5, 6] as const;
+
+/**
+ * 수업 시작 = 학생 입장 열기 + 1~6차시 모두 열기. 끝난 수업도 다시 연다.
+ * 단계를 하나씩 열고 닫지 않는다. 학생 화면이 앞 문항을 낸 순서대로만 다음 문항을 연다.
+ * 이미 수업 중인 반에 다시 부르면 빠진 차시를 채운다(예전 방식으로 일부만 열린 반).
+ */
+export async function startClassAction(classId: string): Promise<AdminResult> {
   return run(async () => {
     await requireAdmin();
-    if (!isValidLessonNumber(lesson)) throw new AdminInputError('1~6차시만 열 수 있습니다.');
     const { id, ref, data } = await requireClassDoc(classId);
     const { durable } = await getLessonStore().openLessonSession({
       classResearchId: id,
       sessionType: toSessionType(data.sessionType),
-      lesson,
+      lesson: 1,
+      alsoOpen: ALL_LESSONS,
       openedBy: ADMIN_ACTOR,
-      reason: '관리 화면: 수업 시작',
+      reason: '관리 화면: 수업 시작(1~6차시)',
     });
     if (!durable) throw new AdminInputError('차시 기록을 서버에 남기지 못했습니다. 다시 해 주세요.');
     await ref.update({ active: true, updatedAt: new Date().toISOString() });
-    await recordAdminEvent('start_class', id, { lesson });
-    return null;
-  });
-}
-
-/** 차시 하나를 열거나 닫는다. 학생 입장 여부는 바꾸지 않는다. */
-export async function setLessonOpenAction(
-  classId: string,
-  lesson: number,
-  open: boolean
-): Promise<AdminResult> {
-  return run(async () => {
-    await requireAdmin();
-    if (!isValidLessonNumber(lesson)) throw new AdminInputError('1~6차시만 다룰 수 있습니다.');
-    const { id, data } = await requireClassDoc(classId);
-    const store = getLessonStore();
-    const { durable } = open
-      ? await store.openLessonSession({
-          classResearchId: id,
-          sessionType: toSessionType(data.sessionType),
-          lesson,
-          openedBy: ADMIN_ACTOR,
-          reason: '관리 화면: 차시 열기',
-        })
-      : await store.closeLessonSession({
-          classResearchId: id,
-          lesson,
-          closedBy: ADMIN_ACTOR,
-          reason: '관리 화면: 차시 닫기',
-        });
-    if (!durable) throw new AdminInputError('차시 기록을 서버에 남기지 못했습니다. 다시 해 주세요.');
-    await recordAdminEvent(open ? 'open_lesson' : 'close_lesson', id, { lesson });
-    return null;
-  });
-}
-
-/** 학생 입장만 열거나 닫는다. 이미 들어온 학생과 차시는 그대로 둔다. */
-export async function setClassEntryAction(classId: string, active: boolean): Promise<AdminResult> {
-  return run(async () => {
-    await requireAdmin();
-    const { id, ref } = await requireClassDoc(classId);
-    await ref.update({ active: active === true, updatedAt: new Date().toISOString() });
-    await recordAdminEvent(active ? 'open_entry' : 'close_entry', id, null);
+    await recordAdminEvent('start_class', id, { lessons: [...ALL_LESSONS] });
     return null;
   });
 }

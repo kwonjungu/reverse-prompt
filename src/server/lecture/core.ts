@@ -8,6 +8,8 @@
  */
 
 import { isLectureQuestionId } from '@/lib/lecture-questions';
+import { levelsOf, type AreaLevels } from '@/lib/scoring';
+import type { FeedbackStatus, ScoringRun } from '@/lib/research/types';
 
 /** 연수 코드가 설정되지 않았을 때 쓰는 기본값. 비밀이 아니며 칠판에 적는 값이다. */
 export const DEFAULT_LECTURE_CODE = '1111';
@@ -35,4 +37,37 @@ export function isLectureCodeValid(input: unknown, expected: string): boolean {
 /** 연수 모드가 받아 줄 문항인가. 연습 36문항 가운데 목록에 있는 20개만 허용한다. */
 export function isAllowedLectureQuestion(questionId: unknown): questionId is string {
   return typeof questionId === 'string' && isLectureQuestionId(questionId.trim());
+}
+
+/* ────────────────────────── 화면에 돌려줄 채점 결과 ────────────────────────── */
+
+export const LECTURE_SCORING_MISSING_MESSAGE = '채점을 마치지 못했어요. 잠시 뒤 다시 보내 주세요.';
+
+/**
+ * 연수 화면이 받는 채점 결과. 연습 화면(SubmitPracticeResult.scoring)과 같은 모양이다.
+ * 100점 점수는 없다. levels는 영역별 1~4 또는 'not_applicable'(화면에서 숨김)이다.
+ */
+export type LectureScoring =
+  | { status: 'scored'; levels: AreaLevels; band: string }
+  | { status: 'missing'; message: string };
+
+/** 네 문장 피드백(한 줄에 한 문장). 검증에 실패했으면 고정 안내(status 'fallback')다. */
+export type LectureFeedback = { text: string; status: FeedbackStatus } | null;
+
+/**
+ * 운영 채점 1회의 기록을 연수 화면에 돌려줄 값으로 줄인다.
+ *   - 채점되면 영역별 수준만 넘긴다. 근거·빠진 정보 목록·호출 기록은 화면에 필요 없어 넘기지 않는다.
+ *   - 결측이면 수준을 지어내지 않고(1수준·0점 아님) 피드백도 넘기지 않는다.
+ */
+export function lectureResultOf(run: Pick<ScoringRun, 'result' | 'band' | 'feedback'>): {
+  scoring: LectureScoring;
+  feedback: LectureFeedback;
+} {
+  if (run.result.status !== 'scored') {
+    return { scoring: { status: 'missing', message: LECTURE_SCORING_MISSING_MESSAGE }, feedback: null };
+  }
+  return {
+    scoring: { status: 'scored', levels: levelsOf(run.result.areas), band: run.band },
+    feedback: run.feedback ? { text: run.feedback.text, status: run.feedback.status } : null,
+  };
 }

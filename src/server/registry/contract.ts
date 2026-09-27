@@ -27,11 +27,11 @@ export interface PublicQuestionView {
 
 /** 문항별 채점 단서. 서버 밖으로 내보내지 않는다. */
 export interface QuestionCues {
-  /** 핵심 대상 목록 */
+  /** 핵심 대상 목록(대상 영역). 비어 있을 수 없다. */
   coreObjects: string[];
-  /** 필수 속성 목록 */
+  /** 필수 속성 목록(특징 영역). 비어 있으면 특징은 해당 없음. */
   requiredAttributes: string[];
-  /** 필수 맥락 단서 목록. A밴드는 빈 배열. */
+  /** 필수 관계 목록(관계 영역). A밴드는 대상 사이 공간 관계, B·C밴드는 장소·행동. 비어 있으면 관계는 해당 없음. */
   requiredContext: string[];
   /** 허용 표현·동의어 */
   acceptedExpressions: string[];
@@ -39,7 +39,7 @@ export interface QuestionCues {
   notRequired: string[];
   /** 모순 예 */
   contradictions: string[];
-  /** 축별 수준 경계와 앵커. key: 'object' | 'specificity' | 'context' */
+  /** 영역별 1~4수준 경계 앵커. key: 'object'(대상) | 'specificity'(특징) | 'context'(관계) — 옛 팩과 같은 키 */
   anchors: Record<string, Record<string, string>>;
 }
 

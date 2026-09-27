@@ -1,14 +1,16 @@
 'use client';
 
 /**
- * 통합 관리 화면의 '연구 자료' 탭(논문 v12).
+ * 통합 관리 화면의 '연구 자료' 탭(논문 v12, 공통 루브릭 v12-2).
  *
- *   - 연구 세션 연습 기록의 문항 요약을 보고, 시도별·학생×문항·문항 요약 CSV를 받는다.
+ *   - 연구 세션 연습 기록의 문항 요약(앱 종합 4수준 분포·영역별 평균)을 보고,
+ *     시도별·학생×문항·문항 요약 CSV를 받는다.
  *   - 문항 셋(A·B·C 하나씩)을 골라 학생×문항 행에 제외 표시(무관한 내용 / 개인정보 포함)를 단다.
- *   - 제외 뒤 앱 AI 5수준별로 문항마다 n개를 고정 시드로 뽑아 사례 ID를 붙이고 저장·내보낸다.
+ *   - 제외 뒤 앱 종합 4수준별로 문항마다 n개(기본 5)를 고정 시드로 뽑아 사례 ID를 붙이고 저장·내보낸다.
+ *   - 옛 v7 기록(5수준·100점)은 요약·추출에서 빠진다. 뺀 수만 보여 준다.
  *
  * 계산과 권한은 모두 서버(src/server/admin/research-actions.ts)가 한다. 이 화면은 요청만 보낸다.
- * 학생 화면에는 나오지 않는다.
+ * 학생 화면에는 나오지 않는다. 100점 점수는 어디에도 없다.
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
@@ -29,6 +31,7 @@ import {
 } from '@/server/admin/research-actions';
 import type { ExclusionReason } from '@/server/export/practice-summary';
 import { PRACTICE_QUESTIONS } from '@/lib/questions';
+import { AREA_IDS, AREA_LABEL, type AreaJudgments, type AreaLevels, type AreaLevelValue } from '@/lib/scoring';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -43,6 +46,9 @@ import { AlertTriangle, Download, Loader2, RefreshCw, Shuffle } from 'lucide-rea
 
 const ALL = '__all__';
 
+/** 앱 종합 수준의 값(1~4). 추출 층도 같다. */
+const APP_LEVELS = [1, 2, 3, 4] as const;
+
 const EXCLUSION_LABEL: Record<ExclusionReason, string> = {
   irrelevant: '무관한 내용',
   personal_info: '개인정보 포함',
@@ -51,6 +57,26 @@ const EXCLUSION_LABEL: Record<ExclusionReason, string> = {
 function titleOf(questionId: string): string {
   const q = PRACTICE_QUESTIONS.find((p) => `L${String(p.level).padStart(2, '0')}` === questionId);
   return q ? q.koreanTitle : questionId;
+}
+
+/** 영역 수준 한 칸. 연구 화면이라 해당 없음도 드러내 보인다(학생 화면은 숨긴다). */
+function levelText(v: AreaLevelValue | null | undefined): string {
+  if (v === null || v === undefined) return '결측';
+  return v === 'not_applicable' ? '해당 없음' : String(v);
+}
+
+/** 영역별 수준을 한 줄로: '대상 2 · 특징 3 · 관계 해당 없음' */
+function levelsText(levels: AreaLevels | null): string {
+  if (!levels) return '결측';
+  return AREA_IDS.map((a) => `${AREA_LABEL[a]} ${levelText(levels[a])}`).join(' · ');
+}
+
+/** 영역별 첫→최종: '대상 1→3' */
+function areaChange(first: AreaLevels | null, final: AreaLevels | null) {
+  return AREA_IDS.map((a) => ({
+    area: a,
+    text: `${AREA_LABEL[a]} ${levelText(first?.[a])}→${levelText(final?.[a])}`,
+  }));
 }
 
 /** 엑셀이 한글을 UTF-8로 읽도록 붙이는 BOM. 서버 응답을 거치며 빠질 수 있어 여기서 다시 확인한다. */
@@ -89,7 +115,7 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
 
-  const [perLevel, setPerLevel] = useState('4');
+  const [perLevel, setPerLevel] = useState('5');
   const [seed, setSeed] = useState(defaultSeed);
   const [sample, setSample] = useState<SampleView | null>(null);
   const [samples, setSamples] = useState<SampleListItem[]>([]);
@@ -252,11 +278,12 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
             <Skeleton className="h-40 w-full" />
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
                 {[
-                  { label: '시도', value: `${overview.attemptCount}건` },
+                  { label: '시도(v12-2)', value: `${overview.attemptCount}건` },
                   { label: '학생', value: `${overview.studentCount}명` },
                   { label: '동의 없음·철회로 뺀 학생', value: `${overview.consentExcludedStudents}명` },
+                  { label: '옛 기록(v7)으로 뺀 시도', value: `${overview.legacyAttemptCount}건` },
                   { label: '고른 문항', value: `${picked.length}/3` },
                 ].map((t) => (
                   <div key={t.label} className="rounded-xl bg-muted/50 p-4">
@@ -266,8 +293,15 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                {overview.appLevelRule} 결측(채점 못 함)은 분포에 넣지 않고 따로 셉니다.
+                루브릭 {overview.rubricVersion}(대상·특징·관계 3영역 4수준). {overview.appLevelRule} 결측(채점 못 함)은
+                분포·평균에 넣지 않고 따로 셉니다. 영역 평균은 해당 없음을 빼고 계산하며 반올림하지 않습니다.
               </p>
+              {overview.legacyAttemptCount > 0 && (
+                <p className="text-xs text-amber-700">
+                  옛 기준(v7, 5수준·100점)으로 채점된 시도 {overview.legacyAttemptCount}건은 요약과 추출에서
+                  뺐습니다. 시도별 CSV에는 legacy_rubric=true와 옛 값(v7_* 열)으로 남아 있습니다.
+                </p>
+              )}
               {overview.attemptCount === 0 && (
                 <p className="text-sm text-amber-700">
                   아직 모인 연구 기록이 없습니다. 연구 수업 반에서 동의한 학생이 연습을 제출하면 여기에 쌓입니다.
@@ -280,11 +314,15 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                     <TableRow>
                       <TableHead className="w-[48px]">고르기</TableHead>
                       <TableHead>문항</TableHead>
+                      <TableHead className="text-right">단계</TableHead>
                       <TableHead>밴드</TableHead>
                       <TableHead className="text-right">학생</TableHead>
                       <TableHead className="text-right">평균 시도</TableHead>
-                      {[1, 2, 3, 4, 5].map((n) => (
-                        <TableHead key={n} className="text-right">{n}수준</TableHead>
+                      {APP_LEVELS.map((n) => (
+                        <TableHead key={n} className="text-right">종합 {n}수준</TableHead>
+                      ))}
+                      {AREA_IDS.map((a) => (
+                        <TableHead key={a} className="text-right">{AREA_LABEL[a]} 평균</TableHead>
                       ))}
                       <TableHead className="text-right">결측</TableHead>
                     </TableRow>
@@ -304,6 +342,7 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                           <TableCell className="whitespace-nowrap">
                             <span className="font-mono text-xs">{q.questionId}</span> {titleOf(q.questionId)}
                           </TableCell>
+                          <TableCell className="text-right tabular-nums">{q.chasi ?? '-'}</TableCell>
                           <TableCell>{q.band}</TableCell>
                           <TableCell className="text-right tabular-nums">{q.students}</TableCell>
                           <TableCell className="text-right tabular-nums">
@@ -312,6 +351,20 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                           {q.finalLevelCounts.map((c, i) => (
                             <TableCell key={i} className="text-right tabular-nums">{c || '·'}</TableCell>
                           ))}
+                          {AREA_IDS.map((a) => {
+                            const mean = q.finalAreaMeans[a];
+                            const na = q.finalAreaNotApplicable[a];
+                            return (
+                              <TableCell key={a} className="text-right tabular-nums">
+                                {mean === null ? '-' : mean.toFixed(2)}
+                                {na > 0 && (
+                                  <span className="ml-1 text-[10px] text-muted-foreground" title="해당 없음으로 판정된 학생 수">
+                                    (해당 없음 {na})
+                                  </span>
+                                )}
+                              </TableCell>
+                            );
+                          })}
                           <TableCell className="text-right tabular-nums">{q.finalMissing || '·'}</TableCell>
                         </TableRow>
                       );
@@ -329,8 +382,9 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
           <CardTitle className="text-lg">연구용 추출</CardTitle>
           <CardDescription>
             위 표에서 문항을 셋까지 고르세요(A·B·C 밴드 하나씩 권장). 행마다 제외 표시를 달면 추출에서
-            빠지고, 사유는 지우지 않고 기록으로 남습니다. 제외 뒤 앱 AI 5수준별로 문항마다 n개를 고정
-            시드로 뽑아 사례 ID(예: 01-31 = L01의 3수준 첫째)를 붙입니다.
+            빠지고, 사유는 지우지 않고 기록으로 남습니다. 제외 뒤 앱 종합 4수준별로 문항마다 n개(기본 5)를
+            고정 시드로 뽑아 사례 ID(예: 01-31 = L01의 종합 3수준 첫째)를 붙입니다. 옛 기준(v7)으로 채점된
+            시도는 후보에 들지 않습니다.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -368,7 +422,8 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
             <>
               <p className="text-sm text-muted-foreground">
                 후보 {extraction.rows.length}행 · 제외 {excludedCount}행 · 동의 없음·철회로 뺀 학생{' '}
-                {extraction.consentExcludedStudents}명. 행을 누르면 첫·최종 프롬프트와 피드백을 봅니다.
+                {extraction.consentExcludedStudents}명 · 옛 기록(v7)으로 뺀 시도 {extraction.legacyAttemptCount}건.
+                행을 누르면 첫·최종 프롬프트, 영역별 근거·빠진 정보, 피드백을 봅니다.
               </p>
               <div className="max-h-[560px] overflow-auto rounded-lg border">
                 <Table>
@@ -377,7 +432,8 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                       <TableHead>문항</TableHead>
                       <TableHead>연구ID</TableHead>
                       <TableHead className="text-right">시도</TableHead>
-                      <TableHead className="text-right">첫→최종 수준</TableHead>
+                      <TableHead className="text-right">종합 첫→최종</TableHead>
+                      <TableHead>영역 첫→최종</TableHead>
                       <TableHead>최종 프롬프트</TableHead>
                       <TableHead className="w-[170px]">제외</TableHead>
                       <TableHead className="w-[180px]">메모</TableHead>
@@ -395,6 +451,11 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                             <TableCell className="text-right tabular-nums">{r.attemptCount}</TableCell>
                             <TableCell className="text-right tabular-nums">
                               {r.firstAppLevel ?? '결측'} → {r.finalAppLevel ?? '결측'}
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                              {areaChange(r.firstLevels, r.finalLevels).map((c) => (
+                                <div key={c.area}>{c.text}</div>
+                              ))}
                             </TableCell>
                             <TableCell
                               className="max-w-[320px] cursor-pointer"
@@ -440,15 +501,23 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                           </TableRow>
                           {open && (
                             <TableRow className="bg-muted/30 hover:bg-muted/30">
-                              <TableCell colSpan={7} className="space-y-2 p-4 text-sm">
+                              <TableCell colSpan={8} className="space-y-2 p-4 text-sm">
                                 <p>
-                                  <strong>첫 프롬프트</strong> ({r.firstAppLevel ?? '결측'}수준):{' '}
+                                  <strong>첫 프롬프트</strong> (종합 {r.firstAppLevel ?? '결측'} · {levelsText(r.firstLevels)}):{' '}
                                   <span className="whitespace-pre-wrap">{r.firstPrompt}</span>
                                 </p>
                                 <p>
-                                  <strong>최종 프롬프트</strong> ({r.finalAppLevel ?? '결측'}수준):{' '}
+                                  <strong>최종 프롬프트</strong> (종합 {r.finalAppLevel ?? '결측'}
+                                  {r.finalAppLevelRaw !== null ? `, 평균 ${r.finalAppLevelRaw.toFixed(2)}` : ''} ·{' '}
+                                  {levelsText(r.finalLevels)}):{' '}
                                   <span className="whitespace-pre-wrap">{r.finalPrompt}</span>
                                 </p>
+                                <FinalAreaDetails areas={r.finalAreas} />
+                                {r.legacyAttemptCount > 0 && (
+                                  <p className="text-xs text-amber-700">
+                                    이 학생의 이 문항 시도 가운데 옛 기준(v7) {r.legacyAttemptCount}건은 요약에서 뺐습니다.
+                                  </p>
+                                )}
                                 <div>
                                   <strong>받은 피드백(시도 순서)</strong>
                                   <ol className="mt-1 list-decimal space-y-1 pl-5">
@@ -471,6 +540,7 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                 <div className="space-y-1">
                   <Label htmlFor="per-level">수준마다 뽑을 수</Label>
                   <Input id="per-level" type="number" min={1} max={9} value={perLevel} onChange={(e) => setPerLevel(e.target.value)} className="w-24" />
+                  <p className="text-[11px] text-muted-foreground">종합 1~4수준마다(기본 5)</p>
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="seed">시드</Label>
@@ -494,15 +564,16 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
             <div className="space-y-3 rounded-xl border p-4">
               <p className="text-sm">
                 <strong>{sample.sampleId}</strong> · 시드 <code>{sample.seed}</code> · 사례 {sample.cases.length}개 ·
-                제외 {sample.excludedCount}행 · 결측으로 빠진 {sample.unlevelledCount}행
+                제외 {sample.excludedCount}행 · 결측으로 빠진 {sample.unlevelledCount}행 · 옛 기록(v7)으로 뺀 시도{' '}
+                {sample.legacyAttemptCount}건
               </p>
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>문항</TableHead>
-                      {[1, 2, 3, 4, 5].map((n) => (
-                        <TableHead key={n} className="text-center">{n}수준 (뽑힘/후보)</TableHead>
+                      {APP_LEVELS.map((n) => (
+                        <TableHead key={n} className="text-center">종합 {n}수준 (뽑힘/후보)</TableHead>
                       ))}
                     </TableRow>
                   </TableHeader>
@@ -510,7 +581,7 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                     {sample.questionIds.map((qid) => (
                       <TableRow key={qid}>
                         <TableCell className="font-mono text-xs">{qid}</TableCell>
-                        {[1, 2, 3, 4, 5].map((lv) => {
+                        {APP_LEVELS.map((lv) => {
                           const s = sample.strata.find((x) => x.questionId === qid && x.level === lv);
                           return (
                             <TableCell key={lv} className={`text-center tabular-nums ${s && s.shortfall > 0 ? 'text-amber-700' : ''}`}>
@@ -525,8 +596,9 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                 </Table>
               </div>
               <p className="text-xs text-muted-foreground">
-                사례 ID에는 앱 AI 수준이 들어 있습니다(01-31의 “3”). 전문가에게 수준을 가리고 줄 때는 case_id·app_level
-                열을 빼고 다른 번호를 붙여 주세요.
+                사례 ID에는 앱 종합 수준이 들어 있습니다(01-31의 “3”). 전문가에게 앱 판정을 가리고 줄 때는
+                case_id·app_level·final_app_level_raw 열과 영역별 수준·근거·빠진 정보(final_object_* 등) 열을 빼고
+                다른 번호를 붙여 주세요.
               </p>
             </div>
           )}
@@ -551,7 +623,14 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
                 <TableBody>
                   {samples.map((s) => (
                     <TableRow key={s.sampleId}>
-                      <TableCell className="font-mono text-xs">{s.sampleId}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {s.sampleId}
+                        {s.legacy && (
+                          <Badge variant="outline" className="ml-1 text-[10px]" title="옛 앱 AI 5수준(v7 100점 환산) 층으로 뽑은 추출">
+                            옛 5수준
+                          </Badge>
+                        )}
+                      </TableCell>
                       <TableCell className="font-mono text-xs">{s.seed}</TableCell>
                       <TableCell className="text-xs">{s.questionIds.join(', ')}</TableCell>
                       <TableCell className="text-right tabular-nums">{s.perLevel}</TableCell>
@@ -578,6 +657,42 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/** 최종 시도의 영역별 근거(학생 원문)와 빠진 정보. 전문가 검토의 맥락으로 본다. */
+function FinalAreaDetails({ areas }: { areas: AreaJudgments | null }) {
+  if (!areas) return <p className="text-xs text-muted-foreground">최종 시도의 영역 판정: 결측(채점 못 함)</p>;
+  return (
+    <div>
+      <strong>최종 시도의 영역 판정</strong>
+      <ul className="mt-1 space-y-1 pl-1">
+        {AREA_IDS.map((a) => {
+          const j = areas[a];
+          if (j.level === 'not_applicable') {
+            return (
+              <li key={a} className="text-muted-foreground">
+                {AREA_LABEL[a]}: 해당 없음
+              </li>
+            );
+          }
+          return (
+            <li key={a}>
+              <span className="font-semibold">
+                {AREA_LABEL[a]} {j.level}수준
+              </span>
+              {' · 근거 '}
+              {j.evidence ? <q className="whitespace-pre-wrap">{j.evidence}</q> : <span className="text-muted-foreground">없음</span>}
+              {' · 빠진 정보 '}
+              {j.missing.length ? j.missing.join(', ') : <span className="text-muted-foreground">없음</span>}
+              {j.evidenceMissing.length > 0 && (
+                <span className="text-muted-foreground"> · 대상이 빠져 확인 못 함: {j.evidenceMissing.join(', ')}</span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

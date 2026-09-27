@@ -28,6 +28,7 @@ import {
 import {
   DuplicateDocumentError,
   createLessonStore,
+  withoutUndefined,
   type LessonBackend,
   type LessonPaths,
   type LessonStore,
@@ -38,6 +39,9 @@ export {
   PRACTICE_SUBMISSION_SCHEMA_VERSION,
   createMemoryBackend,
   emptyLessonSession,
+  isAreaResult,
+  isLegacyPracticeRecord,
+  storedAreaLevels,
   toOpenState,
 } from './store-core';
 export type {
@@ -89,7 +93,10 @@ function createFirestoreBackend(db: Firestore): LessonBackend {
     },
     async create(collectionPath: string, docId: string, data: unknown) {
       try {
-        await db.collection(collectionPath).doc(docId).create(data as Record<string, unknown>);
+        await db
+          .collection(collectionPath)
+          .doc(docId)
+          .create(withoutUndefined(data) as Record<string, unknown>);
       } catch (err: unknown) {
         const code = (err as { code?: unknown } | null)?.code;
         if (code === 6 || /already exists/i.test(String((err as Error)?.message ?? ''))) {
@@ -99,13 +106,16 @@ function createFirestoreBackend(db: Firestore): LessonBackend {
       }
     },
     async set(collectionPath: string, docId: string, data: unknown) {
-      await db.collection(collectionPath).doc(docId).set(data as Record<string, unknown>);
+      await db
+        .collection(collectionPath)
+        .doc(docId)
+        .set(withoutUndefined(data) as Record<string, unknown>);
     },
     async merge(collectionPath: string, docId: string, patch: Record<string, unknown>) {
       const ref = db.collection(collectionPath).doc(docId);
       const snap = await ref.get();
       if (!snap.exists) return false;
-      await ref.set(patch, { merge: true });
+      await ref.set(withoutUndefined(patch), { merge: true });
       return true;
     },
     async query<T>(collectionPath: string, field: string, value: unknown) {

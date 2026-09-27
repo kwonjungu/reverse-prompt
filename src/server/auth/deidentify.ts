@@ -27,20 +27,45 @@ export const IDENTIFYING_FIELDS = [
   'ip',
 ] as const;
 
-/** 교사 블라인드 채점에서 가려야 할 필드. 시점·AI 점수가 없어야 한다. */
+/**
+ * 교사 블라인드 채점에서 가려야 할 필드. 시점·AI 채점 결과·제출 시각이 없어야 한다.
+ * 연습 제출 문서는 AI 결과를 'scoring' 한 필드(result·feedback·호출 이력) 아래에 담으므로
+ * 그 필드를 통째로 뺀다. 옛 v7(점수·축 수준)과 v12-2(영역 판정·종합 수준·근거·누락) 이름도 함께 막는다.
+ * 시각은 submittedAt·startedAt만이 아니다. 연습 제출 문서는 createdAt(=submittedAt)·durationMs도 담고,
+ * 클라이언트 제출ID는 브라우저에 따라 시각을 품을 수 있다. 중첩된 feedbackReview.recordedAt은
+ * toTeacherBlindRecord가 따로 뺀다.
+ */
 export const TEACHER_BLIND_HIDDEN_FIELDS = [
   'phase',
+  'scoring',
   'aiScore',
   'aiLevels',
   'aiAxisScores',
+  'aiAreas',
   'score',
   'levels',
   'axisScores',
+  'areas',
+  'overallLevel',
+  'appLevel',
+  'appLevelRaw',
+  'evidence',
+  'missing',
+  'evidenceMissing',
+  'servedModel',
   'operationalResult',
   'feedback',
   'feedbackStatus',
   'submittedAt',
   'startedAt',
+  'createdAt',
+  'updatedAt',
+  'durationMs',
+  'scoredAt',
+  'recordedAt',
+  'finishedAt',
+  'studentReportedFailureAt',
+  'clientSubmissionId',
   'sessionOpenedAt',
   'otherTeacherScores',
   'teacherScores',
@@ -67,12 +92,20 @@ export function toResearcherView(record: Record<string, unknown>): Record<string
   return stripIdentifiers(record);
 }
 
+/** 교사 블라인드 자료에서 feedbackReview 안의 시각(recordedAt)을 뺀다. 고쳐 쓰기 연결만 남는다. */
+const FEEDBACK_REVIEW_HIDDEN_FIELDS = ['recordedAt'] as const;
+
 /**
  * 교사 블라인드 채점용 레코드.
- * 시점(pre/post)과 AI 점수, 다른 교사의 점수를 모두 뺀다.
+ * 시점(pre/post)과 AI 점수, 제출 시각, 다른 교사의 점수를 모두 뺀다.
  */
 export function toTeacherBlindRecord(record: Record<string, unknown>): Record<string, unknown> {
-  return omit(stripIdentifiers(record), TEACHER_BLIND_HIDDEN_FIELDS);
+  const out = omit(stripIdentifiers(record), TEACHER_BLIND_HIDDEN_FIELDS);
+  const review = out.feedbackReview;
+  if (review && typeof review === 'object' && !Array.isArray(review)) {
+    out.feedbackReview = omit(review as Record<string, unknown>, FEEDBACK_REVIEW_HIDDEN_FIELDS);
+  }
+  return out;
 }
 
 /** 남아 있는 식별 필드 이름 목록. 비어 있어야 정상이다. */

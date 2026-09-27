@@ -156,9 +156,17 @@ export interface StudentAssessmentItem {
 
 /** payload에 절대 실리면 안 되는 열쇠말. 테스트와 런타임 점검이 함께 쓴다. */
 export const FORBIDDEN_PAYLOAD_KEYS = [
+  // 자동 채점 결과 — 옛 v7(점수·축 수준)과 v12-2(영역 판정·종합 수준·근거·누락) 모두
   'score',
   'levels',
   'axisScores',
+  'areas',
+  'overallLevel',
+  'appLevel',
+  'appLevelRaw',
+  'evidence',
+  'missing',
+  'evidenceMissing',
   'anchors',
   'cues',
   'coreObjects',

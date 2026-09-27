@@ -10,7 +10,11 @@
  * 서버 전용 모듈을 import 하지 않는다. middleware(edge)와 클라이언트 가드가 함께 쓴다.
  */
 
-import { isModeAllowed, MODE_BLOCKED_MESSAGE } from '@/lib/research/session-modes';
+import {
+  isModeAllowed,
+  isResearchSession,
+  MODE_BLOCKED_MESSAGE,
+} from '@/lib/research/session-modes';
 import type { AppMode, SessionType } from '@/lib/research/types';
 
 export { MODE_BLOCKED_MESSAGE };
@@ -74,6 +78,12 @@ export const ROUTE_MODES: { prefix: string; mode: AppMode }[] = [
   { prefix: '/admin/audit', mode: 'audit' },
   { prefix: '/api/audit', mode: 'audit' },
   { prefix: '/api/generate', mode: 'generate' },
+  // 검사 화면이 부르는 학생용 API. 예전에는 표에 없어 연구 수업(연습) 세션도 route 단계를 지나갔다.
+  // 연구자 내려받기(/api/assessment/export)는 학생 활동이 아니므로 넣지 않는다.
+  { prefix: '/api/assessment/state', mode: 'assessment' },
+  { prefix: '/api/assessment/start', mode: 'assessment' },
+  { prefix: '/api/assessment/submit', mode: 'assessment' },
+  { prefix: '/api/assessment/failure', mode: 'assessment' },
   { prefix: '/assessment', mode: 'assessment' },
   { prefix: '/practice', mode: 'practice' },
   { prefix: '/guide', mode: 'guide' },
@@ -85,4 +95,28 @@ export function modeForPath(pathname: string): AppMode | null {
     (r) => pathname === r.prefix || pathname.startsWith(`${r.prefix}/`)
   );
   return hit ? hit.mode : null;
+}
+
+/* ────────────────────── 연수 체험판(/lecture) ────────────────────── */
+
+/**
+ * 연수 체험판 경로. 학생 세션 없이 연수 번호(LECTURE_CODE)로만 들어오는 시연용 경로라
+ * 모드 표(ROUTE_MODES)에 넣지 않는다. 넣으면 세션 힌트가 없는 연수 참가자가 모두 막힌다.
+ *
+ * 대신 **연구 세션 힌트가 있는 요청만** 막는다. 연구 참가 학생이 연수 번호(기본 1111)를
+ * 알아도 연구 밖에서 같은 L 그림으로 AI 채점 연습을 받아 처치가 흐려지지 않게 하기 위해서다.
+ * 연구 세션에서 열리는 활동은 설명·연습(연구 수업) 또는 검사(연구 검사)뿐이다.
+ *
+ * 한계: edge와 연수 server action은 힌트 쿠키만 읽는다(연수 경로는 Firestore를 열지 않는다).
+ * 힌트를 지우면 지나갈 수 있으므로 연수가 끝나면 LECTURE_CODE를 바꾸거나 비워 두는 것이 실제 방어다.
+ */
+export const LECTURE_PATH_PREFIX = '/lecture';
+
+export function isLecturePath(pathname: string): boolean {
+  return pathname === LECTURE_PATH_PREFIX || pathname.startsWith(`${LECTURE_PATH_PREFIX}/`);
+}
+
+/** 세션 힌트의 성격으로 연수 체험판을 막을지 정한다. 힌트가 없으면(연수 참가자) 막지 않는다. */
+export function isLectureBlockedFor(sessionType: SessionType | null | undefined): boolean {
+  return !!sessionType && isResearchSession(sessionType);
 }

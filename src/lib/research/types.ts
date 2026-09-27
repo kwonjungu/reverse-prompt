@@ -7,10 +7,19 @@
  * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §2, §5, §7
  */
 
-import type { AxisLevels, Band } from '@/lib/scoring';
+import type { AreaId, AreaJudgments, AreaLevels, Band } from '@/lib/scoring';
 
-/** 저장 스키마 버전. 기존 문서를 강제 이관하지 않고 버전으로 구분한다. */
-export const SCHEMA_VERSION = 'v7.0';
+/**
+ * 저장 문서의 스키마 버전. 기존 문서를 강제 이관하지 않고 버전으로 구분한다.
+ * v12.2: 공통 루브릭 v12-2(3영역 4수준) 채점 결과를 담는다. 옛 v7.0 문서도 그대로 읽는다.
+ */
+export const SCHEMA_VERSION = 'v12.2';
+
+/**
+ * 연구 저장 경로의 버전 조각(research/{이 값}/…). 문서 스키마 버전과 분리해 고정한다.
+ * 스키마를 올릴 때마다 경로가 바뀌면 이미 열린 차시·검사 자료가 새 경로로 갈라지기 때문이다.
+ */
+export const RESEARCH_STORE_VERSION = 'v7.0';
 
 /** 세션 성격. 연구 세션과 일반 체험을 구분한다. */
 export type SessionType = 'experience' | 'research_practice' | 'research_assessment';
@@ -27,45 +36,40 @@ export type RegistryStatus = 'candidate' | 'frozen';
 /** 화면 모드. 연구 세션에서 허용 여부가 달라진다. */
 export type AppMode = 'guide' | 'practice' | 'assessment' | 'game' | 'time-attack' | 'audit' | 'generate';
 
-/* ────────────────────────── 채점 결과 ────────────────────────── */
-
-export interface AxisScores {
-  object: number;
-  specificity: number;
-  context: number | null;
-}
+/* ────────────────────────── 채점 결과(공통 루브릭 v12-2) ────────────────────────── */
 
 export type FeedbackStatus = 'verified' | 'fallback' | 'not_requested';
 
 export type MissingReasonModel = 'model_error' | 'schema_error' | 'required_call_failed';
 
 /**
- * 운영 채점 1회의 결과. 결측은 0점이 아니라 null이다.
+ * 운영 채점 1회의 결과. 결측은 최저 수준이 아니라 areas: null이다.
  * 무응답은 이 타입의 모델 실패가 아니라 제출 단계의 missingReason으로 관리한다.
+ * 점수(100점)·배점·종합 수준은 담지 않는다. 종합 수준은 필요할 때 areas에서 계산한다.
  */
 export type OperationalResult =
   | {
       status: 'scored';
-      levels: AxisLevels;
-      score: number;
-      axisScores: AxisScores;
+      areas: AreaJudgments;
       feedbackStatus: FeedbackStatus;
     }
   | {
       status: 'missing';
-      levels: null;
-      score: null;
-      axisScores: null;
+      areas: null;
       reason: MissingReasonModel;
     };
 
-/** 모델 호출 1회의 기록. 원문 프롬프트·개인정보는 넣지 않는다. */
+/** 모델 호출 1회의 기록. 원문 프롬프트·개인정보·학생 글 인용은 넣지 않는다. */
 export interface CallRecord {
   callId: string;
   retryIndex: number;
-  /** 형식 검증을 통과한 수준. 실패 호출은 null. */
-  levels: AxisLevels | null;
+  /** 'score'는 채점 호출, 'feedback'은 피드백만 다시 만든 호출(점수에 반영하지 않는다). */
+  purpose: 'score' | 'feedback';
+  /** 형식 검증을 통과한 영역 수준. 실패 호출·피드백 호출은 null. */
+  levels: AreaLevels | null;
   failureReason: string | null;
+  /** 모델 API가 응답에 밝힌 실제 모델(예: gemini-2.5-flash). 알 수 없으면 null. */
+  servedModel: string | null;
   startedAt: string;
   finishedAt: string;
   durationMs: number;
@@ -79,12 +83,20 @@ export interface ScoringRun {
   band: Band;
   result: OperationalResult;
   calls: CallRecord[];
-  extraCall: boolean;
+  /** v12-2는 추가 호출(옛 2+1 결합)이 없다. 옛 기록과 열을 맞추려고 늘 false로 남긴다. */
+  extraCall: false;
   feedback: FeedbackPresentation | null;
+  /** 설정한 모델 ID(config의 EVALUATION_MODEL_ID) */
   modelId: string;
+  /** 점수를 낸 호출에서 모델 API가 밝힌 실제 모델. 결측이거나 알 수 없으면 null. */
+  servedModel: string | null;
   modelConfig: Record<string, unknown>;
   rubricVersion: string;
   cueVersion: string;
+  /** 이 채점에서 판정 여부를 정한 근거. 'cue_pack'이면 단서 팩, 'model'이면 모델이 정했다. */
+  applicabilitySource: 'cue_pack' | 'model';
+  /** 피드백의 단계 초점 영역(문항이 속한 단계). 검사 문항은 null. */
+  focusArea: AreaId | null;
   /**
    * 채점에 실제로 보낸 이미지의 SHA-256(설계서 §7 필수 필드).
    * 연습 문항은 명세 해시가 없으므로 읽을 때 계산한 값을 쓴다.
@@ -99,12 +111,20 @@ export interface ScoringRun {
 /** 피드백은 점수와 분리한다. 인용 실패와 인용 없는 중립 안내를 구분한다. */
 export interface FeedbackPresentation {
   status: FeedbackStatus;
-  /** 화면에 보여 줄 4줄 문구 */
+  /** 화면에 보여 줄 네 문장(한 줄에 한 문장). 2·3문장 앞에 영역 이름이 붙는다. */
   text: string;
-  /** 학생 원문에 실제로 포함된 인용 표현. 없으면 null(인용 없는 중립 안내). */
+  /** 2문장에 넣은 학생 원문 표현. 없으면 null. */
   quote: string | null;
   /** 재생성을 1회 시도했는지 */
   regenerated: boolean;
+  /** 2문장(잘 쓴 점)의 영역. 옛 v7 기록에는 없다. */
+  strengthArea?: AreaId | null;
+  /** 3문장(다음 행동)의 영역 */
+  nextArea?: AreaId | null;
+  /** 3문장이 겨냥한 빠진 정보 */
+  nextTarget?: string | null;
+  /** 검증에서 탈락한 사유(시도 순). 통과한 초안의 사유는 없다. */
+  rejections?: string[];
 }
 
 /* ────────────────────────── 제출 ────────────────────────── */

@@ -315,6 +315,55 @@ test('교사 블라인드 자료에 시점과 AI 점수가 없다', () => {
   assert.equal(view.text, '노란 세모 블록이 있다.');
 });
 
+test('교사 블라인드 자료 — 연습 제출 문서 전체에서 어떤 시각도 남지 않는다', () => {
+  // submit-core가 쓰는 연습 제출 문서의 모양 그대로(시각 필드가 여러 곳에 있다).
+  const submittedAt = '2026-09-01T01:02:03.000Z';
+  const practiceDoc: Record<string, unknown> = {
+    id: 'ps_abc',
+    submissionId: 'ps_abc',
+    clientSubmissionId: `sub-${Date.parse(submittedAt)}-abcd1234`,
+    ownerKey: 'R-001',
+    researchId: 'R-001',
+    classResearchId: 'CLS-AAA',
+    sessionType: 'research_practice',
+    phase: null,
+    lesson: 3,
+    questionId: 'L19',
+    questionLevel: 19,
+    band: 'B',
+    text: '강아지가 공원에서 공을 쫓는다.',
+    startedAt: '2026-09-01T01:00:00.000Z',
+    submittedAt,
+    durationMs: 123000,
+    attemptNo: 1,
+    responseStatus: 'submitted',
+    persistStatus: 'stored',
+    scoring: { scoredAt: submittedAt, result: { status: 'scored' } },
+    feedbackReview: {
+      kind: 'revised',
+      note: null,
+      revisedSubmissionId: 'ps_def',
+      recordedAt: '2026-09-01T01:05:00.000Z',
+    },
+    createdAt: submittedAt,
+    updatedAt: submittedAt,
+  };
+  const view = toTeacherBlindRecord(practiceDoc);
+  const json = JSON.stringify(view);
+  for (const key of ['submittedAt', 'startedAt', 'createdAt', 'updatedAt', 'durationMs', 'scoredAt', 'recordedAt', 'clientSubmissionId']) {
+    assert.equal(json.includes(`"${key}"`), false, `${key}가 남으면 안 된다`);
+  }
+  assert.equal(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(json), false, 'ISO 시각 문자열이 어디에도 없다');
+  assert.equal(json.includes(String(Date.parse(submittedAt))), false, '밀리초 시각도 없다');
+  // 진행을 세는 데 필요한 값과 고쳐 쓰기 연결은 남는다.
+  assert.equal(view.researchId, 'R-001');
+  assert.equal(view.questionId, 'L19');
+  assert.equal(view.responseStatus, 'submitted');
+  assert.deepEqual(view.feedbackReview, { kind: 'revised', note: null, revisedSubmissionId: 'ps_def' });
+  // 원본은 바꾸지 않는다.
+  assert.equal((practiceDoc.feedbackReview as Record<string, unknown>).recordedAt, '2026-09-01T01:05:00.000Z');
+});
+
 test('모델 payload에 신원 ID가 없다', () => {
   const payload = buildModelPayload({
     text: '노란 세모 블록이 있다.',
