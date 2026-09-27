@@ -371,3 +371,18 @@ test('검수표 문서가 원본 힌트와 어긋나지 않는다', () => {
     assert.equal(row.includes('✅'), PRACTICE_HINTS[id].reviewed, `${id} 검수 표시가 다르다 — npm run hints:table`);
   }
 });
+
+test('99-1 C4(번복): 36문항 모두 승인 — 학생 화면에 문항별 힌트가 나가고, 문구는 논문(M02·부록 2)과 글자까지 같다', () => {
+  assert.deepEqual([...REVIEWED_QUESTIONS], IDS);
+  for (const q of PRACTICE_QUESTIONS) assert.ok(q.hint, `${idOf(q.level)} 힌트가 화면에 나가지 않는다`);
+  // 논문 Ⅳ.1 설계 원리 1과 부록 2 마의 문장
+  assert.equal(HINT_GOAL, '이 그림을 못 본 친구가 똑같이 떠올릴 수 있게 써요.');
+  assert.equal(HINT_CHECK.object, '무엇이 몇 개 있는지 빠짐없이 썼나요?');
+  assert.equal(HINT_CHECK.feature, '색과 모양이 어느 것의 것인지 알 수 있게 썼나요?');
+  assert.equal(HINT_CHECK.relationStill, '무엇이 어디에 어떻게 놓여 있는지 썼나요?');
+  // 1단계는 관계를 대상이 둘 이상인 사진에서만 묻는다(Ⅳ.2.가) — 대상 하나인 사진은 기본으로 관계 질문이 없다.
+  for (const id of ['L01', 'L02', 'L03', 'L04', 'L06']) {
+    assert.equal(screenHintOf(id)?.checks.some((c) => c.area === 'relation'), false, id);
+  }
+  assert.equal(screenHintOf('L05')?.checks.some((c) => c.area === 'relation'), true, 'L05 선인장과 화분');
+});

@@ -104,8 +104,22 @@ export function buildHintChecks(level: number): HintCheck[] {
   return checks;
 }
 
-/** 연구자가 검수를 마친 문항(L01~L36). 검수표를 보고 여기에 문항 ID를 더한다. */
-export const REVIEWED_QUESTIONS: readonly string[] = [];
+/**
+ * 연구자가 검수를 마친 문항(L01~L36). 여기 든 문항만 문항별 힌트가 학생 화면에 나간다.
+ *
+ * 2026-09-27 — 36문항 모두 승인(연구자가 판단을 맡김, 99-1 C4를 뒤집음). 논문 v12-2에 맞춰 확인한 것:
+ *   - 목표 한 문장과 루브릭 영역별 확인 질문으로 이루어진다(Ⅳ.1 설계 원리 1, 부록 2 가).
+ *   - 확인 질문은 M02 전문가 의견의 쉬운 말 그대로다('무엇이 몇 개 있는지 빠짐없이 썼나요?',
+ *     '색과 모양이 어느 것의 것인지 알 수 있게 썼나요?', 부록 2 마의 '어디에서 무엇이 어떻게 놓여 있는지').
+ *   - 정답 값(대상 이름·색·개수)과 특정 부위를 말하지 않는다(tests/hints.test.ts가 36문항 전수 대조).
+ *   - 그림이 요구하지 않는 영역의 질문은 화면에서 뺀다(단서 팩, 없으면 기본 목록 — screenHintOf).
+ *   - 1단계는 대상·특징을 고루, 관계는 대상이 둘 이상일 때만. 2~4단계는 그 영역을 맨 앞에. 5·6단계는 세 영역(Ⅳ.2.가).
+ *   - 새 그림 12장(2026-09-27)도 관계 질문 종류가 그림과 맞는다(L03·L08 해당 없음, L25·L28·L30 놓인 모양).
+ * 문항을 빼려면 이 목록에서 지운다. 검수표: docs/practice-hints-review.md(npm run hints:table).
+ */
+export const REVIEWED_QUESTIONS: readonly string[] = [
+  'L01', 'L02', 'L03', 'L04', 'L05', 'L06', 'L07', 'L08', 'L09', 'L10', 'L11', 'L12', 'L13', 'L14', 'L15', 'L16', 'L17', 'L18', 'L19', 'L20', 'L21', 'L22', 'L23', 'L24', 'L25', 'L26', 'L27', 'L28', 'L29', 'L30', 'L31', 'L32', 'L33', 'L34', 'L35', 'L36',
+];
 
 /** questionId(L01~L36) → 힌트 초안 */
 export const PRACTICE_HINTS: Record<string, PracticeHintDraft> = Object.fromEntries(

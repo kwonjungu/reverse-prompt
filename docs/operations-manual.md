@@ -68,10 +68,11 @@
   "무엇이 어디에 어떻게 놓여 있는지", 그 밖의 B·C밴드 "어디에서 무엇을 하고 있는지".
 - 관계가 기본으로 해당 없음인 문항(L01–L04·L06·L08·L11·L20·L23)은 학생 화면에서 관계 질문이 빠진다. 단서 팩이 있으면 단서 팩이 우선한다.
 
-1. `docs/practice-hints-review.md`를 열어 36개 힌트를 읽는다(맨 위에 승인 방법이 있다).
-2. **승인할 문항 ID**를 `src/lib/practice-hints.ts`의 `REVIEWED_QUESTIONS`에 넣고 `npm run hints:table` → `npm test` → 배포.
-   승인 전에는 학생에게 단계 공통 안내가 그대로 나간다.
-3. 36개를 모두 켠 모습은 미리 보기 브랜치(`hints-preview-all36`)의 Vercel 미리 보기에서 본다. 그 브랜치는 `main`에 합치지 않는다.
+**2026-09-27부터 36문항 모두 승인되어 학생 화면에 문항별 힌트가 나간다**(연구자가 판단을 맡겨 논문 v12-2 서술 — 목표 + M02 확인 질문,
+정답 값 없음, 요구하지 않는 영역 제외, 단계 초점 — 에 맞춰 확인함. 근거는 `src/lib/practice-hints.ts`의 `REVIEWED_QUESTIONS` 주석).
+1. 힌트를 다시 보려면 `docs/practice-hints-review.md`를 연다(맨 위에 방법이 있다).
+2. 어떤 문항의 힌트를 내리려면 그 ID를 `REVIEWED_QUESTIONS`에서 지우고 `npm run hints:table` → `npm test` → 배포. 내린 문항은 단계 공통 안내가 나간다.
+3. 예전 미리 보기 브랜치(`hints-preview-all36`)는 이제 필요 없다.
 
 ## 4. 연구 수집(v12)을 시작하려면
 
