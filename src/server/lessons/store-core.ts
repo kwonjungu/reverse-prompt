@@ -198,6 +198,8 @@ export interface OpenLessonInput {
   /** 서버가 확정한 학급의 세션 성격. 클라이언트가 보낸 값을 넣지 않는다. */
   sessionType: SessionType;
   lesson: number;
+  /** lesson과 함께 열 차시. 관리 화면의 수업 시작은 1~6차시를 한 번에 연다. */
+  alsoOpen?: readonly number[];
   openedBy: string;
   reason: string | null;
 }
@@ -248,10 +250,11 @@ export interface LessonStore {
     ownerKey: string;
     review: FeedbackReview;
   }): Promise<SaveResult>;
+  /** ownerKey를 여럿 주면 한 학생의 여러 세션(다시 들어온 경우)을 합쳐 센다. */
   readStudentSubmissions(
     sessionType: SessionType,
     classKey: string,
-    ownerKey: string
+    ownerKey: string | readonly string[]
   ): Promise<StudentSubmissionSummary>;
 }
 
@@ -371,7 +374,10 @@ export function createLessonStore(deps: LessonStoreDeps): LessonStore {
         // 기록의 sessionType은 서버가 확정한 학급 성격이다. 학생 세션을 덮어쓰지 않는다.
         sessionType: input.sessionType,
         currentLesson: input.lesson,
-        allowedLessons: applyOpenLesson(prev.allowedLessons ?? [], input.lesson),
+        allowedLessons: [input.lesson, ...(input.alsoOpen ?? [])].reduce(
+          (open, n) => applyOpenLesson(open, n),
+          prev.allowedLessons ?? []
+        ),
         openedAt: prev.openedAt ?? now,
         closedAt: null,
         openedBy: input.openedBy,
@@ -482,14 +488,17 @@ export function createLessonStore(deps: LessonStoreDeps): LessonStore {
     },
 
     async readStudentSubmissions(sessionType, classKey, ownerKey) {
-      if (!ownerKey) return EMPTY_SUMMARY;
+      const owners = [...new Set(typeof ownerKey === 'string' ? [ownerKey] : ownerKey)].filter(Boolean);
+      if (!owners.length) return EMPTY_SUMMARY;
       try {
         const collection = submissionCollection(sessionType, classKey);
-        const rows = await backend.query<PracticeSubmissionRecord>(
-          collection,
-          'ownerKey',
-          ownerKey
-        );
+        const rows = (
+          await Promise.all(
+            owners.map((owner) =>
+              backend.query<PracticeSubmissionRecord>(collection, 'ownerKey', owner)
+            )
+          )
+        ).flat();
         // 연구 제출은 한 컬렉션에 모이므로 학급도 함께 맞춘다.
         return collectSummary(rows.filter((r) => r.classResearchId === classKey));
       } catch {

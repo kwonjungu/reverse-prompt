@@ -252,8 +252,8 @@ export default function GuidePage() {
           <div className="text-center mb-6">
             <h2 className="text-3xl font-headline font-bold">여섯 단계로 나아가요</h2>
             <p className="mt-2 text-muted-foreground">
-              한 단계에 여섯 문항이에요. 다음 단계는 선생님이 열어 주세요. 여섯 문항을 다 하지
-              않아도 괜찮고, 못 한 문항은 0점이 아니라 아직 하지 않은 것으로 남아요.
+              한 단계에 여섯 문항이에요. 1번부터 순서대로 풀고, 한 문항을 내면 다음 문항이 열려요.
+              못 한 문항은 0점이 아니라 아직 하지 않은 것으로 남아요.
             </p>
           </div>
 

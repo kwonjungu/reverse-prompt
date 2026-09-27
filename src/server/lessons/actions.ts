@@ -27,6 +27,7 @@ import type { AppMode, SessionType } from '@/lib/research/types';
 import { allowedModes } from '@/lib/research/session-modes';
 import {
   NO_SESSION_MESSAGE,
+  progressOwnerKeys,
   requireStudentSession,
   requireTeacher,
   resolveClassSessionType,
@@ -104,6 +105,11 @@ export interface LessonStateView {
   attemptsByQuestion: Record<string, number>;
   /** 피드백 검토를 남긴 문항 수. */
   reviewedQuestionCount: number;
+  /**
+   * attemptsByQuestion이 다시 들어와도 이어지는 이 학생의 기록인가.
+   * 연구 세션(researchId)과 번호가 있는 일반 수업은 true. 번호 없는 옛 반은 이번 세션뿐이라 false.
+   */
+  progressAcrossEntries: boolean;
 }
 
 /** 세션이 없거나 모드가 막힌 상태. 일반 체험으로 강등하지 않는다. */
@@ -118,6 +124,7 @@ function closedState(sessionType: SessionType, message: string, verified: boolea
     deniedMessage: message,
     attemptsByQuestion: {},
     reviewedQuestionCount: 0,
+    progressAcrossEntries: false,
   };
 }
 
@@ -150,8 +157,9 @@ export async function getLessonStateAction(
   const entryLesson = resolveEntryLesson(state, requestedLesson ?? null);
 
   const classKey = resolveClassKey(toSubmitContext(ctx));
+  const progress = await progressOwnerKeys(ctx);
   const summary = classKey
-    ? await store.readStudentSubmissions(ctx.sessionType, classKey, ctx.ownerKey)
+    ? await store.readStudentSubmissions(ctx.sessionType, classKey, progress.ownerKeys)
     : { attemptsByQuestion: {}, reviewedQuestionCount: 0 };
 
   return {
@@ -168,6 +176,7 @@ export async function getLessonStateAction(
         : decision.message,
     attemptsByQuestion: summary.attemptsByQuestion,
     reviewedQuestionCount: summary.reviewedQuestionCount,
+    progressAcrossEntries: progress.acrossEntries,
   };
 }
 

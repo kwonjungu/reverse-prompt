@@ -81,6 +81,25 @@ export async function requireStudentSession(): Promise<StudentSessionContext> {
 }
 
 /**
+ * 이 학생의 연습 진행을 읽을 소유 키 목록과, 다시 들어와도 이어지는지 여부.
+ *   - 연구 세션: researchId 하나. 다시 들어와도 같은 값이라 이어진다.
+ *   - 일반 수업: 같은 반·같은 번호의 세션을 모두 잇는다(번호가 있을 때만).
+ * 잇지 못하면(조회 실패 포함) 지금 세션 하나로 보여 준다. 진행 표시일 뿐 권한 판단이 아니다.
+ */
+export async function progressOwnerKeys(
+  ctx: StudentSessionContext
+): Promise<{ ownerKeys: string[]; acrossEntries: boolean }> {
+  if (ctx.researchId) return { ownerKeys: [ctx.ownerKey], acrossEntries: true };
+  if (!ctx.classResearchId) return { ownerKeys: [ctx.ownerKey], acrossEntries: false };
+  try {
+    const linked = await auth.linkedSessionOwners(ctx.classResearchId, ctx.ownerKey);
+    return { ownerKeys: linked.owners, acrossEntries: linked.linkedByNumber };
+  } catch {
+    return { ownerKeys: [ctx.ownerKey], acrossEntries: false };
+  }
+}
+
+/**
  * 교사 권한과 소속 학급을 확인한다. 확인되지 않으면 AuthError가 그대로 올라간다.
  * 학급 소속을 클라이언트가 보낸 값으로 판단하지 않는다.
  * 차시 개방은 쓰기 작업이므로 write로 판정한다(감사 A-4).

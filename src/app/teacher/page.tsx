@@ -35,9 +35,6 @@ import {
 } from '@/server/auth/class-data-actions';
 import { PRACTICE_QUESTIONS } from '@/lib/questions';
 import {
-  openLessonAction,
-  closeLessonAction,
-  type OpenLessonResult,
 } from '@/server/lessons/actions';
 import {
   openAssessmentSession,
@@ -112,10 +109,6 @@ export default function TeacherPage() {
   const [loadingData, setLoadingData] = useState(false);
 
   /* 차시 개방·폐쇄 — 점수·완료 수는 조건이 아니다. */
-  const [lessonNumber, setLessonNumber] = useState('1');
-  const [lessonReason, setLessonReason] = useState('');
-  const [lessonResult, setLessonResult] = useState<OpenLessonResult | null>(null);
-  const [lessonBusy, setLessonBusy] = useState(false);
 
   /* 검사 세션 — 열기·닫기와 미제출 칸 마감. */
   const [assessmentPhase, setAssessmentPhase] = useState<AssessmentPhase>('pre');
@@ -259,56 +252,6 @@ export default function TeacherPage() {
       return null;
     }
     return activeResearchClass;
-  };
-
-  const handleOpenLesson = async () => {
-    const classResearchId = requireResearchClass();
-    if (!classResearchId) return;
-    setLessonBusy(true);
-    try {
-      const res = await openLessonAction({
-        classResearchId,
-        lesson: Number(lessonNumber),
-        reason: lessonReason.trim() || null,
-      });
-      setLessonResult(res);
-      if (res.ok) void loadProgress(classResearchId, true);
-      toast(
-        res.ok
-          ? { title: `${lessonNumber}차시를 열었습니다` }
-          : { variant: 'destructive', title: '열지 못했습니다', description: res.error ?? '' }
-      );
-    } catch (err) {
-      setLessonResult(null);
-      toast({ variant: 'destructive', title: '열지 못했습니다', description: String((err as Error)?.message ?? '') });
-    } finally {
-      setLessonBusy(false);
-    }
-  };
-
-  const handleCloseLesson = async (scope: 'one' | 'all') => {
-    const classResearchId = requireResearchClass();
-    if (!classResearchId) return;
-    setLessonBusy(true);
-    try {
-      const res = await closeLessonAction({
-        classResearchId,
-        lesson: scope === 'one' ? Number(lessonNumber) : undefined,
-        reason: lessonReason.trim() || null,
-      });
-      setLessonResult(res);
-      if (res.ok) void loadProgress(classResearchId, true);
-      toast(
-        res.ok
-          ? { title: scope === 'one' ? `${lessonNumber}차시를 닫았습니다` : '수업을 닫았습니다' }
-          : { variant: 'destructive', title: '닫지 못했습니다', description: res.error ?? '' }
-      );
-    } catch (err) {
-      setLessonResult(null);
-      toast({ variant: 'destructive', title: '닫지 못했습니다', description: String((err as Error)?.message ?? '') });
-    } finally {
-      setLessonBusy(false);
-    }
   };
 
   /* ─────────── 검사 세션 ─────────── */
@@ -599,16 +542,9 @@ export default function TeacherPage() {
                           <Badge variant="secondary">수업 종료 · {shortTime(progress.lesson.closedAt)}</Badge>
                         ) : (
                           <Badge variant={progress.active ? 'default' : 'secondary'}>
-                            {progress.active ? '입장 열림' : '입장 닫힘'}
+                            {progress.active ? '수업 중' : '시작 전'}
                           </Badge>
                         )}
-                        <span className="text-sm">
-                          열린 차시:{' '}
-                          {progress.lesson?.allowedLessons.length
-                            ? progress.lesson.allowedLessons.map((n) => `${n}차시`).join(', ')
-                            : '없음'}
-                          {progress.lesson?.currentLesson ? ` · 지금 ${progress.lesson.currentLesson}차시` : ''}
-                        </span>
                       </CardDescription>
                     </div>
                     <Button
@@ -650,8 +586,8 @@ export default function TeacherPage() {
                       </p>
                     )}
                     <p className="mt-2 text-xs text-muted-foreground">
-                      {shortTime(progress.loadedAt)} 기준 · 30초마다 새로 읽습니다. 제출 수는 진행 정보일 뿐
-                      차시를 여는 조건이 아닙니다. 점수가 없는 칸은 0점이 아니라 채점 결측입니다.
+                      {shortTime(progress.loadedAt)} 기준 · 30초마다 새로 읽습니다. 학생은 1번부터 순서대로 풀며
+                      앞 문항을 내야 다음 문항이 열립니다. 점수가 없는 칸은 0점이 아니라 채점 결측입니다.
                     </p>
                   </CardContent>
                 </Card>
@@ -775,92 +711,12 @@ export default function TeacherPage() {
               <>
                 <Card className="rounded-2xl">
                   <CardHeader>
-                    <CardTitle className="text-lg">차시 열기 · 닫기</CardTitle>
+                    <CardTitle className="text-lg">단계</CardTitle>
                     <CardDescription>
-                      고른 수업ID({activeResearchClass || '미선택'})의 차시를 엽니다. 학생의
-                      <strong> 점수나 완료 문항 수는 개방 조건이 아닙니다.</strong> 1차시를 두 문항만
-                      한 학생도 2차시를 열면 들어옵니다. 아래 완료 수는 정보로만 보여 주는 값입니다.
+                      단계는 따로 열고 닫지 않습니다. 관리 화면(/admin)에서 수업을 시작하면 1~6단계가 모두 열리고,
+                      학생은 아직 안 낸 가장 앞 문항부터 순서대로 끝까지 풉니다. 앞 문항을 내야 다음 문항이 열립니다.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label>차시</Label>
-                        <Select value={lessonNumber} onValueChange={setLessonNumber}>
-                          <SelectTrigger className="h-12">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {[1, 2, 3, 4, 5, 6].map((n) => (
-                              <SelectItem key={n} value={String(n)}>{n}차시</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="lesson-reason">사유 (기록에 남습니다, 선택)</Label>
-                        <Input
-                          id="lesson-reason"
-                          value={lessonReason}
-                          onChange={(e) => setLessonReason(e.target.value)}
-                          placeholder="예: 3월 2주 정규 수업"
-                          className="h-12"
-                        />
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button onClick={() => void handleOpenLesson()} disabled={lessonBusy}>
-                        {lessonNumber}차시 열기
-                      </Button>
-                      <Button variant="outline" onClick={() => void handleCloseLesson('one')} disabled={lessonBusy}>
-                        {lessonNumber}차시만 닫기
-                      </Button>
-                      <Button variant="outline" onClick={() => void handleCloseLesson('all')} disabled={lessonBusy}>
-                        수업 전체 닫기
-                      </Button>
-                    </div>
-
-                    {lessonResult && (
-                      <Alert className={lessonResult.ok ? '' : 'border-destructive/40'}>
-                        <AlertTitle>
-                          {lessonResult.ok ? '지금 열린 차시' : '처리하지 못했습니다'}
-                        </AlertTitle>
-                        <AlertDescription className="space-y-1">
-                          {lessonResult.ok ? (
-                            <>
-                              <p>
-                                열린 차시:{' '}
-                                {lessonResult.allowedLessons.length
-                                  ? lessonResult.allowedLessons.map((n) => `${n}차시`).join(', ')
-                                  : '없음'}
-                                {lessonResult.currentLesson !== null &&
-                                  ` · 현재 ${lessonResult.currentLesson}차시`}
-                              </p>
-                              {!lessonResult.durable && (
-                                <p className="text-destructive">
-                                  {lessonResult.error ??
-                                    '서버 저장소에 남기지 못했습니다. 연구 운영에 쓰지 마세요.'}
-                                </p>
-                              )}
-                            </>
-                          ) : (
-                            <p>{lessonResult.error}</p>
-                          )}
-                        </AlertDescription>
-                      </Alert>
-                    )}
-                    <p className="text-xs text-muted-foreground">
-                      서버에 저장된 지금 상태:{' '}
-                      {progress && progress.classResearchId === activeResearchClass
-                        ? progress.lesson?.closedAt
-                          ? '수업 종료'
-                          : progress.lesson?.allowedLessons.length
-                            ? progress.lesson.allowedLessons.map((n) => `${n}차시`).join(', ') + ' 열림'
-                            : '연 차시 없음'
-                        : '반을 고르면 표시합니다'}
-                      . 관리 화면(/admin)이나 다른 기기에서 바꾼 상태도 학생 현황 탭에서 다시 읽어 옵니다.
-                    </p>
-                  </CardContent>
                 </Card>
 
                 <Card className="rounded-2xl">

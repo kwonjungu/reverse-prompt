@@ -34,7 +34,6 @@ import {
   getAdminFirestore,
 } from '@/server/firebase-admin';
 import { getLessonStore } from '@/server/lessons/store';
-import { isValidLessonNumber } from '@/server/lessons/policy';
 import { registry } from '@/server/registry';
 import type { SessionType } from '@/lib/research/types';
 
@@ -430,63 +429,29 @@ export async function setClassPasswordAction(
 /* ────────────────────────── 수업 시작·차시·종료 ────────────────────────── */
 
 /** 수업 시작: 학생 입장을 열고 그 차시를 연다. 닫혀 있던 수업이면 다시 연다. */
-export async function startClassAction(classId: string, lesson: number): Promise<AdminResult> {
+/** 관리 화면이 여는 차시. 수업을 시작하면 모두 열고, 학생은 1번부터 순서대로 푼다. */
+const ALL_LESSONS = [1, 2, 3, 4, 5, 6] as const;
+
+/**
+ * 수업 시작 = 학생 입장 열기 + 1~6차시 모두 열기. 끝난 수업도 다시 연다.
+ * 단계를 하나씩 열고 닫지 않는다. 학생 화면이 앞 문항을 낸 순서대로만 다음 문항을 연다.
+ * 이미 수업 중인 반에 다시 부르면 빠진 차시를 채운다(예전 방식으로 일부만 열린 반).
+ */
+export async function startClassAction(classId: string): Promise<AdminResult> {
   return run(async () => {
     await requireAdmin();
-    if (!isValidLessonNumber(lesson)) throw new AdminInputError('1~6차시만 열 수 있습니다.');
     const { id, ref, data } = await requireClassDoc(classId);
     const { durable } = await getLessonStore().openLessonSession({
       classResearchId: id,
       sessionType: toSessionType(data.sessionType),
-      lesson,
+      lesson: 1,
+      alsoOpen: ALL_LESSONS,
       openedBy: ADMIN_ACTOR,
-      reason: '관리 화면: 수업 시작',
+      reason: '관리 화면: 수업 시작(1~6차시)',
     });
     if (!durable) throw new AdminInputError('차시 기록을 서버에 남기지 못했습니다. 다시 해 주세요.');
     await ref.update({ active: true, updatedAt: new Date().toISOString() });
-    await recordAdminEvent('start_class', id, { lesson });
-    return null;
-  });
-}
-
-/** 차시 하나를 열거나 닫는다. 학생 입장 여부는 바꾸지 않는다. */
-export async function setLessonOpenAction(
-  classId: string,
-  lesson: number,
-  open: boolean
-): Promise<AdminResult> {
-  return run(async () => {
-    await requireAdmin();
-    if (!isValidLessonNumber(lesson)) throw new AdminInputError('1~6차시만 다룰 수 있습니다.');
-    const { id, data } = await requireClassDoc(classId);
-    const store = getLessonStore();
-    const { durable } = open
-      ? await store.openLessonSession({
-          classResearchId: id,
-          sessionType: toSessionType(data.sessionType),
-          lesson,
-          openedBy: ADMIN_ACTOR,
-          reason: '관리 화면: 차시 열기',
-        })
-      : await store.closeLessonSession({
-          classResearchId: id,
-          lesson,
-          closedBy: ADMIN_ACTOR,
-          reason: '관리 화면: 차시 닫기',
-        });
-    if (!durable) throw new AdminInputError('차시 기록을 서버에 남기지 못했습니다. 다시 해 주세요.');
-    await recordAdminEvent(open ? 'open_lesson' : 'close_lesson', id, { lesson });
-    return null;
-  });
-}
-
-/** 학생 입장만 열거나 닫는다. 이미 들어온 학생과 차시는 그대로 둔다. */
-export async function setClassEntryAction(classId: string, active: boolean): Promise<AdminResult> {
-  return run(async () => {
-    await requireAdmin();
-    const { id, ref } = await requireClassDoc(classId);
-    await ref.update({ active: active === true, updatedAt: new Date().toISOString() });
-    await recordAdminEvent(active ? 'open_entry' : 'close_entry', id, null);
+    await recordAdminEvent('start_class', id, { lessons: [...ALL_LESSONS] });
     return null;
   });
 }

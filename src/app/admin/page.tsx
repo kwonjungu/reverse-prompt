@@ -12,7 +12,7 @@
  * 학생 답안·점수는 이 화면에 나오지 않는다(관리 계정은 반·계정 관리만 한다).
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   adminSignInAction,
@@ -25,9 +25,7 @@ import {
   getAdminStatusAction,
   loadConsoleAction,
   resetTeacherPasswordAction,
-  setClassEntryAction,
   setClassPasswordAction,
-  setLessonOpenAction,
   setTeacherClassesAction,
   setTeacherDisabledAction,
   startClassAction,
@@ -72,9 +70,7 @@ import { useToast } from '@/hooks/use-toast';
 import {
   AlertTriangle,
   Copy,
-  DoorClosed,
   FlaskConical,
-  DoorOpen,
   GraduationCap,
   KeyRound,
   Loader2,
@@ -106,19 +102,21 @@ const CREDENTIAL_HINT: Record<string, string> = {
   unknown: '관리자 비밀번호 설정을 확인하지 못했습니다.',
 };
 
-type ClassPhase = 'not_started' | 'running' | 'entry_closed' | 'ended';
+/**
+ * 반의 상태는 셋뿐이다. 입장만 따로 닫는 중간 상태는 두지 않는다.
+ * 수업 중이면 학생이 들어오고 1~6단계를 순서대로 풀며, 끝내면 입장과 차시가 함께 닫힌다.
+ */
+type ClassPhase = 'not_started' | 'running' | 'ended';
 
 function phaseOf(row: AdminClassRow): ClassPhase {
   if (row.lesson?.closedAt) return 'ended';
   if (row.active) return 'running';
-  if (row.lesson && row.lesson.allowedLessons.length > 0) return 'entry_closed';
   return 'not_started';
 }
 
 const PHASE_BADGE: Record<ClassPhase, { label: string; className: string }> = {
   not_started: { label: '시작 전', className: 'bg-muted text-muted-foreground' },
-  running: { label: '수업 중 · 입장 열림', className: 'bg-emerald-600 text-white hover:bg-emerald-600' },
-  entry_closed: { label: '수업 중 · 입장 닫힘', className: 'bg-amber-500 text-white hover:bg-amber-500' },
+  running: { label: '수업 중', className: 'bg-emerald-600 text-white hover:bg-emerald-600' },
   ended: { label: '수업 종료', className: 'bg-slate-500 text-white hover:bg-slate-500' },
 };
 
@@ -330,7 +328,7 @@ export default function AdminConsolePage() {
               통합 관리
             </h1>
             <p className="text-sm text-muted-foreground">
-              반을 열고 닫으면 학생 입장과 차시가 바로 바뀝니다.
+              수업을 시작하면 학생이 들어와 1단계부터 순서대로 풉니다. 단계를 따로 열 필요가 없습니다.
               {data?.loadedAt ? ` · ${formatTime(data.loadedAt)} 기준` : ''}
             </p>
           </div>
@@ -619,16 +617,8 @@ function ClassCard(props: { row: AdminClassRow; teachers: AdminTeacherRow[]; bus
   const { toast } = useToast();
   const phase = phaseOf(row);
   const lesson = row.lesson;
-  const opened = lesson?.allowedLessons ?? [];
-  const lessonControlsApply = row.sessionType !== 'experience' || lesson?.teacherPaced === true;
-
-  const suggested = useMemo(() => {
-    if (lesson?.currentLesson) return lesson.currentLesson;
-    const max = opened.length ? Math.max(...opened) : 0;
-    return Math.min(max + 1, 6) || 1;
-  }, [lesson?.currentLesson, opened]);
-  const [startLesson, setStartLesson] = useState(String(suggested));
-  useEffect(() => setStartLesson(String(suggested)), [suggested]);
+  /** 예전 방식(차시를 하나씩 열던 때)으로 시작해 일부 단계만 열린 반. */
+  const partlyOpen = phase === 'running' && (lesson?.allowedLessons.length ?? 0) < LESSONS.length;
 
   const [endOpen, setEndOpen] = useState(false);
   const [revokeOnEnd, setRevokeOnEnd] = useState(true);
@@ -642,14 +632,6 @@ function ClassCard(props: { row: AdminClassRow; teachers: AdminTeacherRow[]; bus
     } catch {
       toast({ variant: 'destructive', title: '복사하지 못했습니다' });
     }
-  };
-
-  const toggleLesson = (n: number) => {
-    const isOpen = opened.includes(n);
-    void act(
-      () => setLessonOpenAction(row.classId, n, !isOpen),
-      isOpen ? `${n}차시를 닫았습니다` : `${n}차시를 열었습니다`
-    );
   };
 
   return (
@@ -685,94 +667,40 @@ function ClassCard(props: { row: AdminClassRow; teachers: AdminTeacherRow[]; bus
       </CardHeader>
 
       <CardContent className="space-y-4">
-        <div>
-          <div className="mb-2 flex items-center justify-between text-sm">
-            <span className="font-medium">차시 (누르면 열고 닫기)</span>
-            <span className="text-xs text-muted-foreground">
-              {phase === 'ended'
-                ? `종료 ${formatTime(lesson?.closedAt)}`
-                : lesson?.currentLesson
-                  ? `지금 ${lesson.currentLesson}차시`
-                  : ''}
-            </span>
-          </div>
-          <div className="grid grid-cols-6 gap-1.5">
-            {LESSONS.map((n) => {
-              const isOpen = opened.includes(n);
-              const isCurrent = lesson?.currentLesson === n;
-              return (
-                <Button
-                  key={n}
-                  type="button"
-                  size="sm"
-                  variant={isOpen ? 'default' : 'outline'}
-                  className={isCurrent ? 'ring-2 ring-primary ring-offset-2' : ''}
-                  disabled={busy || phase === 'ended'}
-                  onClick={() => toggleLesson(n)}
-                >
-                  {n}
-                </Button>
-              );
-            })}
-          </div>
-          {!lessonControlsApply && (
-            <p className="mt-2 text-xs text-amber-700">
-              이 반은 옛 방식(자율 진행) 기록이라 차시를 열고 닫아도 학생 화면에는 모든 차시가 보입니다.
-            </p>
-          )}
-          {phase === 'ended' && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              종료된 수업입니다. 다시 열려면 아래에서 차시를 골라 “수업 시작”을 누르세요.
-            </p>
-          )}
-        </div>
+        <p className="text-sm text-muted-foreground">
+          {phase === 'running'
+            ? '학생이 들어와 1단계부터 순서대로 풀고 있습니다. 앞 문항을 내면 다음 문항이 열립니다.'
+            : phase === 'ended'
+              ? `끝난 수업입니다${lesson?.closedAt ? ` (${formatTime(lesson.closedAt)})` : ''}. 다시 시작하면 이어서 풉니다.`
+              : '수업 시작을 누르면 학생이 들어올 수 있고 1~6단계가 모두 열립니다.'}
+        </p>
+        {partlyOpen && (
+          <Alert className="border-amber-400 bg-amber-50/60 dark:bg-amber-950/20">
+            <AlertTriangle className="h-4 w-4 text-amber-600" />
+            <AlertDescription className="flex flex-wrap items-center gap-2 text-sm">
+              예전 방식으로 시작해 일부 단계만 열려 있습니다.
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => void act(() => startClassAction(row.classId), '1~6단계를 모두 열었습니다')}
+              >
+                1~6단계 모두 열기
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
 
         <div className="flex flex-wrap items-center gap-2">
           {phase !== 'running' && (
-            <div className="flex items-center gap-2">
-              <Select value={startLesson} onValueChange={setStartLesson}>
-                <SelectTrigger className="w-[100px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {LESSONS.map((n) => (
-                    <SelectItem key={n} value={String(n)}>{n}차시</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  void act(
-                    () => startClassAction(row.classId, Number(startLesson)),
-                    `수업을 시작했습니다 · ${startLesson}차시`
-                  )
-                }
-                className="bg-emerald-600 hover:bg-emerald-700"
-              >
-                <Play className="mr-2 h-4 w-4" /> 수업 시작
-              </Button>
-            </div>
+            <Button
+              disabled={busy}
+              onClick={() => void act(() => startClassAction(row.classId), '수업을 시작했습니다')}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              <Play className="mr-2 h-4 w-4" /> {phase === 'ended' ? '수업 다시 시작' : '수업 시작'}
+            </Button>
           )}
           {phase === 'running' && (
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() => void act(() => setClassEntryAction(row.classId, false), '입장을 닫았습니다')}
-            >
-              <DoorClosed className="mr-2 h-4 w-4" /> 입장 닫기
-            </Button>
-          )}
-          {phase === 'entry_closed' && (
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() => void act(() => setClassEntryAction(row.classId, true), '입장을 열었습니다')}
-            >
-              <DoorOpen className="mr-2 h-4 w-4" /> 입장만 다시 열기
-            </Button>
-          )}
-          {(phase === 'running' || phase === 'entry_closed') && (
             <Button variant="destructive" disabled={busy} onClick={() => setEndOpen(true)}>
               <Square className="mr-2 h-4 w-4" /> 수업 끝내기
             </Button>
@@ -795,7 +723,7 @@ function ClassCard(props: { row: AdminClassRow; teachers: AdminTeacherRow[]; bus
           <AlertDialogHeader>
             <AlertDialogTitle>{row.label ?? row.classId} 수업을 끝낼까요?</AlertDialogTitle>
             <AlertDialogDescription>
-              새로 들어오는 학생을 막고 모든 차시를 닫습니다. 학생이 쓴 답과 점수는 지우지 않습니다.
+              학생이 더 들어오거나 풀 수 없게 닫습니다. 학생이 쓴 답과 점수는 지우지 않습니다.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <label className="flex items-center gap-2 text-sm">
@@ -1198,10 +1126,10 @@ function SettingsPanel(props: { status: AdminStatus; busy: boolean; act: Act }) 
           <ol className="list-decimal space-y-2 pl-5 text-sm">
             <li><strong>수업 운영</strong>에서 반을 만들고 입장 비밀번호를 정합니다.</li>
             <li><strong>교사 계정</strong>에서 담임 계정을 만들고 그 반을 배정합니다.</li>
-            <li>수업 날 <strong>수업 시작</strong>을 누르고, 칠판에 수업 번호와 비밀번호를 적습니다.</li>
-            <li>학생은 첫 화면에서 수업 번호·비밀번호·자기 번호로 그 반에만 들어갑니다.</li>
+            <li><strong>수업 시작</strong>을 누르고, 칠판에 수업 번호와 비밀번호를 적습니다. 단계는 따로 열지 않습니다.</li>
+            <li>학생은 첫 화면에서 수업 번호·비밀번호·자기 번호로 그 반에만 들어가, 아직 안 낸 가장 앞 문항부터 순서대로 풉니다.</li>
             <li>교사는 교사 화면의 <strong>학생 현황</strong>에서 누가 몇 문항을 했는지 봅니다.</li>
-            <li>끝나면 <strong>수업 끝내기</strong>로 입장과 차시를 닫습니다. 기록은 지워지지 않습니다.</li>
+            <li>다 끝나면 <strong>수업 끝내기</strong>. 기록은 지워지지 않고, 다시 시작하면 이어서 풉니다.</li>
           </ol>
         </CardContent>
       </Card>

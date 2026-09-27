@@ -686,6 +686,45 @@ test('제출 이력은 소유 키로 찾는다. 기기를 바꿔도 복원된다
   assert.deepEqual(other.attemptsByQuestion, {});
 });
 
+test('다시 들어와 세션이 바뀌어도 소유 키를 여럿 주면 한 학생의 기록으로 합쳐 센다', async () => {
+  const h = newHarness();
+  await submitPracticeCore(h.deps, experienceCtx, { ...baseInput, submissionId: 'first-entry' });
+  await submitPracticeCore(
+    h.deps,
+    { ...experienceCtx, ownerKey: 'session:sid-2' },
+    { ...baseInput, submissionId: 'second-entry' }
+  );
+  const classKey = experienceCtx.classCode as string;
+  const one = await h.store.readStudentSubmissions('experience', classKey, 'session:sid-2');
+  assert.deepEqual(one.attemptsByQuestion, { L01: 1 });
+  const both = await h.store.readStudentSubmissions('experience', classKey, [
+    'session:sid-1',
+    'session:sid-2',
+    'session:sid-2',
+  ]);
+  assert.deepEqual(both.attemptsByQuestion, { L01: 2 });
+  assert.deepEqual(
+    (await h.store.readStudentSubmissions('experience', classKey, [])).attemptsByQuestion,
+    {}
+  );
+});
+
+test('수업 시작은 1~6차시를 한 번에 연다(단계를 하나씩 열지 않는다)', async () => {
+  const h = newHarness();
+  await openLessonFor(h.store, 2, 'experience');
+  const { session } = await h.store.openLessonSession({
+    classResearchId: 'CLS-AAA',
+    sessionType: 'experience',
+    lesson: 1,
+    alsoOpen: [1, 2, 3, 4, 5, 6],
+    openedBy: 'admin_console',
+    reason: null,
+  });
+  assert.deepEqual(session.allowedLessons, [1, 2, 3, 4, 5, 6]);
+  assert.equal(session.currentLesson, 1);
+  assert.equal(session.closedAt, null);
+});
+
 test('미동의 연구 학생의 제출은 수집 단계에서 막는다', async () => {
   const h = await newResearchHarness();
   const res = await submitPracticeCore(

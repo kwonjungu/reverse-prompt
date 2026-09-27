@@ -15,15 +15,25 @@
  *     자동으로 남는 시도 기록으로만 본다. 일반 체험에서는 '다음 문제'를 누를 때 까닭을 적거나
  *     건너뛸 수 있다. 적지 않아도 넘어갈 수 있다.
  *   - 제출 뒤 완료 수를 새로 받아 와도 보고 있는 문항과 결과는 그대로 둔다.
+ *   - 순서 진행: 열린 단계(관리 화면의 수업 시작이 1~6단계를 모두 연다) 안에서 아직 내지 않은
+ *     가장 낮은 번호 문항으로 들어가고, 그보다 뒤 문항·단계는 보이지도 고르지도 못한다
+ *     (src/lib/practice-progress.ts). 교사가 단계를 하나씩 열지 않는다.
  *   - 힌트는 문항별 힌트(검수를 마친 것만)를 먼저 쓰고, 없으면 차시 공통 안내를 쓴다.
  *   - 학급·신원은 서버 세션이 정한다. 화면이 sessionStorage의 학급코드·출석번호를 보내지 않는다.
  */
 
-import { useState, useTransition, useMemo, useEffect, useCallback } from 'react';
+import { useState, useTransition, useMemo, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { PRACTICE_QUESTIONS } from '@/lib/questions';
 import { FEEDBACK_FALLBACK_TEXT } from '@/lib/feedback';
+import {
+  landingQuestion,
+  nextQuestionInOrder,
+  openQuestionsInOrder,
+  progressFrontier,
+  reachableLessons,
+} from '@/lib/practice-progress';
 import {
   getLessonStateAction,
   recordFeedbackReviewAction,
@@ -71,12 +81,28 @@ const QUESTIONS_PER_CHASI = 6;
 /** 연습 문항 ID는 레지스트리와 같은 규칙(L01~L36)을 쓴다. */
 const questionIdOf = (level: number) => `L${String(level).padStart(2, '0')}`;
 
+/** 순서 진행 계산에 쓰는 목록. index는 questions 배열의 위치다. */
+const PROGRESS_LIST = questions.map((q, index) => ({
+  id: questionIdOf(q.level),
+  level: q.level,
+  chasi: q.chasi,
+  index,
+}));
+
+/** 서버 제출 기록 + 이 화면에서 방금 낸 문항(+ 번호 없는 옛 반이면 이 기기 캐시). */
+function submittedSetOf(state: LessonStateView | null, local: Iterable<string>): Set<string> {
+  const set = new Set(local);
+  for (const [id, n] of Object.entries(state?.attemptsByQuestion ?? {})) if (n > 0) set.add(id);
+  return set;
+}
+
 /**
- * 일반 체험의 진행 캐시.
+ * 번호 없는 옛 체험 반의 진행 캐시.
  *
- * 연구 세션의 진행은 서버의 제출 이력이 근거다. 일반 체험은 서버에 학생 식별이 없어
- * 새로 고치면 무엇을 했는지 알 수 없으므로, 이 기기에만 남는 캐시로 화면 안에서
- * 이어 보여 준다. 이 값은 접근 권한·동의·완료의 근거가 아니며 잠금에 쓰지 않는다.
+ * 연구 세션과 번호가 있는 일반 수업은 서버의 제출 기록이 근거다(다시 들어와도 번호로 이어진다).
+ * 번호 없는 옛 반만 다시 들어오면 무엇을 했는지 서버가 알 수 없어, 이 기기에만 남는 캐시로
+ * 이어 보여 준다. 한 기기를 여러 학생이 쓰므로 번호로 이어지는 반에서는 읽지도 쓰지도 않는다.
+ * 이 값은 접근 권한·동의·완료의 근거가 아니다.
  */
 const PRACTICE_PROGRESS_KEY = 'experience:practice:v1';
 /** 오래된 기록으로 엉뚱한 안내를 하지 않도록 하루만 둔다. */
@@ -133,8 +159,9 @@ export default function PracticePage() {
   /** 일반 체험에서 '다음 문제'를 눌렀을 때 고치지 않은 까닭을 묻는 칸을 띄운다. */
   const [askingReason, setAskingReason] = useState(false);
   const [savingReason, setSavingReason] = useState(false);
-  /** 이 기기에서 낸 문항. 일반 체험의 표시를 이어 주기 위한 캐시일 뿐이다. */
+  /** 이 화면에서 낸 문항(+ 번호 없는 옛 반이면 이 기기 캐시). 서버 기록을 새로 받기 전에도 순서 진행에 쓴다. */
   const [cachedQuestionIds, setCachedQuestionIds] = useState<string[]>([]);
+  const localSubmittedRef = useRef<Set<string>>(new Set());
   const { toast } = useToast();
 
   /** URL의 lesson 값은 요청일 뿐이다. 허용 여부는 서버가 정한다. */
@@ -150,18 +177,31 @@ export default function PracticePage() {
    * (예전에는 여기서 문항을 단계 첫 문항으로 되돌려, 2번째 문항부터 제출하면 결과가 사라지고
    * 첫 문항 빈 칸으로 튕겼다.)
    */
-  const loadLessonState = useCallback(async (requested: number | null, opts?: { keepPosition?: boolean }) => {
+  const loadLessonState = useCallback(async (
+    requested: number | null,
+    opts?: { keepPosition?: boolean; initial?: boolean }
+  ) => {
     try {
       const state = await getLessonStateAction(requested);
+      if (opts?.initial && !state.progressAcrossEntries) {
+        for (const id of readCachedQuestionIds()) localSubmittedRef.current.add(id);
+        setCachedQuestionIds([...localSubmittedRef.current]);
+      }
       setLessonState(state);
       setLoadError(null);
       if (opts?.keepPosition) return state;
       if (state.deniedMessage) setBlockedMessage(state.deniedMessage);
-      const entry = state.entryLesson;
-      setCurrentChasi(entry);
-      if (entry !== null) {
-        const idx = questions.findIndex((q) => q.chasi === entry);
-        setCurrentQuestionIndex(idx >= 0 ? idx : 0);
+      // 아직 내지 않은 가장 낮은 문항(단계 단추를 눌렀으면 그 단계 안에서)으로 들어간다.
+      const target = landingQuestion(
+        openQuestionsInOrder(PROGRESS_LIST, state.allowedLessons),
+        submittedSetOf(state, localSubmittedRef.current),
+        { lesson: requested, fallbackLesson: state.entryLesson }
+      );
+      if (target) {
+        setCurrentChasi(target.chasi);
+        setCurrentQuestionIndex(target.index);
+      } else {
+        setCurrentChasi(state.entryLesson);
       }
       return state;
     } catch {
@@ -171,8 +211,7 @@ export default function PracticePage() {
   }, []);
 
   useEffect(() => {
-    void loadLessonState(requestedLessonFromUrl());
-    setCachedQuestionIds(readCachedQuestionIds());
+    void loadLessonState(requestedLessonFromUrl(), { initial: true });
   }, [loadLessonState]);
 
   const currentQuestion = questions[currentQuestionIndex];
@@ -185,18 +224,24 @@ export default function PracticePage() {
     ? chasiQuestions.findIndex((q) => q.level === currentQuestion.level)
     : -1;
 
-  /** 차시별 제출 문항 수. 서버의 제출 이력이 근거이며 잠금에 쓰지 않는다. */
-  const attemptedCount = useCallback(
-    (chasi: number) => {
-      const attempts = lessonState?.attemptsByQuestion ?? {};
-      return questions.filter((q) => {
-        if (q.chasi !== chasi) return false;
-        const id = questionIdOf(q.level);
-        // 서버 이력이 먼저다. 일반 체험에서는 이 기기의 캐시로 표시만 이어 준다.
-        return (attempts[id] ?? 0) > 0 || cachedQuestionIds.includes(id);
-      }).length;
-    },
+  const submittedIds = useMemo(
+    () => submittedSetOf(lessonState, cachedQuestionIds),
     [lessonState, cachedQuestionIds]
+  );
+  /** 교사가 연 단계의 문항(번호 순서)과, 그 가운데 아직 내지 않은 가장 낮은 문항. */
+  const orderedOpen = useMemo(
+    () => openQuestionsInOrder(PROGRESS_LIST, lessonState?.allowedLessons ?? []),
+    [lessonState]
+  );
+  const frontier = useMemo(() => progressFrontier(orderedOpen, submittedIds), [orderedOpen, submittedIds]);
+  /** 단추를 보여 줄 단계. 진행 위치보다 뒤 단계는 보이지 않는다. */
+  const visibleLessons = useMemo(() => reachableLessons(orderedOpen, frontier), [orderedOpen, frontier]);
+
+  /** 차시별 제출 문항 수. 서버의 제출 기록이 근거다. */
+  const attemptedCount = useCallback(
+    (chasi: number) =>
+      questions.filter((q) => q.chasi === chasi && submittedIds.has(questionIdOf(q.level))).length,
+    [submittedIds]
   );
 
   const goToChasi = async (c: number) => {
@@ -240,13 +285,12 @@ export default function PracticePage() {
         setPendingSubmissionId(res.save.ok ? null : submissionId);
         if (res.save.ok) {
           void loadLessonState(currentChasi, { keepPosition: true });
-          // 새로 고쳐도 무엇을 냈는지 화면에서 이어 보이도록 이 기기에만 남긴다.
-          const questionId = questionIdOf(currentQuestion.level);
-          if (!cachedQuestionIds.includes(questionId)) {
-            const next = [...cachedQuestionIds, questionId];
-            setCachedQuestionIds(next);
-            writeCachedQuestionIds(next);
-          }
+          // 서버 기록을 새로 받기 전에도 다음 문항이 열리도록 이 화면에 바로 남긴다.
+          localSubmittedRef.current.add(questionIdOf(currentQuestion.level));
+          const next = [...localSubmittedRef.current];
+          setCachedQuestionIds(next);
+          // 번호 없는 옛 반만 이 기기에 남긴다(다시 들어오면 서버가 이어 주지 못하므로).
+          if (lessonState && !lessonState.progressAcrossEntries) writeCachedQuestionIds(next);
         }
       } catch {
         setResult(null);
@@ -291,14 +335,21 @@ export default function PracticePage() {
     setStartedAt(new Date().toISOString());
   };
 
+  /** 번호 순서의 다음 문항. 단계를 넘어갈 수 있고, 지금 문항을 내지 못했으면 넘어가지 않는다. */
   const handleNextQuestion = () => {
-    const idxs = questions
-      .map((q, i) => ({ q, i }))
-      .filter(({ q }) => q.chasi === currentChasi)
-      .map(({ i }) => i);
-    if (!idxs.length) return;
-    const at = idxs.indexOf(currentQuestionIndex);
-    setCurrentQuestionIndex(idxs[(at + 1) % idxs.length]);
+    if (!currentQuestion) return;
+    const next = nextQuestionInOrder(
+      orderedOpen,
+      submittedSetOf(lessonState, localSubmittedRef.current),
+      currentQuestion.level
+    );
+    if (!next) {
+      setAskingReason(false);
+      toast({ title: '이 문항을 먼저 내 주세요', description: '글이 저장되면 다음 문제가 열려요.' });
+      return;
+    }
+    setCurrentChasi(next.chasi);
+    setCurrentQuestionIndex(next.index);
   };
 
   /**
@@ -410,10 +461,10 @@ export default function PracticePage() {
         </Link>
       </header>
 
-      {/* 단계 선택 — 서버가 연 단계만 나온다. 완료 수는 정보일 뿐이다. */}
+      {/* 단계 선택 — 열린 단계 가운데 진행 위치까지만 나온다(practice-progress). */}
       <nav className="px-4 pb-4" aria-label="단계 선택">
         <ol className="mx-auto flex max-w-4xl flex-wrap justify-center gap-2">
-          {lessonState.allowedLessons.map((c) => {
+          {visibleLessons.map((c) => {
             const active = c === currentChasi;
             return (
               <li key={c}>
@@ -439,11 +490,9 @@ export default function PracticePage() {
             );
           })}
         </ol>
-        {lessonState.scheduleControlled && (
-          <p className="mt-2 text-center text-xs text-muted-foreground">
-            단계는 선생님이 열어 주세요. 지금 열린 단계만 보여요.
-          </p>
-        )}
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          앞 문항을 내면 다음 문항이 열려요.
+        </p>
       </nav>
 
       {blockedMessage && (
@@ -468,8 +517,7 @@ export default function PracticePage() {
             그림을 보고 설명을 써 보세요. 몇 번이든 다시 도전할 수 있어요.
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            지금까지 이 단계에서 {doneInChasi}/{QUESTIONS_PER_CHASI} 문항을 냈어요. 다 하지 않아도
-            괜찮아요.
+            지금까지 이 단계에서 {doneInChasi}/{QUESTIONS_PER_CHASI} 문항을 냈어요.
           </p>
           {asksReviewNote && lessonState.reviewedQuestionCount === 0 && (
             <p className="mt-1 text-sm text-primary">
