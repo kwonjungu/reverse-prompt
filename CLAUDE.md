@@ -29,6 +29,8 @@ npm run genkit:dev    # Genkit 플로우 격리 실행 (선택)
 ```bash
 node --import tsx --import ./scripts/_node-server-modules.mjs scripts/score-assessments.mjs --seed <시드>
 node --import tsx --import ./scripts/_node-server-modules.mjs scripts/check-completeness.mjs --input <파일>
+# 실제 모델 예비 점검(연구자 구성 문장, 로컬 CSV만 — 연구 저장소에 쓰지 않는다)
+GOOGLE_GENAI_API_KEY=… node --import tsx --import ./scripts/_node-server-modules.mjs scripts/pilot-score.mjs --input <문장.json>
 ```
 
 `npm test`는 실제 모델을 호출하지 않는다. 모델 호출은 주입 가능한 함수로 두고 테스트에서 가짜 구현을 넣는다.
@@ -63,6 +65,7 @@ Firebase Emulator 권한 시험(`tests/rules/`)은 에뮬레이터가 없으면 
 | `CONSENT_VERSION` | 유효한 동의서 버전 | 비면 연구 동의 불가 |
 | `IRB_APPROVAL` | IRB 승인 번호 | 비면 연구 시작 차단 |
 | `LECTURE_CODE` | 연수 모드 입장 번호 | 비우면 `1111`. 인증이 아니다 |
+| `RESEARCH_SAMPLE_QUESTIONS` | 연구 추출의 대표 사진(쉼표로 구분한 문항 ID, 예: `L05,L16,L31`) | **선택·미정.** 비우면 관리 화면에서 직접 고른다. 틀린 값은 쓰지 않고 경고한다 |
 | `ADMIN_PASSWORD` | 통합 관리 화면(`/admin`) 첫 비밀번호 | **10자 이상**이어야 쓰인다. 화면에서 바꾸면 그 뒤로는 저장된 해시만 통한다 |
 
 ## 아키텍처
@@ -139,16 +142,29 @@ AI 지시문·교사 화면·내보내기 문서를 `renderForModel/renderForTea
 
 ### 영역과 수준 (모든 밴드 공통)
 - `object` 대상의 명확성 / `feature` 특징의 구체성 / `relation` 관계의 명확성. 각 **정수 1~4 또는 `'not_applicable'`**.
-- 관계 범위: A밴드(L01–12)는 대상 사이 공간 관계, B·C밴드는 장소와 행동이 필수(C의 시간대·분위기는 선택).
+- 관계 범위: A밴드(L01–12)는 대상 사이 공간 관계, B·C밴드는 장소와 행동이 필수(행동이 없는 사물·풍경은 놓인 곳과 배치,
+  C의 시간대·분위기는 선택).
 - **100점 환산·밴드별 배점·반수준 결합은 쓰지 않는다.** 점수를 합산하지 않는다.
 - 밴드(`bandOf`)는 문항 번호로 정한다: A=L01–12, B=L13–24, C=L25–36(연구 표집의 A·B·C와 같다). 단계와 무관하다.
 - **앱 종합 수준** = 해당 영역 수준 평균(not_applicable 제외)을 반올림(0.5 올림)한 1~4(`overallLevelOf`).
-  연구 표집의 층을 나누는 값이며 학생 화면에는 보이지 않는다. 저장하지 않고 필요할 때 계산한다.
+  예: (2+3)/2=2.5 → 3, (2+2+3)/3=2.33 → 2. 연구 표집의 층을 나누는 값이며 학생 화면에는 보이지 않는다.
+  저장하지 않고 필요할 때 계산한다. 일반 수업의 교사 현황에는 반 평균으로 보인다(연구 결정 R11, 연구 수업은 가림).
+
+### 운영 규칙(K 규칙)과 코드가 지키는 부분
+`OPERATING_RULES`(8개)가 논문의 규칙 문장을 그대로 담아 지시문·교사 화면·내보내기에 들어간다.
+대응: 1=K01 수량은 대상 영역, 2=K02 분위기·느낌·시간대는 선택, 3=K03 이름=형태면 대상, 4=K06 겹치면 낮은 수준(한 속성 누락 3 +
+핵심 속성 오류 2 → 2), 5=K05 대상 누락·증거 부족(`evidence_missing`, 새 오류로도 맞은 것으로도 세지 않음), 6=맞춤법·띄어쓰기·시간 제외,
+7=관계 범위, 8=해당 없음. **K07(필수 정보가 1~2개인 과제의 정보별 판정)은 채점자 기록 규칙이라 앱에 넣지 않는다** — 앱은 모든 연습 과제를
+영역별 수준으로 판정한다. 규칙 대부분은 의미 판정이라 코드가 모델 대신 볼 수 없고, 구조로 지킬 수 있는 것만 코드가 막는다
+(단서 팩에 없는 정보를 다음 행동으로 요구 못 함, 근거는 원문 그대로, 해당 없음·결측은 집계에서 뺌). `tests/k-rules.test.ts`.
 
 ### 해당 없음(not_applicable)은 누가 정하나
-- 비공개 단서 팩이 있으면 **코드가 정한다**(`applicabilityOf`): 대상은 늘 판정, 필수 속성이 비면 특징 해당 없음,
+- 비공개 단서 팩이 있으면 **단서 팩이 정한다**(`applicabilityOf`): 대상은 늘 판정, 필수 속성이 비면 특징 해당 없음,
   필수 맥락(`requiredContext`)이 비면 관계 해당 없음. 모델 출력이 이와 다르면 형식 오류다. 단서 팩 구조는 바꾸지 않았다.
-- 단서 팩이 없는 일반 체험은 모델이 정한다(대상은 늘 판정). `ScoringRun.applicabilitySource`에 `'cue_pack' | 'model'`로 남는다.
+- 단서 팩이 없으면 **코드의 기본 목록**(`src/lib/question-areas.ts`의 `RELATION_NOT_APPLICABLE_QUESTIONS`)이 관계를 정한다:
+  L01·L02·L03·L04·L06·L08·L11(대상 하나인 A밴드 그림)·L20·L23(장소를 알 수 없는 물건 그림)은 관계 해당 없음.
+  그 밖의 특징·관계는 모델이 정한다(대상은 늘 판정). **단서 팩이 있으면 단서 팩이 우선한다.**
+  `ScoringRun.applicabilitySource`에 `'cue_pack' | 'model'`로 남는다.
 
 ### 형식 오류를 유효 값으로 바꾸지 않는다
 영역마다 `{level, evidence, missing, evidence_missing}`를 받고 `validateAreaCall`이 검사한다. 0·5·2.5·`'3'`·NaN·null은
@@ -166,7 +182,8 @@ type OperationalResult =
 2. 유리한 출력을 고르려고 다시 부르지 않고, 여러 호출을 결합(평균·중앙값)하지 않는다(옛 2+1 절차는 없앴다).
 3. 다시 불러도 실패하면 운영 결측. 일부 값으로 정상 결과를 만들지 않는다.
 4. 판정이 확정되면 **피드백 실패 때문에 재채점하거나 판정을 바꾸지 않는다.**
-5. 반복 채점(검사의 `repeatIndex` 2·3)은 그대로이며 영역별 수준을 저장한다.
+5. 반복 채점은 따로 저장한다: 검사는 `repeatIndex` 2·3(scoring_runs), 연습은 연구 추출 사례의 2·3회차(`sample_repeat_scores`,
+   아래 '요약·연구 추출'). 1회차(주 자료)는 덮어쓰지 않는다.
 
 호출마다 `callId`·`retryIndex`·`purpose('score'|'feedback')`·검증된 levels·`failureReason`·**`servedModel`**(모델 API가
 응답에 밝힌 실제 모델, Gemini `modelVersion`)·시각을 남긴다. 실행 단위에는 설정한 `modelId`와 점수를 낸 호출의 `servedModel`이 함께 남는다.
@@ -195,12 +212,16 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
    3문장이 실제로 그것을 묻는지, 4문장의 제안이 그림에 맞는지는 코드가 확인하지 않는다.
 4. 쓸 수 있는 표현 제안 또는 스스로 확인할 질문
 
-코드가 확인하는 것: 네 줄·줄마다 한 문장(넘으면 탈락), 인용이 원문에 있고 2문장 안에 있음(인용 끝의 마침표는 떼고 비교),
+코드가 확인하는 것: 네 줄·줄마다 한 문장(넘으면 탈락), 한 문장 80자 이하(`MAX_FEEDBACK_LINE_CHARS`, 2문장의 학생 인용 자리는 빼고
+셈 — 넘으면 `line_too_long`), 인용이 원문에 있고 2문장 안에 있음(인용 끝의 마침표는 떼고 비교),
 칭찬·비교·점수 언급 없음(2문장 안의 학생 인용 부분은 이 검사에서 가린다 — 학생이 쓴 '완벽한'은 탈락 사유가 아니다).
 2·3문장 앞에는 코드가 영역 이름을 붙인다(`[대상] …`). 탈락하면 **확정된 판정을 알려 주는 피드백 전용 호출로 1회만** 다시 만들고,
 그래도 탈락하면 고정 안내 `표현을 선생님과 함께 확인해 보세요`와 `feedbackStatus='fallback'`. 탈락 사유는 `feedback.rejections`에 남는다.
-**네 문장 형식과 제안 수는 아동의 처리 부담을 고려한 설계 선택이며 효과가 검증된 최적값이 아니다.**
+**네 문장 형식과 제안 수, 80자 한도는 아동의 처리 부담을 고려한 설계 선택이며 효과가 검증된 최적값이 아니다.**
 형식 검사를 통과한 것이 그림 부합이나 내용 정확성을 뜻하지 않는다.
+학생의 모든 피드백 화면(연습·연수)에는 모델 문장과 별도로 고정 안내 `FEEDBACK_CAUTION`
+(`피드백이 틀릴 수 있어요. 그림과 견주어 보고, 이상하면 선생님께 물어봐요.`)이 늘 붙고, 제목은 'AI 피드백'이다
+(의인화하지 않는다). 게임·타임어택(옛 v7)은 건드리지 않았다.
 
 ## 차시와 모드 (설계서 §4)
 
@@ -210,16 +231,19 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   |---|---|---|---|
   | 1 | 도구와 작성 방식 이해 | L01–L06 | 세 영역 |
   | 2 | 대상과 수량 | L07–L12 | 대상 |
-  | 3 | 특징 | L19–L24 | 특징 |
-  | 4 | 관계 | L13–L18 | 관계 |
+  | 3 | 특징 구체화 | L19–L24 | 특징 |
+  | 4 | 관계 표현 | L13–L18 | 관계 |
   | 5 | 피드백 검토와 재작성 | L25–L30 | 세 영역 |
-  | 6 | 종합 | L31–L36 | 세 영역 |
+  | 6 | 종합 작성 | L31–L36 | 세 영역 |
+
+  밴드로 보면 A = 1·2단계, B = 3·4단계, C = 5·6단계다.
 
   초점은 힌트의 질문 순서와 피드백(1문장 목표, 3문장 영역의 동점 처리)에만 쓴다. **채점은 모든 단계에서 세 영역(해당 없음 포함)을 기록한다.**
   레지스트리의 연습 문항 `lesson`은 이 단계 값이다(L13은 4, L19는 3). 옛 제출 문서의 `lesson`은 저장된 값 그대로다.
 - 차시 기록은 서버에 있다(`LessonSession`: classResearchId, currentLesson, allowedLessons,
   openedAt, closedAt, openedBy, reason). **관리 화면의 수업 시작이 1~6차시를 한 번에 연다.**
-  교사·관리자가 단계를 하나씩 열고 닫는 화면은 없앴다(교사 API `lessons/open·close`는 남아 있다).
+  교사·관리자가 단계를 하나씩 열고 닫거나 순서를 바꾸는 화면은 **두지 않는다**(교사 API `lessons/open·close`는 남아 있다).
+  연구 수집에서는 모든 학생이 같은 조건에서 쓰도록 제시 순서를 고정하는 것이 논문 결정이다(v12-2 87번 1-6).
 - **순서 진행(학생 화면).** 열린 단계 안에서 **제시 순서로** 아직 내지 않은 가장 앞 문항으로 들어가고(L12 다음은 L19),
   그보다 뒤 문항·단계는 **보이지도 고르지도 못한다.** 한 문항을 내야(저장 성공) 다음 문항이 열린다.
   단계 단추도 열린 문항이 있는 단계만 보인다. 규칙은 `src/lib/practice-progress.ts`(순수)에 있다.
@@ -240,10 +264,9 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 - 연구 세션에서는 게임·타임어택·감수·임의 이미지 생성의 직접 경로와 관련 서버 액션을 모두 거부한다.
   감수 화면은 `/admin/audit`로 옮겼고 middleware가 그 경로를 잡는다. `/admin` 자체는 관리자 비밀번호로 막는다.
 - 관리 화면에서 만든 반(`pacing:'teacher'`)은 일반 수업이어도 연 차시만 열린다(위 "통합 관리 화면" 참고).
-- **연구 세션에서는 고치지 않은 이유를 묻지 않는다(논문 v12).** 입력칸을 숨기고 서버도 `kept`를 받지 않는다.
+- **학생은 고치지 않은 이유를 적지 않는다(논문 v12-2).** 어떤 세션에서도 입력칸이 없고 서버도 `kept`·note를 받지 않는다.
   수정 과정은 제출할 때마다 남는 시도 기록으로만 본다. '고쳐서 다시 쓰기'의 `revised` 연결만 남고 글은 저장하지 않는다.
-  일반 체험은 **'다음 문제'를 누를 때** 고치지 않은 까닭을 묻고, 학생이 적고 넘어가거나 **건너뛸** 수 있다.
-  건너뛰면 아무것도 기록하지 않는다(`kept` 없음).
+  예전에 일반 체험에서 저장된 까닭(`feedbackReview.note`)은 **지우지 않는다.** 연구 내보내기에는 애초에 싣지 않는다.
 
 ## 통합 관리 화면 (`/admin`) — 반을 여는 쪽
 
@@ -328,7 +351,9 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 - `loadClassProgress`(교사, 배정된 반만)가 반 기록·차시 기록·학생 세션·제출을 다시 읽어 `src/server/lms/progress.ts`로 묶는다.
   다시 들어와 세션이 바뀌어도 같은 번호면 한 줄이다. 30초마다 새로 읽는다.
 - 일반 수업은 영역별 수준·종합 수준(1~4)·최근 답안까지 보인다. 결측은 수준 1이 아니며 평균에 넣지 않는다.
-  옛 v7 기록은 '옛 채점'으로 따로 보이고 v12-2 평균에 섞지 않는다.
+  옛 v7 기록은 **점수 없이** '옛 채점 기록'으로만 보이고 v12-2 평균에 섞지 않는다. 옛 100점·축 점수는 교사 화면으로 가는
+  응답에서 빼고 보낸다(`stripLegacyScores`, 저장 문서는 그대로).
+- 개인정보 점검으로 멈춘 제출은 **건수만** 보인다(`privacyHoldCount`, 글·학생은 기록하지 않는다).
 - **연구 수업은 교사 블라인드 채점을 흐리지 않도록 AI 판정·답안·시각을 보여 주지 않는다.** 참가자별 진행 수만 보인다.
   교사 화면의 '연구 자료' 탭도 교사에게는 `toTeacherBlindRecord`(AI 판정·피드백·모든 시각 필드 제거)만 준다. 연구자 역할은 전체를 본다.
 - 단계 열은 문항 ID로 현재 단계표에서 정한다(옛 기록의 저장된 `lesson`은 3·4단계가 바뀌기 전 값이라 쓰지 않는다).
@@ -343,7 +368,11 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   researchId·classResearchId·questionId·questionLevel(=level)·lesson(=chasi)·band·attemptNo, 개인정보 점검을 거친 text,
   scoring.feedback(text·status·strengthArea·nextArea·nextTarget·rejections), scoring.result.areas(영역별 level·evidence·missing·evidenceMissing),
   rubricVersion('v12-2')·cueVersion·scoring.modelId(설정값)·scoring.servedModel(실제 모델)·promptHash·imageHash,
-  startedAt·submittedAt·durationMs, responseStatus·missingReason·persistStatus.
+  startedAt·submittedAt·durationMs, responseStatus·missingReason·persistStatus, schemaVersion('v12.2-practice-submission').
+  `tests/lessons.test.ts`의 'F1 시도마다 저장하는 필드'가 이 목록을 고정한다. 이름·출석번호·학교는 저장하지 않는다.
+- 개인정보 점검에 걸려 모델로 보내지 않은 제출은 **유형과 시각만** 남긴다(`PrivacyHoldRecord`: schemaVersion 'v12.2-privacy-hold',
+  sessionType·classKey·questionId·types·checkVersion·heldAt). 연구는 `research/v7.0/privacy_holds`, 일반 수업은
+  `classes/{학급 코드}/privacy_holds`. 글·일치한 글자·연구ID·세션은 담지 않는다. 학생은 고쳐 써서 다시 낸다.
 - 연습 문항은 레지스트리에 이미지 해시가 없어 예전에는 `imageHash`가 null이었다. 이제 채점 때 실제로 읽은 해시를 남긴다
   (채점 전에 끝난 결측이면 여전히 null — 지어내지 않는다).
 - **`SCHEMA_VERSION`을 `v12.2`로 올렸다**(문서의 `schemaVersion`, 예: `v12.2-practice-submission`). 저장 경로의 버전 조각은
@@ -351,12 +380,17 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   옛 `v7.0-…` 문서는 강제 이관하지 않고 그대로 읽는다(옛 5수준 결과는 연구 요약·추출에서 빠지고 표시된다).
 
 ### 문항별 힌트 — 목표 + 확인 기준 (설계 원리 1)
-- `src/lib/practice-hints.ts`가 36문항 힌트를 **규칙으로 만든다**(손으로 쓰지 않는다). 힌트 = 목표 한 문장
-  (`이 그림을 못 본 친구가 똑같이 떠올릴 수 있게 써요.`) + 영역마다 확인 질문 한 문장(루브릭 4수준 기준을 학생 말로).
-  관계 질문은 A밴드는 공간 관계, B·C밴드는 장소·행동. C밴드는 시간대·분위기에 관한 선택 안내를 덧붙인다.
-- **단계 초점 영역의 질문이 맨 앞**이다. 정답 값(대상 이름·색 이름·개수)과 특정 부위는 말하지 않는다(`tests/hints.test.ts`).
-- 비공개 단서 팩에서 해당 없음인 영역의 질문은 뺀다 — 서버가 차시 상태(`notApplicableAreas`)로 **영역 이름만** 알려 주고
-  화면이 `withoutAreas`로 거른다. 단서 팩 내용은 클라이언트로 가지 않는다.
+- `src/lib/practice-hints.ts`가 36문항 힌트를 **규칙으로 만든다**(손으로 쓰지 않는다).
+  힌트 = 목표(공통 `이 그림을 못 본 친구가 똑같이 떠올릴 수 있게 써요.` + 단계별 둘째 문장 `STAGE_GOAL`) + 영역마다 확인 질문 한 문장.
+  특징 질문은 3단계만 겉모습까지(`색·모양·겉모습(매끈한지, 거친지 등)이 …`). 관계 질문은 문항별 예외 목록(`src/lib/question-areas.ts`)으로:
+  A밴드 `서로 어디에 있는지(위·아래·옆·안)`, 행동이 없는 사물·풍경(L22·L24·L25·L28·L30) `무엇이 어디에 어떻게 놓여 있는지`,
+  그 밖의 B·C밴드 `어디에서 무엇을 하고 있는지`. C밴드는 시간대·분위기에 관한 선택 안내를 덧붙인다.
+- **단계 초점 영역의 질문이 맨 앞**이다. 정답 값(대상 이름·색 이름·개수)과 특정 부위는 말하지 않는다 — `tests/hints.test.ts`가
+  36문항의 모든 문장을 36개 그림 제목의 낱말·숫자·색·수량·부위 낱말과 견준다(예외: 일반 낱말 '모양', 보기 목록 '(위·아래·옆·안)'·'(매끈한지, 거친지 등)').
+- 해당 없음인 영역의 질문은 화면에서 뺀다(`screenHintOf`). 단서 팩이 있으면 단서 팩이, 없으면 기본 목록이 정하고
+  (L01–L04·L06·L08·L11·L20·L23의 관계), 서버가 차시 상태(`notApplicableAreas`)로 **영역 이름만** 알려 준다.
+  초안에는 세 영역 질문이 모두 있다(단서 팩이 관계를 요구하면 나가야 하므로). 단서 팩 내용은 클라이언트로 가지 않는다.
+- 검수 전에 나가는 단계 공통 안내(`GUIDE`)도 같은 규칙에 맞췄다(1단계 '둘 이상이 있으면 서로 어디에 있는지도', 3단계 겉모습, 5단계 '피드백을 그림과 견주어').
 - **`REVIEWED_QUESTIONS`에 넣은 문항의 힌트만 학생 화면에 나간다.** 검수 전에는 단계 공통 안내(`GUIDE`)가 나간다.
   검수표: `docs/practice-hints-review.md`(`npm run hints:table`). 예전 문항별 초안 문구는 지우지 않고 검수표의 참고 열로 남겼다
   (그림의 부위를 짚는 문구라 학생 번들에 싣지 않고 `scripts/print-practice-hints.mjs`에만 둔다).
@@ -368,8 +402,9 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 - **앱 종합 수준** = 해당 영역 수준 평균(not_applicable 제외)을 반올림(0.5 올림)한 1~4(`overallLevelOf`, `APP_LEVEL_RULE` — `src/lib/scoring.ts`).
   반올림 전 값(`app_level_raw`)도 함께 낸다. **이 규칙은 코드가 정한 것이다. 논문에 다른 정의가 있으면 `overallLevelOf` 하나만 바꾸면 된다.**
   저장된 수준이 1~4·not_applicable 밖이면 보정하지 않고 결측으로 읽는다. 결측은 분포·평균에 넣지 않고 따로 센다.
-- **옛 v7(5수준·100점) 기록은 요약·추출에서 뺀다.** 시도 CSV에는 `legacy_rubric=true`와 옛 값(`v7_*` 열)으로 남고,
-  빠진 수(`legacyAttemptCount`)를 관리 화면에 보인다. 판정은 `isLegacyPracticeRecord`(`src/server/lessons/store-core.ts`) 하나를 쓴다.
+- **옛 v7(5수준·100점) 기록은 요약·추출·교사 화면에서 뺀다.** 연구자용 시도 CSV에만 옛 기록 보존용으로 `legacy_rubric=true`와
+  옛 값(`v7_*` 열)이 남고(지우지 않는다), 빠진 수(`legacyAttemptCount`)를 관리 화면에 보인다. 판정은 `isLegacyPracticeRecord` 하나를 쓴다.
+  옛 5수준 추출 결과는 다시 내보내지 않는다(기록은 그대로). 학생이 예전에 적은 까닭(`feedbackReview.note`)은 어떤 연구 CSV에도 없다.
 - 학생 × 문항 요약: 시도 수, 첫·최종 프롬프트, 첫·최종 영역별 수준과 종합 수준, 최종 영역별 근거·빠진 정보, 피드백 목록(시도 순, ` | `),
   첫·최종 제출 시각, 결측 여부. 문항 요약: 36문항 모두, 단계(`chasiOfLevel`), 학생 수, 평균 시도 수(반올림 안 함),
   최종 종합 1~4수준 분포, 영역별 최종 수준 평균(반올림 안 함)과 해당 없음 수, 결측 수.
@@ -378,10 +413,22 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   (`schemaVersion: 'v12-extraction-1'`, 형이 바뀌지 않아 그대로). 최종 프롬프트가 개인정보 점검에 걸리면 '개인정보 의심'으로 표시만 한다(자동 제외 아님).
 - 추출: 문항(최대 3) × 앱 종합 4수준으로 층을 나눠 층마다 n개(**기본 5**, 1~9)를 뽑는다. 층마다 `${seed}|${문항}|${수준}` 난수로 섞어
   문항을 고른 순서와 무관하게 같은 결과가 나온다. 모자란 층은 채우지 않고 shortfall로 남긴다.
-  사례 ID `{문항번호}-{수준}{순번}`(예: 01-31). 시드·후보·제외 목록·결과를 `research/v7.0/extraction_samples`에 저장한다
-  (`schemaVersion: 'v12-2-extraction-1'`). 옛 5수준 추출 결과는 다시 받아도 옛 열 그대로 나온다(4수준으로 바꾸지 않는다).
-  **추출 CSV에는 앱의 판정(case_id·app_level·app_level_raw·영역별 수준·근거·빠진 정보)이 들어 있다.**
-  전문가에게 앱 판정을 가리려면 이 열들을 빼고 다른 번호를 붙인다(관리 화면에도 안내한다).
+  사례 ID `{문항번호}-{수준}{순번}`(예: 01-31). 시드·후보·제외 목록·뺀 수(`exclusionCounts`)·결과를 `research/v7.0/extraction_samples`에
+  저장한다(`schemaVersion: 'v12-2-extraction-1'`).
+- **추출 결과는 세 파일로 낸다**(추출할 때 함께, 지난 추출에서 다시 받기):
+  - 전문가용 `rp_sample_{id}_expert.csv`: `expert_case_id, question_id, student_text`뿐이다. 새 사례번호는 `${seed}|expert` 난수로
+    섞어 E001부터 매긴다(`expertCaseIdsOf`, 같은 시드면 같은 번호). 앱 판정·앱 사례 ID·연구ID·시각이 없다.
+  - 연구자용 `rp_sample_{id}_researcher.csv`: `expert_case_id` 대응표 + 앱 판정(기존 추출 열).
+  - 뺀 수 `rp_sample_{id}_exclusions.csv`: 문항 × 사유(`irrelevant`·`personal_info`·`no_consent`·`final_missing`)별 수. 학생 식별자 없음.
+- 고른 문항이 A·B·C밴드 하나씩이 아니면 경고한다(막지 않음, `bandCoverageWarning`). 대표 사진은 설정값 `RESEARCH_SAMPLE_QUESTIONS`
+  (예: `L05,L16,L31`)로 미리 고른다. **지금은 비어 있다(미정).** 모자란 층은 다른 층에서 채우지 않고 부족분(shortfall)으로 남긴다.
+- **반복 채점(2·3회차)**: 지난 추출 목록의 '2회차'·'3회차' 단추가 추출 사례의 최종 시도 글을 운영 채점기
+  (`grading.runOperationalScoring`, 같은 모델·온도·지시문·단서 팩)로 다시 채점해 `research/v7.0/sample_repeat_scores/{추출}__{사례}__r{n}`에
+  따로 저장한다(`schemaVersion 'v12.2-sample-repeat-1'`, 필드: sampleId·caseId·questionId·finalSubmissionId·repeatIndex·status·run·scoredAt).
+  1회차(제출 문서의 채점)는 건드리지 않는다. 동의가 지금 유효하지 않으면 부르지 않고 `skipped_consent`로 남긴다. 서버 함수 시간 제한 때문에
+  사례 하나씩 이어 부르며 이미 채점한 사례는 다시 부르지 않는다. CSV: 회차별 영역 수준(`r1_object_level`…) / 영역별 세 번 일치 비율
+  (`agreement_rate` = 세 번 모두 같은 수준 ÷ 세 번 모두 1~4로 채점된 사례, 해당 없음·결측은 분모에서 빼고 따로 셈, 반올림 안 함).
+- 개인정보 점검으로 멈춘 제출 수를 개요에 건수로만 보인다.
 - CSV는 브라우저로만 내려간다(BOM은 브라우저에서 다시 붙인다). `rp_*.csv`·`/exports/`는 `.gitignore`에 있다.
 
 ## 연수 모드 (`/lecture`) — 연구 경로가 아니다
@@ -460,12 +507,15 @@ consents / consent_events   # 동의·승낙(guardianConsent·studentAssent·con
 student_sessions            # 학생 세션 토큰 폐기 목록
 audit_approvals             # 실데이터 감수 승인 기록
 classes/…                   # 비연구 수업 기록 (기존 구조 유지)
+  {학급 코드}/privacy_holds  #   일반 수업의 개인정보 보류 기록(유형·시각만)
 
 research/v7.0/
   assessment_sessions  assessment_windows  assessment_submissions
   assessment_rejections  practice_submissions  lesson_sessions
   scoring_runs  scoring_batches  teacher_blind_scores
   extraction_exclusions  extraction_samples      # v12 연구 추출(제외 표시·추출 결과)
+  sample_repeat_scores                           # 추출 사례의 반복 채점 2·3회차(주 자료는 건드리지 않음)
+  privacy_holds                                  # 연구 수업의 개인정보 보류 기록(유형·시각만, 글 없음)
 ```
 
 클라이언트가 보낸 문자열을 문서 ID나 경로에 쓰기 전에는 `assertSafeDocId`를 지난다.
@@ -509,10 +559,20 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
   `npm test`에서 skip으로 나오며 **skip은 통과가 아니다.**
 - 실제 모델 연동 시험을 하지 않았다. 모델 호출은 전부 가짜 구현으로 시험했다. 특히 v12-2의 엄격한 형식 검사
   (evidence 원문 일치, 네 문장·한 줄 한 문장, 인용이 2문장 안에, 다음 행동 영역 일치)를 실제 모델이 얼마나 자주 통과하는지는
-  아직 모른다. 운영에서 결측(schema_error)·피드백 fallback 비율과 `feedback.rejections`를 먼저 확인할 것.
+  아직 모른다. 수집 전에 `scripts/pilot-score.mjs`(연구자 구성 문장 24개)로 결측률·fallback률·`feedback.rejections`를 먼저 확인할 것.
+  피드백 한 문장 80자 한도(`line_too_long`)도 fallback을 늘릴 수 있다.
 - `servedModel`은 Gemini 응답의 `modelVersion`을 읽는다. 플러그인이 그 값을 넘기지 않으면 null로 남는다(지어내지 않는다).
-- A밴드 관계 영역: 대상이 하나뿐인 그림은 관계가 해당 없음이어야 하는데, 단서 팩이 없으면 모델이 정한다.
-  단서 팩을 쓸 때는 필수 맥락(`requiredContext`)을 비워 두면 코드가 해당 없음으로 정한다. 검수표에 문항별 판단 거리를 적어 두었다.
+- 관계 해당 없음: 단서 팩이 없으면 코드의 기본 목록(L01–L04·L06·L08·L11·L20·L23)이 정하고, 단서 팩이 있으면 단서 팩(`requiredContext`가 비면
+  해당 없음)이 우선한다. 단서 팩이 L20·L23에 관계를 적으면 그 문항 화면에 B·C 기본 관계 질문('어디에서 무엇을 하고 있는지')이 나간다
+  (사물·풍경 목록에서 두 문항을 뺐기 때문 — 87번 1-2).
+- 연습 사진 교체(L03 흰색과 검은색 축구공, L12 회색 조약돌 네 개, L15 물풀 사이 물고기, L17 정원 잔디밭의 고양이, 선택 L36)는
+  **그림을 받기 전이라 하지 않았다.** 받으면 한 커밋에서 `public/questions/Lxx.jpg`, `src/lib/questions.ts`의 koreanTitle,
+  `src/server/registry/practice-source-prompts.ts`의 subject, `scripts/print-practice-hints.mjs`의 NOTES·예전 초안 → `npm run hints:table`,
+  레지스트리 이미지 해시(연습 문항은 고정 해시가 없어 채점 때 계산 — 고정하면 `entries.ts`), 연수 20문항 목록(`src/lib/lecture-questions.ts`),
+  제목·해시를 고정한 시험을 함께 고친다.
+- 연습 반복 채점(2·3회차)은 관리 화면 단추로 추출 사례에만 돌린다. 실제 모델·Firestore로 돌려 보지 않았다(순수 규칙만 시험).
+  서버 함수 시간 제한에 걸리지 않게 사례 하나씩 부르지만, 한 사례가 모델 호출 3번(채점·재시도·피드백)을 넘기면 끊길 수 있다 — 다시 누르면 이어서 한다.
+- 개인정보 보류 기록은 보류 여부·유형·시각만 남긴다. 교사가 개별 글을 확인하는 흐름은 없다(학생이 고쳐 쓴다).
 - 검사 단서 노출 점검은 비공개 단서 팩이 있을 때만 실제 문장으로 훑는다. 팩이 없으면 건너뛴다.
 - edge middleware는 힌트 쿠키만 읽는다(힌트가 없으면 열지 않는다). 실제 판정은 server action·API가 다시 한다.
 - 교사 블라인드·연구자 화면이 아직 연습 제출만 읽는다. 검사 6응답은 내보내기 경로로 받아야 한다.
@@ -576,6 +636,9 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 | 학생 현황 집계(보이는 범위) | `src/server/lms/progress.ts` |
 | 문항별 힌트·검수 상태 | `src/lib/practice-hints.ts` (고친 뒤 `npm run hints:table`) |
 | 연습 순서 진행(어디로 들어가고 무엇이 보이는가) | `src/lib/practice-progress.ts` |
+| 관계 기본 해당 없음 문항·사물·풍경 관계 질문 문항 | `src/lib/question-areas.ts` |
+| 추출 사례 반복 채점·일치 비율 | `src/server/export/repeat-scores.ts` · `src/server/admin/research-actions.ts` |
+| 실제 모델 예비 점검(연구자 구성 문장) | `scripts/pilot-score.mjs` · `src/server/export/pilot-summary.ts` |
 | 요약·층화 추출 규칙(앱 종합 4수준 산정은 `scoring.ts`의 `overallLevelOf`) | `src/server/export/practice-summary.ts` |
 | 모델 교체 | `src/server/config.ts`의 `EVALUATION_MODEL_ID` |
 

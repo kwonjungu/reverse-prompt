@@ -88,7 +88,10 @@ export interface PracticeScoringRecord {
 
 export interface FeedbackReview {
   kind: 'revised' | 'kept';
-  /** kind가 kept일 때 학생이 적은 '고치지 않은 까닭'. */
+  /**
+   * kind가 kept일 때 학생이 적은 '고치지 않은 까닭'. 이제 받지 않으며(논문 v12-2) 새 기록은 늘 null이다.
+   * 예전 일반 체험 기록에 남은 값은 지우지 않고, 연구 내보내기에 싣지 않는다.
+   */
   note: string | null;
   /** kind가 revised일 때 다시 제출한 제출ID. */
   revisedSubmissionId: string | null;
@@ -117,7 +120,7 @@ export interface PracticeSubmissionRecord
   clientSubmissionId: string | null;
   /** 채점 작업의 결과와 호출 이력. 결측이면 result.areas가 null이다(옛 v7 기록은 levels·score가 null). */
   scoring: PracticeScoringRecord;
-  /** 피드백 검토 기록. 재제출 또는 고치지 않은 까닭 중 하나가 남는다. */
+  /** 피드백 검토 기록. 새 기록은 '고쳐서 다시 쓰기'(revised) 연결만 남는다. 옛 기록에는 kept가 있을 수 있다. */
   feedbackReview: FeedbackReview | null;
   createdAt: string;
 }
