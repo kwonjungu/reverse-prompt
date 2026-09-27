@@ -16,8 +16,10 @@ import {
   ASSESSMENT_INSTRUCTION,
   ASSESSMENT_ORDER,
   assessmentImageUrl,
+  PRACTICE_QUESTION_IDS,
   baseEntries,
-  collectBlockers,
+  collectAssessmentBlockers,
+  collectPracticeBlockers,
   findBaseEntry,
   isSessionTypeAllowed,
   practiceImagePath,
@@ -50,7 +52,7 @@ export interface ImageBytes {
   sha256: string;
 }
 
-/** 검사 이미지의 파일 존재·해시 일치 여부. readiness가 동기라서 동기로 받는다. */
+/** 검사 이미지의 파일 존재·해시 일치 여부. assessmentReadiness가 동기라서 동기로 받는다. */
 export interface AssessmentImageStatus {
   missing: string[];
   mismatch: string[];
@@ -70,7 +72,7 @@ export interface RegistryDeps {
   cuePack(): LoadedCuePack;
   /** 이미지 바이트. 파일이 없거나 해시가 명세와 다르면 null. */
   loadImageBytes(entry: RegistryEntry): Promise<ImageBytes | null>;
-  /** readiness 판정에 쓸 검사 이미지 상태 */
+  /** 옛 검사 준비 조건(assessmentReadiness)에 쓸 검사 이미지 상태 */
   assessmentImageStatus(): AssessmentImageStatus;
   config: RegistryConfigView;
 }
@@ -297,11 +299,30 @@ export function createRegistry(deps: RegistryDeps): RegistryApi {
     };
   };
 
+  /**
+   * 논문 v12 연구 수업(연습)의 준비 조건. 운영값 셋과 연습 36문항 단서만 본다.
+   * 옛 사전·사후 검사 조건(검사 문항 확정·이미지·해시·단서)은 assessmentReadiness가 따로 본다.
+   */
   const readiness = () => {
+    const pack = deps.cuePack();
+    const blockers = collectPracticeBlockers({
+      consentVersion: deps.config.consentVersion,
+      irbApproval: deps.config.irbApproval,
+      modelAccessVerified: deps.config.modelAccessVerified,
+      cuePackLoaded: pack.loaded,
+      cuePackError: pack.error,
+      cuePackVersion: pack.cueVersion,
+      practiceCuesMissing: PRACTICE_QUESTION_IDS.filter((id) => !pack.questions[id]),
+    });
+    return { researchReady: blockers.length === 0, blockers };
+  };
+
+  /** 옛 사전·사후 검사의 준비 조건(v12 이전 readiness 그대로). 검사 경로만 쓴다. */
+  const assessmentReadiness = () => {
     const pack = deps.cuePack();
     const imageStatus = deps.assessmentImageStatus();
     const assessmentCuesMissing = ASSESSMENT_ORDER.filter((id) => !pack.questions[id]);
-    const blockers = collectBlockers({
+    const blockers = collectAssessmentBlockers({
       researchAssetDir: deps.config.researchAssetDir,
       consentVersion: deps.config.consentVersion,
       irbApproval: deps.config.irbApproval,
@@ -323,6 +344,7 @@ export function createRegistry(deps: RegistryDeps): RegistryApi {
     toPublicView,
     assessmentOrder: () => [...ASSESSMENT_ORDER],
     readiness,
+    assessmentReadiness,
   };
 }
 

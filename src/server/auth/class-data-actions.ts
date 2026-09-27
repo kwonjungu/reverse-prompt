@@ -30,6 +30,7 @@ import type { QueryDocumentSnapshot } from 'firebase-admin/firestore';
 import { experienceSubmissionsPath, getLessonStore } from '@/server/lessons/store';
 import {
   scoringViewOf,
+  stripLegacyScores,
   summarizeClassProgress,
   toProgressSession,
   toProgressSubmission,
@@ -137,9 +138,10 @@ export async function loadLessonRecords(classCode: string): Promise<{
   return {
     practiceAttempts: practiceSnap.docs.map((d) => {
       const plain = toPlain(d);
-      return { ...plain, scoringView: scoringViewOf(plain) };
+      // 분류는 원본으로 하고, 화면에는 점수를 뺀 문서만 보낸다.
+      return { ...stripLegacyScores(plain), scoringView: scoringViewOf(plain) };
     }),
-    submissions: submissionSnap.docs.map(toPlain),
+    submissions: submissionSnap.docs.map((d) => stripLegacyScores(toPlain(d))),
   };
 }
 
@@ -278,6 +280,8 @@ export interface ClassProgressView extends ClassProgress {
   } | null;
   /** 제출 기록을 찾을 학급 키가 없는 옛 반이면 안내 문구 */
   notice: string | null;
+  /** 전송 전 개인정보 점검으로 멈춘 제출 수(건수만. 글·학생은 남기지 않는다). 셀 수 없으면 null */
+  privacyHoldCount: number | null;
   loadedAt: string;
 }
 
@@ -313,10 +317,13 @@ export async function loadClassProgress(classResearchId: string): Promise<ClassP
           .where('classResearchId', '==', id)
           .get();
 
-  const [lesson, sessionsSnap, submissionsSnap] = await Promise.all([
+  // 보류 기록의 학급 키는 제출과 같다(연구: 학급 연구ID, 일반: 학급 코드).
+  const holdKey = sessionType === 'experience' ? classCode : id;
+  const [lesson, sessionsSnap, submissionsSnap, holds] = await Promise.all([
     getLessonStore().readLessonSession(id),
     db.collection(COLLECTIONS.studentSessions).where('classResearchId', '==', id).get(),
     submissionsQuery,
+    holdKey ? getLessonStore().listPrivacyHolds(sessionType, holdKey).catch(() => null) : Promise.resolve(null),
   ]);
 
   const submissions = (submissionsSnap?.docs ?? [])
@@ -343,6 +350,7 @@ export async function loadClassProgress(classResearchId: string): Promise<ClassP
       sessionType === 'experience' && !classCode
         ? '이 반은 관리 화면에서 만든 반이 아니라 제출 기록 위치를 알 수 없습니다. 입장 현황만 보입니다.'
         : null,
+    privacyHoldCount: holds ? holds.length : null,
     loadedAt: now,
   };
 }

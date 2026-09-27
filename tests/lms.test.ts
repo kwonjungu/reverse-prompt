@@ -16,6 +16,7 @@ import { test } from 'node:test';
 
 import {
   scoringViewOf,
+  stripLegacyScores,
   stageOfSubmission,
   summarizeClassProgress,
   toProgressSession,
@@ -64,18 +65,17 @@ function sub(
     levels,
     overallLevel: overall && overall.kind === 'areas' ? overall.overallLevel : null,
     legacy: false,
-    legacyScore: null,
     reviewed: false,
     ...extra,
   };
 }
 
-/** 옛 v7 채점 제출(100점). */
+/** 옛 v7 채점 제출. 점수는 화면으로 보내지 않으므로(B1) 받아도 쓰지 않는다. */
 function legacySub(ownerKey: string, questionId: string, score: number | null, at: string): ProgressSubmission {
+  void score;
   return {
     ...sub(ownerKey, questionId, null, at),
     legacy: true,
-    legacyScore: score,
   };
 }
 
@@ -191,9 +191,9 @@ test('옛 v7 기록은 옛 채점으로만 남고 v12-2 평균·최근 수준에
   assert.equal(row.legacySubmissions, 2);
   assert.equal(progress.totals.legacySubmissions, 2);
   assert.equal(row.recent[0].legacy, true);
-  assert.equal(row.recent[0].legacyScore, null);
   assert.equal(row.recent[1].legacy, true);
-  assert.equal(row.recent[1].legacyScore, 95);
+  // B1: 옛 100점 점수는 교사 화면으로 가는 자료에 없다.
+  assert.equal('legacyScore' in row.recent[1], false);
   assert.equal(row.recent[1].levels, null, '옛 기록에서 영역 수준을 지어내지 않는다');
 });
 
@@ -261,7 +261,6 @@ test('저장 실패·미제출 기록은 세지 않고 결측은 null이다', ()
   assert.equal(missing?.levels, null);
   assert.equal(missing?.overallLevel, null);
   assert.equal(missing?.legacy, false);
-  assert.equal(missing?.legacyScore, null);
 
   const scored = toProgressSubmission({
     ...base,
@@ -300,23 +299,20 @@ test('옛 v7 문서는 결과 모양이나 rubricVersion으로 옛 기록이 된
       },
     },
   };
-  assert.deepEqual(scoringViewOf(v7Scored), { kind: 'legacy', score: 62.5 });
+  assert.deepEqual(scoringViewOf(v7Scored), { kind: 'legacy' });
 
   const v7Missing = {
     rubricVersion: 'v7-candidate',
     scoring: { result: { status: 'missing', levels: null, score: null, axisScores: null, reason: 'model_error' } },
   };
-  assert.deepEqual(scoringViewOf(v7Missing), { kind: 'legacy', score: null });
+  assert.deepEqual(scoringViewOf(v7Missing), { kind: 'legacy' });
 
   // 채점 전에 끝난 옛 기록(result null)도 rubricVersion으로 옛 기록이 된다.
-  assert.deepEqual(scoringViewOf({ rubricVersion: 'v7-candidate', scoring: { result: null } }), {
-    kind: 'legacy',
-    score: null,
-  });
+  assert.deepEqual(scoringViewOf({ rubricVersion: 'v7-candidate', scoring: { result: null } }), { kind: 'legacy' });
 
   // scoring 없이 맨 위에 score만 있는 옛 연습 기록(classes/{code}/practice_attempts)
-  assert.deepEqual(scoringViewOf({ score: 70 }), { kind: 'legacy', score: 70 });
-  assert.deepEqual(scoringViewOf({ score: null }), { kind: 'legacy', score: null });
+  assert.deepEqual(scoringViewOf({ score: 70 }), { kind: 'legacy' });
+  assert.deepEqual(scoringViewOf({ score: null }), { kind: 'legacy' });
   // 아무 채점 정보도 없으면 결측이다.
   assert.deepEqual(scoringViewOf({}), { kind: 'missing' });
 
@@ -328,7 +324,7 @@ test('옛 v7 문서는 결과 모양이나 rubricVersion으로 옛 기록이 된
     ...v7Scored,
   });
   assert.equal(sub?.legacy, true);
-  assert.equal(sub?.legacyScore, 62.5);
+  assert.equal(JSON.stringify(sub).includes('62.5'), false, '옛 100점 점수가 교사 화면 자료에 남아 있다');
   assert.equal(sub?.levels, null);
   assert.equal(sub?.overallLevel, null);
 });
@@ -420,5 +416,25 @@ test('연구 자료 탭의 줄: 교사(blind)에게는 채점 결과·피드백 
   );
   assert.equal(old.legacy, true);
   assert.equal(old.stage, 3, '옛 차시 번호(4)가 아니라 지금 단계(3)');
-  assert.deepEqual(old.scoring, { kind: 'legacy', score: 55 });
+  assert.deepEqual(old.scoring, { kind: 'legacy' });
+});
+
+test('B1 옛 기록의 100점·축 점수는 교사 화면으로 가는 문서에서 빠진다(저장 문서는 그대로)', () => {
+  const stored = {
+    id: 'a1',
+    studentPrompt: '빨간 사과',
+    score: 87.5,
+    totalScore: 87.5,
+    axisScores: { object: 37.5 },
+    scoring: { result: { status: 'scored', levels: { objectLevel: 4 }, score: 87.5, axisScores: { object: 37.5 } } },
+  };
+  const sent = stripLegacyScores(stored);
+  assert.equal(JSON.stringify(sent).includes('87.5'), false);
+  assert.equal(JSON.stringify(sent).includes('37.5'), false);
+  assert.equal(sent.studentPrompt, '빨간 사과');
+  // 원본은 바뀌지 않는다(저장 문서를 지우지 않는다).
+  assert.equal(stored.score, 87.5);
+  assert.equal(stored.scoring.result.score, 87.5);
+  // 분류는 원본으로 해서 옛 기록으로 남는다.
+  assert.deepEqual(scoringViewOf(stored), { kind: 'legacy' });
 });

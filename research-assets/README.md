@@ -7,9 +7,23 @@
 
 ## 1. 위치
 
-서버는 환경 변수 `RESEARCH_ASSET_DIR`이 가리키는 디렉터리에서만 자산을 읽는다
-(`src/server/config.ts`). 설정하지 않으면 연구용 흐름이 열리지 않고
-`registry.readiness()`가 `researchReady: false`를 돌려준다.
+단서 팩(`cue-pack.json`)은 두 곳 가운데 한 곳에서 읽는다(`src/server/registry/cue-pack-store.ts`).
+
+1. **파일** — 환경 변수 `RESEARCH_ASSET_DIR`이 가리키는 디렉터리의 `cue-pack.json`(로컬·개발, 또는 저장소 밖
+   파일을 둘 수 있는 서버). 파일이 있으면 **파일이 우선**하고, 깨져 있어도 아래 사본으로 내려가지 않는다.
+2. **Firestore 관리자 전용 사본** — `admin_config/cue_pack` 문서. Vercel처럼 저장소 밖 파일을 둘 자리가 없는
+   운영 서버가 쓴다. 통합 관리 화면(`/admin`)의 **연구 자료 → 단서 팩**에서 JSON 파일을 올린다.
+   - 올리기 전에 서버가 아래 2절의 검증(`parseCuePack`)을 먼저 하고, 연습 L01~L36의 문항별 적재/실격/없음을 보여 준다.
+     최상위 형식이 틀리거나 `cueVersion`이 없거나 통과한 문항이 없거나, 지금 사본과 `cueVersion`이 같은데 내용이
+     다르면 저장하지 않는다(단서를 고쳤으면 `cueVersion`을 올린다). 크기는 900KB까지.
+   - 문서에는 `schemaVersion`·`json`(원문)·`sha256`·`cueVersion`·`questionCount`·`invalidCount`·`byteLength`·
+     `updatedAt`·`updatedBy`가 남는다. 서버는 읽을 때 `sha256`을 다시 계산해 다르면 쓰지 않는다.
+   - `firestore.rules`가 `admin_config/*`의 클라이언트 읽기·쓰기를 모두 거부한다. 서버 Admin SDK만 읽고,
+     화면·조작 기록(`admin_events`)에는 단서 본문 대신 해시·개수·`cueVersion`만 남는다.
+   - 서버 인스턴스마다 60초 동안 메모리에 둔다. 사본을 바꾸면 다른 인스턴스에는 최대 60초 늦게 반영된다.
+   - 암호화하지 않은 평문 JSON이다. 규칙이 클라이언트를 막을 뿐 Firebase 프로젝트 콘솔 권한자는 볼 수 있다.
+
+검사 이미지(T1~T3)는 여전히 `RESEARCH_ASSET_DIR`에서만 읽는다(옛 사전·사후 검사 경로 전용).
 
 ```
 $RESEARCH_ASSET_DIR/
@@ -95,15 +109,22 @@ npm run manifest
 
 `scripts/research-manifest.mjs`가 문항·자산·해시 상태를 담은 연구용 manifest를
 만든다. 단서 본문은 넣지 않고 단서 객체의 SHA-256만 넣는다. 자산이 없으면
-실패하지 않고 누락 항목을 `missing` 목록에 적어 둔다.
+실패하지 않고 누락 항목을 `missing` 목록에 적어 둔다. 이 스크립트는 `RESEARCH_ASSET_DIR`의
+파일만 읽는다(Firestore 사본은 관리 화면의 단서 팩 영역에서 확인한다).
 
-`registry.readiness()`가 막는 사유는 다음과 같다.
+논문 v12 연구 수업의 준비 조건 `registry.readiness()`가 막는 사유는 다음과 같다.
+관리 화면은 이 조건이 통과할 때만 연구 수업 반을 만든다.
 
-- `RESEARCH_ASSET_DIR` / `CONSENT_VERSION` / `IRB_APPROVAL` /
-  `EVALUATION_MODEL_VERIFIED` 미설정
-- 단서 팩을 열지 못했거나 검사 문항 단서가 비어 있음
+- `CONSENT_VERSION` / `IRB_APPROVAL` / `EVALUATION_MODEL_VERIFIED` 미설정
+- 단서 팩(파일 또는 Firestore 사본)을 열지 못했거나 `cueVersion`이 없음
+- 연습 L01~L36 가운데 단서가 없거나 검증에서 실격된 문항이 있음
+
+옛 사전·사후 검사 경로는 `registry.assessmentReadiness()`로 따로 막는다(v12 조건에는 들어가지 않는다).
+
+- `RESEARCH_ASSET_DIR` 미설정, 검사 문항 단서가 비어 있음
 - 검사 이미지 파일 없음 또는 SHA-256이 명세와 다름
 - 검사 문항이 candidate 상태이고 `approvedAt`이 비어 있음
+- 위 운영값 셋 미설정
 
 ## 5. 유출 방지의 한계
 

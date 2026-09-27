@@ -68,7 +68,7 @@ export interface CallRecord {
   /** 형식 검증을 통과한 영역 수준. 실패 호출·피드백 호출은 null. */
   levels: AreaLevels | null;
   failureReason: string | null;
-  /** 모델 API가 응답에 밝힌 실제 모델(예: gemini-2.5-flash). 알 수 없으면 null. */
+  /** 모델 API가 응답에 밝힌 실제 모델(Gemini 응답의 modelVersion). 알 수 없으면 null. */
   servedModel: string | null;
   startedAt: string;
   finishedAt: string;
@@ -94,7 +94,11 @@ export interface ScoringRun {
   rubricVersion: string;
   cueVersion: string;
   /** 이 채점에서 판정 여부를 정한 근거. 'cue_pack'이면 단서 팩, 'model'이면 모델이 정했다. */
-  applicabilitySource: 'cue_pack' | 'model';
+  /**
+   * 영역 판정 여부(해당 없음)의 근거. cue_pack = 비공개 단서 팩, code_default = 단서 팩 없이 코드의 기본 목록
+   * (src/lib/question-areas.ts)이 관계를 해당 없음으로 정함(나머지는 모델), model = 모델이 정함.
+   */
+  applicabilitySource: 'cue_pack' | 'code_default' | 'model';
   /** 피드백의 단계 초점 영역(문항이 속한 단계). 검사 문항은 null. */
   focusArea: AreaId | null;
   /**

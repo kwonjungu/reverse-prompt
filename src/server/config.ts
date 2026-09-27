@@ -6,16 +6,17 @@ import { deriveServerSessionSecret } from '@/server/auth/session-token';
 /**
  * 서버 전용 운영 설정의 단일 지점.
  *
- * 모델 ID는 운영자가 실제 사용 가능한 값을 확인해 환경 변수로 지정한다.
- * 코드가 임의로 다른 모델명을 골라 사용 가능하다고 단정하지 않으므로,
- * 기본값은 저장소에 이미 있던 값을 그대로 둔다(존재 확인은 운영자의 몫).
+ * 채점 모델은 gemini-3.8-flash로 확정했다(2026-09-27 실측 비교, docs/model-cost-analysis.md).
+ * 사고 수준(thinkingConfig)은 지정하지 않는다 — 측정한 설정이 Google 기본값이다. 온도는 논문 설정 0.2 그대로다.
+ * 모델·사고 수준·온도를 바꾸려면 같은 절차로 다시 재고 문서를 고친 뒤 바꾼다(자료 수집 중에는 바꾸지 않는다).
+ * 환경 변수 EVALUATION_MODEL_ID가 있으면 그 값이 우선하므로 배포 환경에 옛 값이 남아 있지 않은지 확인한다.
  *
  * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §3, §6
  */
 
 /** 착수 검수에서 접근·출력 스키마를 확인한 뒤 고정한다. */
 export const EVALUATION_MODEL_ID =
-  process.env.EVALUATION_MODEL_ID?.trim() || 'googleai/gemini-2.5-flash';
+  process.env.EVALUATION_MODEL_ID?.trim() || 'googleai/gemini-3.8-flash';
 
 export const EVALUATION_MODEL_CONFIG = {
   temperature: Number(process.env.EVALUATION_TEMPERATURE ?? 0.2),
@@ -42,6 +43,13 @@ export const CONSENT_VERSION = process.env.CONSENT_VERSION?.trim() || '';
 
 /** IRB 승인 번호. 코드가 만들어 낼 수 없는 값이므로 누락 상태를 그대로 노출한다. */
 export const IRB_APPROVAL = process.env.IRB_APPROVAL?.trim() || '';
+
+/**
+ * 연구용 추출의 대표 사진(문항 ID, 쉼표로 구분 — 예: L05,L16,L31). 논문 v12-2는 A·B·C밴드에서 하나씩 쓴다.
+ * 아직 정하지 않았으면 비워 둔다(미정). 관리 화면 '연구 자료' 탭이 이 값으로 문항을 미리 고른다.
+ * 형식 검사는 src/server/export/practice-summary.ts의 parseRepresentativeQuestions가 한다.
+ */
+export const RESEARCH_SAMPLE_QUESTIONS = process.env.RESEARCH_SAMPLE_QUESTIONS?.trim() || '';
 
 /**
  * 연수(강의) 모드 입장 번호. 연수장에서 공유하는 값이며 비밀번호가 아니다.

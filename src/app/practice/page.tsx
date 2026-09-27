@@ -11,9 +11,8 @@
  *   - 제출은 서버 액션이 저장한다. 클라이언트가 Firestore에 직접 쓰지 않는다.
  *   - 같은 제출ID로 다시 보내도 이중 저장되지 않는다. 저장 실패를 완료로 표시하지 않는다.
  *   - 채점 결측은 0점·수준1로 보이게 하지 않는다.
- *   - 연구 세션에서는 고치지 않은 까닭을 묻지 않는다(논문 v12). 수정 과정은 제출할 때마다
- *     자동으로 남는 시도 기록으로만 본다. 일반 체험에서는 '다음 문제'를 누를 때 까닭을 적거나
- *     건너뛸 수 있다. 적지 않아도 넘어갈 수 있다.
+ *   - 학생은 고치지 않은 이유를 적지 않는다(논문 v12-2). 어떤 세션에서도 입력칸이 없고 서버도 받지 않는다.
+ *     수정 과정은 제출할 때마다 자동으로 남는 시도 기록으로만 본다.
  *   - 제출 뒤 완료 수를 새로 받아 와도 보고 있는 문항과 결과는 그대로 둔다.
  *   - 순서 진행: 열린 단계(관리 화면의 수업 시작이 1~6단계를 모두 연다) 안에서 아직 내지 않은
  *     제시 순서상 가장 앞 문항으로 들어가고, 그보다 뒤 문항·단계는 보이지도 고르지도 못한다
@@ -21,6 +20,7 @@
  *   - 힌트는 문항별 힌트(목표 + 확인 질문, 검수를 마친 것만)를 먼저 쓰고, 없으면 단계 공통 안내를 쓴다.
  *     비공개 단서 팩에서 해당 없음인 영역의 확인 질문은 뺀다(서버가 영역 ID만 알려 준다).
  *   - 결과는 100점 점수 없이 영역별 단계(대상 ●●●○)와 4줄 피드백만 보여 준다(공통 루브릭 v12-2).
+ *     피드백 아래에는 늘 고정 안내(FEEDBACK_CAUTION: 피드백이 틀릴 수 있어요…)를 붙인다.
  *     해당 없음 영역은 숨긴다. 단계 이름은 src/lib/stages.ts의 6단계 구성을 따른다.
  *   - 학급·신원은 서버 세션이 정한다. 화면이 sessionStorage의 학급코드·출석번호를 보내지 않는다.
  */
@@ -29,9 +29,9 @@ import { useState, useTransition, useMemo, useEffect, useCallback, useRef } from
 import Image from 'next/image';
 import Link from 'next/link';
 import { PRACTICE_QUESTIONS } from '@/lib/questions';
-import { FEEDBACK_FALLBACK_TEXT } from '@/lib/feedback';
+import { FEEDBACK_CAUTION, FEEDBACK_FALLBACK_TEXT } from '@/lib/feedback';
 import { STAGE_TITLE } from '@/lib/stages';
-import { withoutAreas, type PracticeHint } from '@/lib/practice-hints';
+import { screenHintOf, type PracticeHint } from '@/lib/practice-hints';
 import {
   AREA_IDS,
   AREA_LABEL,
@@ -58,7 +58,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { PII_STUDENT_NOTICE } from '@/server/privacy';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   ArrowRight,
@@ -229,10 +228,6 @@ export default function PracticePage() {
   const [isSubmitting, startSubmit] = useTransition();
   /** 저장에 실패하면 같은 제출ID로 다시 보낸다. 새 응답으로 세지 않기 위함이다. */
   const [pendingSubmissionId, setPendingSubmissionId] = useState<string | null>(null);
-  const [reviewNote, setReviewNote] = useState('');
-  /** 일반 체험에서 '다음 문제'를 눌렀을 때 고치지 않은 까닭을 묻는 칸을 띄운다. */
-  const [askingReason, setAskingReason] = useState(false);
-  const [savingReason, setSavingReason] = useState(false);
   /** 이 화면에서 낸 문항(+ 번호 없는 옛 반이면 이 기기 캐시). 서버 기록을 새로 받기 전에도 순서 진행에 쓴다. */
   const [cachedQuestionIds, setCachedQuestionIds] = useState<string[]>([]);
   const localSubmittedRef = useRef<Set<string>>(new Set());
@@ -332,8 +327,6 @@ export default function PracticePage() {
     setResult(null);
     setStudentPrompt('');
     setPendingSubmissionId(null);
-    setReviewNote('');
-    setAskingReason(false);
     setStartedAt(new Date().toISOString());
   }, [currentQuestionIndex]);
 
@@ -405,7 +398,6 @@ export default function PracticePage() {
     }
     setResult(null);
     setPendingSubmissionId(null);
-    setAskingReason(false);
     setStartedAt(new Date().toISOString());
   };
 
@@ -418,54 +410,11 @@ export default function PracticePage() {
       currentQuestion.level
     );
     if (!next) {
-      setAskingReason(false);
       toast({ title: '이 문항을 먼저 내 주세요', description: '글이 저장되면 다음 문제가 열려요.' });
       return;
     }
     setCurrentChasi(next.chasi);
     setCurrentQuestionIndex(next.index);
-  };
-
-  /**
-   * '다음 문제'. 일반 체험에서 저장된 결과가 있으면 먼저 고치지 않은 까닭을 물어본다(건너뛸 수 있다).
-   * 연구 세션은 까닭을 받지 않으므로 바로 넘어간다.
-   */
-  const handleNextClick = () => {
-    if (lessonState?.sessionType === 'experience' && result?.save.ok) {
-      setAskingReason(true);
-      return;
-    }
-    handleNextQuestion();
-  };
-
-  const handleSaveReasonAndNext = async () => {
-    if (!result || !reviewNote.trim() || savingReason) return;
-    setSavingReason(true);
-    try {
-      const res = await recordFeedbackReviewAction({
-        submissionId: result.submissionId,
-        kind: 'kept',
-        note: reviewNote,
-      });
-      if (!res.ok) {
-        toast({
-          variant: 'destructive',
-          title: '기록하지 못했어요',
-          description: `${res.message ?? ''} 건너뛰기를 눌러도 괜찮아요.`.trim(),
-        });
-        return;
-      }
-      void loadLessonState(currentChasi, { keepPosition: true });
-      handleNextQuestion();
-    } catch {
-      toast({
-        variant: 'destructive',
-        title: '기록하지 못했어요',
-        description: '건너뛰기를 눌러도 괜찮아요.',
-      });
-    } finally {
-      setSavingReason(false);
-    }
   };
 
   /**
@@ -516,18 +465,16 @@ export default function PracticePage() {
   }
 
   const doneInChasi = attemptedCount(currentChasi);
-  /** 연구 세션이면 고치지 않은 까닭을 묻지 않는다. 세션 성격은 서버가 정한 값이다. */
-  const asksReviewNote = lessonState.sessionType === 'experience';
   /**
-   * 검수를 마친 문항 힌트. 비공개 단서 팩에서 해당 없음인 영역의 확인 질문은 뺀다.
-   * 서버는 영역 ID만 알려 준다(단서 내용은 오지 않는다).
+   * 검수를 마친 문항 힌트. 해당 없음인 영역의 확인 질문은 뺀다 — 단서 팩이 있으면 단서 팩, 없으면 코드의 기본 목록.
+   * 서버는 영역 ID만 알려 준다(단서 내용은 오지 않는다). 서버 값이 없으면 기본 목록을 쓴다.
    */
-  const hint = currentQuestion.hint
-    ? withoutAreas(
-        currentQuestion.hint,
-        lessonState.notApplicableAreas?.[questionIdOf(currentQuestion.level)] ?? []
-      )
-    : null;
+  const hint = screenHintOf(
+    questionIdOf(currentQuestion.level),
+    lessonState.notApplicableAreas
+      ? lessonState.notApplicableAreas[questionIdOf(currentQuestion.level)] ?? []
+      : undefined
+  );
   const areaRows = result?.scoring.status === 'scored' ? visibleAreaLevels(result.scoring.levels) : [];
 
   return (
@@ -613,11 +560,6 @@ export default function PracticePage() {
           <p className="mt-1 text-sm text-muted-foreground">
             지금까지 이 단계에서 {doneInChasi}/{QUESTIONS_PER_CHASI} 문항을 냈어요.
           </p>
-          {asksReviewNote && lessonState.reviewedQuestionCount === 0 && (
-            <p className="mt-1 text-sm text-primary">
-              피드백을 읽고 고쳐 써 보세요. 고치지 않는다면 다음 문제로 갈 때 까닭을 적을 수 있어요.
-            </p>
-          )}
         </div>
 
         <Card className="max-w-4xl mx-auto shadow-2xl shadow-primary/20 rounded-2xl overflow-hidden border-2 border-primary/20 bg-card/80 backdrop-blur-sm">
@@ -722,7 +664,7 @@ export default function PracticePage() {
               <Card className="bg-card/80 backdrop-blur-sm rounded-xl">
                 <CardHeader>
                   <CardTitle className="text-2xl font-headline tracking-tight">
-                    AI 선생님의 피드백
+                    AI 피드백
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-5">
@@ -750,62 +692,17 @@ export default function PracticePage() {
                       </div>
                     </>
                   )}
+                  <p className="text-sm text-muted-foreground border-t pt-3">{FEEDBACK_CAUTION}</p>
                 </CardContent>
 
-                {askingReason ? (
-                  // 일반 체험에서만 뜬다. 적고 넘어가거나 건너뛸 수 있다. 적지 않아도 불이익이 없다.
-                  <CardFooter className="flex flex-col items-stretch gap-3 border-t pt-4">
-                    <Label htmlFor="keep-note" className="text-sm font-medium">
-                      고치지 않고 넘어가는 까닭이 있나요? 한 줄로 적어 보세요. 안 적어도 괜찮아요.
-                    </Label>
-                    <Input
-                      id="keep-note"
-                      value={reviewNote}
-                      onChange={(e) => setReviewNote(e.target.value)}
-                      placeholder="예: 그림에 없는 것이라 넣지 않았어요"
-                      maxLength={200}
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-                          e.preventDefault();
-                          void handleSaveReasonAndNext();
-                        }
-                      }}
-                    />
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <Button
-                        onClick={() => setAskingReason(false)}
-                        variant="ghost"
-                        className="w-full sm:w-auto"
-                        disabled={savingReason}
-                      >
-                        돌아가기
-                      </Button>
-                      <Button
-                        onClick={handleNextQuestion}
-                        variant="outline"
-                        className="w-full sm:w-auto sm:ml-auto"
-                        disabled={savingReason}
-                      >
-                        건너뛰기
-                      </Button>
-                      <Button
-                        onClick={() => void handleSaveReasonAndNext()}
-                        className="w-full sm:w-auto"
-                        disabled={savingReason || !reviewNote.trim()}
-                      >
-                        적고 다음 문제로 <ArrowRight className="ml-2 h-4 w-4" />
-                      </Button>
-                    </div>
-                  </CardFooter>
-                ) : (
+                {(
                   <CardFooter className="flex flex-col sm:flex-row gap-3">
                     <Button onClick={handleRevise} variant="outline" className="w-full sm:w-auto">
                       <RotateCcw className="mr-2 h-4 w-4" />
                       고쳐서 다시 쓰기
                     </Button>
                     <Button
-                      onClick={handleNextClick}
+                      onClick={handleNextQuestion}
                       className="w-full sm:w-auto ml-auto"
                       variant="outline"
                     >

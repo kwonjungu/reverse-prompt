@@ -38,6 +38,7 @@ import {
   type FeedbackDraft,
 } from '@/lib/feedback';
 import { stageFocusArea } from '@/lib/stages';
+import { defaultNotApplicableAreas } from '@/lib/question-areas';
 import type {
   CallRecord,
   FeedbackPresentation,
@@ -221,7 +222,7 @@ export function createGrading(deps: GradingDeps): GradingApi {
           cuesMissing = true;
         }
       }
-      const applicability = applicabilityOf(cues);
+      const applicability = applicabilityOf(cues, req.questionId);
 
       const prompt = buildEvaluationPrompt({
         band,
@@ -229,6 +230,7 @@ export function createGrading(deps: GradingDeps): GradingApi {
         cues,
         noCuePolicy: commonOnly ? 'common_only' : 'refuse',
         focusArea,
+        questionId: req.questionId,
       });
       // 단서가 없어 보내지 않을 지시문의 해시는 남기지 않는다(보낸 것처럼 보이지 않게).
       const hash = cuesMissing ? '' : await promptHash(prompt);
@@ -280,7 +282,11 @@ export function createGrading(deps: GradingDeps): GradingApi {
           // 이 절차가 실제로 쓴 공통 문언의 버전이다.
           rubricVersion: RUBRIC_VERSION,
           cueVersion: entry.cueVersion,
-          applicabilitySource: cues ? 'cue_pack' : 'model',
+          applicabilitySource: cues
+            ? 'cue_pack'
+            : defaultNotApplicableAreas(req.questionId).length
+              ? 'code_default'
+              : 'model',
           focusArea,
           imageHash,
           promptHash: hash,

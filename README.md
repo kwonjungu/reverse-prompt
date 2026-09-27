@@ -24,7 +24,7 @@ AI가 축별 5수준으로 판정하고 피드백을 준다. 석사 학위논문
 ## 기술 스택
 
 - Next.js 15 (App Router, Turbopack) + React 18
-- Genkit + Google Gemini (모델 ID는 `EVALUATION_MODEL_ID`, 기본 `googleai/gemini-3.8-flash`)
+- Genkit + Google Gemini (모델 ID는 `EVALUATION_MODEL_ID`, 기본 `googleai/gemini-3.8-flash` — `src/server/config.ts` 한 곳에서 정한다)
 - Firebase — 클라이언트 SDK + 서버 `firebase-admin`(권한 검증 후 쓰기), Firestore 보안 규칙은 기본 거부
 - shadcn/ui + Tailwind CSS
 
@@ -58,8 +58,10 @@ npm run build      # 프로덕션 빌드 (GOOGLE_GENAI_API_KEY 필요)
 
 ## 비공개 연구 자산
 
-검사 이미지와 문항별 채점 단서·앵커는 **이 저장소에 두지 않는다.** 저장소 밖 디렉터리를
-`RESEARCH_ASSET_DIR`로 지정하고 `cue-pack.json`과 검사 이미지를 그 아래에 둔다.
+검사 이미지와 문항별 채점 단서·앵커는 **이 저장소에 두지 않는다.** 로컬에서는 저장소 밖 디렉터리를
+`RESEARCH_ASSET_DIR`로 지정하고 `cue-pack.json`과 검사 이미지를 그 아래에 둔다(파일이 있으면 우선한다).
+Vercel처럼 파일을 둘 자리가 없는 운영 서버는 통합 관리 화면 **연구 자료 → 단서 팩**에서 올린
+Firestore 관리자 전용 사본(`admin_config/cue_pack`, 클라이언트 규칙은 거부)을 읽는다.
 형식과 작성 절차는 `research-assets/README.md`, 빈 형식 예시는 `research-assets/cue-pack.example.json`에 있다.
 
 검사 이미지는 `public/`으로 서빙하지 않고 `/api/research/asset/[questionId]`가 인증을 확인한 뒤
@@ -72,7 +74,8 @@ npm run build      # 프로덕션 빌드 (GOOGLE_GENAI_API_KEY 필요)
 
 서버 전용 필수 값: `GOOGLE_GENAI_API_KEY`, `FIREBASE_SERVICE_ACCOUNT_JSON`,
 `STUDENT_SESSION_SECRET`, `PARTICIPANT_CODE_PEPPER`.
-연구 시작 조건: `RESEARCH_ASSET_DIR`, `CONSENT_VERSION`, `IRB_APPROVAL`, `EVALUATION_MODEL_VERIFIED=true`.
+연구 수업(논문 v12) 시작 조건: `CONSENT_VERSION`, `IRB_APPROVAL`, `EVALUATION_MODEL_VERIFIED=true`와
+연습 L01~L36 단서가 모두 적재된 단서 팩(파일 또는 관리 화면에서 올린 사본). `RESEARCH_ASSET_DIR`은 옛 사전·사후 검사에만 필요하다.
 `NEXT_PUBLIC_*`는 클라이언트 번들에 인라인되므로 진짜 비밀값을 넣지 않는다.
 
 ## 호스팅

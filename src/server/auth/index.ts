@@ -13,7 +13,6 @@ import 'server-only';
  *  - 자격증명이 없으면 AuthError('not_configured')로 실패한다. 우회로를 두지 않는다.
  */
 
-import { createHash } from 'node:crypto';
 import { cookies } from 'next/headers';
 import type { AuthApi, Principal, Role } from './contract';
 import { AuthError } from './contract';
@@ -44,11 +43,13 @@ import { CONSENT_VERSION, SERVER_SESSION_SECRET } from '@/server/config';
 import { parseStudentNumber, verifyPassword } from '@/server/admin/core';
 import {
   COLLECTIONS,
+  PARTICIPANTS_SUBCOLLECTION,
   assertSafeDocId,
   getAdminAuth,
   getAdminFirestore,
   isAdminConfigured,
 } from '@/server/firebase-admin';
+import { participantCodeLookupHashes, readParticipantCodePepper } from './participant-code';
 import {
   isResearchConsentActive,
   type ConsentRecord,
@@ -70,13 +71,16 @@ function isProduction(): boolean {
   return process.env.NODE_ENV === 'production';
 }
 
-/** 참가코드는 원문을 저장하지 않는다. 서버 pepper와 함께 해시만 대조한다. */
-function participantCodeHash(code: string): string {
-  const pepper = process.env.PARTICIPANT_CODE_PEPPER?.trim() || '';
+/**
+ * 참가코드는 원문을 저장하지 않는다. 서버 pepper와 함께 해시만 대조한다.
+ * 해시 식은 관리 화면의 발급과 같은 participant-code.ts 하나를 쓴다.
+ */
+function participantCodeHashes(code: string): string[] {
+  const pepper = readParticipantCodePepper();
   if (!pepper) {
     throw new AuthError('참가코드 대조 설정이 없습니다.', 'not_configured');
   }
-  return createHash('sha256').update(`${pepper}:${code.trim()}`).digest('hex');
+  return participantCodeLookupHashes(code, pepper);
 }
 
 async function readCookie(name: string): Promise<string | null> {
@@ -399,13 +403,16 @@ async function issueStudentSession(input: IssueSessionInput): Promise<IssuedSess
 
   let researchId: string | null = null;
   if (input.participantCode) {
-    const hash = participantCodeHash(input.participantCode);
-    const found = await classSnap.ref
-      .collection('participants')
-      .where('codeHash', '==', hash)
-      .limit(1)
-      .get();
-    if (!found.empty) {
+    // 소문자·'-'를 섞어 적어도 찾는다(발급 모양과 적은 그대로, 많아야 두 값).
+    const hashes = participantCodeHashes(input.participantCode);
+    const found = hashes.length
+      ? await classSnap.ref
+          .collection(PARTICIPANTS_SUBCOLLECTION)
+          .where('codeHash', 'in', hashes)
+          .limit(1)
+          .get()
+      : null;
+    if (found && !found.empty) {
       const candidate = found.docs[0].id;
       const consent = await getConsent(candidate);
       const decision = evaluateResearchCollection({
@@ -605,6 +612,8 @@ async function recordConsentWithdrawal(input: {
   researchId: string;
   actorUid: string;
   reason: string;
+  /** 어느 반의 참가자인지. 관리 화면에서 철회를 기록할 때 이력에 함께 남긴다. */
+  classResearchId?: string | null;
 }): Promise<void> {
   if (!isAdminConfigured()) {
     throw new AuthError('서버 인증 자격증명이 설정되지 않았습니다.', 'not_configured');
@@ -617,6 +626,7 @@ async function recordConsentWithdrawal(input: {
     .set({ withdrawnAt: now, updatedAt: now }, { merge: true });
   await db.collection(COLLECTIONS.consentEvents).add({
     researchId: input.researchId,
+    ...(input.classResearchId ? { classResearchId: input.classResearchId } : {}),
     event: 'withdrawn',
     actorUid: input.actorUid,
     reason: input.reason,

@@ -29,6 +29,8 @@ npm run genkit:dev    # Genkit 플로우 격리 실행 (선택)
 ```bash
 node --import tsx --import ./scripts/_node-server-modules.mjs scripts/score-assessments.mjs --seed <시드>
 node --import tsx --import ./scripts/_node-server-modules.mjs scripts/check-completeness.mjs --input <파일>
+# 실제 모델 예비 점검(연구자 구성 문장, 로컬 CSV만 — 연구 저장소에 쓰지 않는다)
+GOOGLE_GENAI_API_KEY=… node --import tsx --import ./scripts/_node-server-modules.mjs scripts/pilot-score.mjs --input <문장.json>
 ```
 
 `npm test`는 실제 모델을 호출하지 않는다. 모델 호출은 주입 가능한 함수로 두고 테스트에서 가짜 구현을 넣는다.
@@ -53,16 +55,17 @@ Firebase Emulator 권한 시험(`tests/rules/`)은 에뮬레이터가 없으면 
 | `GOOGLE_GENAI_API_KEY` | Genkit Gemini 호출 (서버) | 누락 시 `genkit.ts`에서 throw |
 | `NEXT_PUBLIC_FIREBASE_*` 6개 | Firebase 클라이언트 SDK | |
 | `NEIS_API_KEY` | 학교 검색 호출 한도 ↑ | 선택 |
-| `EVALUATION_MODEL_ID` | 채점 모델 | 비우면 기본 `googleai/gemini-2.5-flash`(`src/server/config.ts`). 실제로 답한 모델은 채점 기록의 `servedModel` |
+| `EVALUATION_MODEL_ID` | 채점 모델 | 비우면 기본 `googleai/gemini-3.8-flash`(`src/server/config.ts`). 실제로 답한 모델은 채점 기록의 `servedModel` |
 | `EVALUATION_TEMPERATURE` | 채점 온도 | 기본 0.2 |
 | `EVALUATION_MODEL_VERIFIED` | 운영자가 모델 접근·출력 스키마를 확인함 | `true`가 아니면 연구 시작 차단 |
-| `RESEARCH_ASSET_DIR` | 비공개 연구 자산 경로 | 검사 이미지 + `cue-pack.json` |
+| `RESEARCH_ASSET_DIR` | 비공개 연구 자산 경로 | **선택(로컬·개발).** 검사 이미지 + `cue-pack.json`. 여기 `cue-pack.json`이 있으면 단서 팩은 이 파일이 우선한다. 비우면(Vercel) 관리 화면에서 올린 Firestore 사본(`admin_config/cue_pack`)을 읽는다 |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | 서버 Admin SDK 자격 | 없으면 서버 인증이 우회 없이 실패 |
 | `STUDENT_SESSION_SECRET` | 학생·관리자 세션 토큰 서명 키 | **선택.** 비우면 `FIREBASE_SERVICE_ACCOUNT_JSON`의 비공개 키에서 만든다. 서비스 계정 키를 바꾸면 세션이 끊긴다 |
-| `PARTICIPANT_CODE_PEPPER` | 참가자 코드 pepper | |
+| `PARTICIPANT_CODE_PEPPER` | 참가자 코드 pepper | 없으면 참가 번호 발급·대조를 하지 않는다. 바꾸면 이미 발급한 번호가 모두 맞지 않는다 |
 | `CONSENT_VERSION` | 유효한 동의서 버전 | 비면 연구 동의 불가 |
 | `IRB_APPROVAL` | IRB 승인 번호 | 비면 연구 시작 차단 |
 | `LECTURE_CODE` | 연수 모드 입장 번호 | 비우면 `1111`. 인증이 아니다 |
+| `RESEARCH_SAMPLE_QUESTIONS` | 연구 추출의 대표 사진(쉼표로 구분한 문항 ID, 예: `L05,L16,L31`) | **선택·미정.** 비우면 관리 화면에서 직접 고른다. 틀린 값은 쓰지 않고 경고한다 |
 | `ADMIN_PASSWORD` | 통합 관리 화면(`/admin`) 첫 비밀번호 | **10자 이상**이어야 쓰인다. 화면에서 바꾸면 그 뒤로는 저장된 해시만 통한다 |
 
 ## 아키텍처
@@ -86,6 +89,8 @@ src/
     teacher/page.tsx            # 교사 대시보드 (로그인 + 배정 학급만). 학생 현황(LMS) 탭
     admin/page.tsx              # 통합 관리 (관리자 비밀번호): 반·차시·수업 시작/종료·교사 계정
     admin/research-panel.tsx    # 통합 관리의 '연구 자료' 탭(요약·CSV·제외 표시·층화 추출)
+    admin/participants-dialog.tsx # 연구 수업 카드의 '참가자·동의' 창(참가 번호 발급·인쇄, 동의 체크, 철회)
+    admin/cue-pack-panel.tsx    # '연구 자료' 탭에 붙이는 단서 팩 영역(CuePackPanel): 올리기·문항별 적재 상태·지우기
     admin/audit/page.tsx        # 감수 (연구자 역할 + 명시적 승인 필요). 옛 /admin
     api/
       auth/{session,refresh,staff}      # 세션 토큰 발급·갱신·교직원 로그인
@@ -110,13 +115,14 @@ src/
     legacy-v7/                  # 옛 공통 루브릭 v7(5수준·100점) — 게임·타임어택 전용
     research/                   # 공통 도메인 타입, 세션별 허용 모드
   server/                       # 서버 전용. 클라이언트 번들에 실리지 않는다
-    admin/                      # 통합 관리: core(해시·토큰 순수) · auth(관리자 세션) · actions · research-actions
+    admin/                      # 통합 관리: core(해시·토큰 순수) · auth(관리자 세션) · actions · research-actions · cue-pack-actions
+                                #   · participants(참가 번호·동의 순수) · participant-actions
     lms/                        # 교사 학생 현황 집계(순수)
     lecture/                    # 연수 체험판 배선. 연구 저장소를 열지 않는다
     config.ts                   # 모델 ID·자산 경로·동의 버전 등 단일 지점
     auth/                       # 역할·학급 범위·동의·세션 토큰·비식별
     privacy/                    # 전송 전 개인정보 점검
-    registry/                   # 문항 레지스트리, 비공개 단서 팩, 제작 프롬프트
+    registry/                   # 문항 레지스트리, 비공개 단서 팩(cue-pack-store: 파일 우선·Firestore 사본 TTL 캐시), 제작 프롬프트
     grading/                    # 운영 채점 1회(v12-2, 모델 1회) · legacy-v7(게임·타임어택)
     lessons/                    # 차시 개방 판정·저장
     assessment/                 # 검사 세션·제출·사후 일괄 채점
@@ -137,16 +143,29 @@ AI 지시문·교사 화면·내보내기 문서를 `renderForModel/renderForTea
 
 ### 영역과 수준 (모든 밴드 공통)
 - `object` 대상의 명확성 / `feature` 특징의 구체성 / `relation` 관계의 명확성. 각 **정수 1~4 또는 `'not_applicable'`**.
-- 관계 범위: A밴드(L01–12)는 대상 사이 공간 관계, B·C밴드는 장소와 행동이 필수(C의 시간대·분위기는 선택).
+- 관계 범위: A밴드(L01–12)는 대상 사이 공간 관계, B·C밴드는 장소와 행동이 필수(행동이 없는 사물·풍경은 놓인 곳과 배치,
+  C의 시간대·분위기는 선택).
 - **100점 환산·밴드별 배점·반수준 결합은 쓰지 않는다.** 점수를 합산하지 않는다.
 - 밴드(`bandOf`)는 문항 번호로 정한다: A=L01–12, B=L13–24, C=L25–36(연구 표집의 A·B·C와 같다). 단계와 무관하다.
 - **앱 종합 수준** = 해당 영역 수준 평균(not_applicable 제외)을 반올림(0.5 올림)한 1~4(`overallLevelOf`).
-  연구 표집의 층을 나누는 값이며 학생 화면에는 보이지 않는다. 저장하지 않고 필요할 때 계산한다.
+  예: (2+3)/2=2.5 → 3, (2+2+3)/3=2.33 → 2. 연구 표집의 층을 나누는 값이며 학생 화면에는 보이지 않는다.
+  저장하지 않고 필요할 때 계산한다. 일반 수업의 교사 현황에는 반 평균으로 보인다(연구 결정 R11, 연구 수업은 가림).
+
+### 운영 규칙(K 규칙)과 코드가 지키는 부분
+`OPERATING_RULES`(8개)가 논문의 규칙 문장을 그대로 담아 지시문·교사 화면·내보내기에 들어간다.
+대응: 1=K01 수량은 대상 영역, 2=K02 분위기·느낌·시간대는 선택, 3=K03 이름=형태면 대상, 4=K06 겹치면 낮은 수준(한 속성 누락 3 +
+핵심 속성 오류 2 → 2), 5=K05 대상 누락·증거 부족(`evidence_missing`, 새 오류로도 맞은 것으로도 세지 않음), 6=맞춤법·띄어쓰기·시간 제외,
+7=관계 범위, 8=해당 없음. **K07(필수 정보가 1~2개인 과제의 정보별 판정)은 채점자 기록 규칙이라 앱에 넣지 않는다** — 앱은 모든 연습 과제를
+영역별 수준으로 판정한다. 규칙 대부분은 의미 판정이라 코드가 모델 대신 볼 수 없고, 구조로 지킬 수 있는 것만 코드가 막는다
+(단서 팩에 없는 정보를 다음 행동으로 요구 못 함, 근거는 원문 그대로, 해당 없음·결측은 집계에서 뺌). `tests/k-rules.test.ts`.
 
 ### 해당 없음(not_applicable)은 누가 정하나
-- 비공개 단서 팩이 있으면 **코드가 정한다**(`applicabilityOf`): 대상은 늘 판정, 필수 속성이 비면 특징 해당 없음,
+- 비공개 단서 팩이 있으면 **단서 팩이 정한다**(`applicabilityOf`): 대상은 늘 판정, 필수 속성이 비면 특징 해당 없음,
   필수 맥락(`requiredContext`)이 비면 관계 해당 없음. 모델 출력이 이와 다르면 형식 오류다. 단서 팩 구조는 바꾸지 않았다.
-- 단서 팩이 없는 일반 체험은 모델이 정한다(대상은 늘 판정). `ScoringRun.applicabilitySource`에 `'cue_pack' | 'model'`로 남는다.
+- 단서 팩이 없으면 **코드의 기본 목록**(`src/lib/question-areas.ts`의 `RELATION_NOT_APPLICABLE_QUESTIONS`)이 관계를 정한다:
+  L01·L02·L03·L04·L06·L08·L11(대상 하나인 A밴드 그림)·L20·L23(장소를 알 수 없는 물건 그림)은 관계 해당 없음.
+  그 밖의 특징·관계는 모델이 정한다(대상은 늘 판정). **단서 팩이 있으면 단서 팩이 우선한다.**
+  `ScoringRun.applicabilitySource`에 `'cue_pack' | 'code_default' | 'model'`로 남는다(code_default = 단서 팩 없이 기본 목록이 관계를 정함).
 
 ### 형식 오류를 유효 값으로 바꾸지 않는다
 영역마다 `{level, evidence, missing, evidence_missing}`를 받고 `validateAreaCall`이 검사한다. 0·5·2.5·`'3'`·NaN·null은
@@ -164,7 +183,8 @@ type OperationalResult =
 2. 유리한 출력을 고르려고 다시 부르지 않고, 여러 호출을 결합(평균·중앙값)하지 않는다(옛 2+1 절차는 없앴다).
 3. 다시 불러도 실패하면 운영 결측. 일부 값으로 정상 결과를 만들지 않는다.
 4. 판정이 확정되면 **피드백 실패 때문에 재채점하거나 판정을 바꾸지 않는다.**
-5. 반복 채점(검사의 `repeatIndex` 2·3)은 그대로이며 영역별 수준을 저장한다.
+5. 반복 채점은 따로 저장한다: 검사는 `repeatIndex` 2·3(scoring_runs), 연습은 연구 추출 사례의 2·3회차(`sample_repeat_scores`,
+   아래 '요약·연구 추출'). 1회차(주 자료)는 덮어쓰지 않는다.
 
 호출마다 `callId`·`retryIndex`·`purpose('score'|'feedback')`·검증된 levels·`failureReason`·**`servedModel`**(모델 API가
 응답에 밝힌 실제 모델, Gemini `modelVersion`)·시각을 남긴다. 실행 단위에는 설정한 `modelId`와 점수를 낸 호출의 `servedModel`이 함께 남는다.
@@ -172,10 +192,31 @@ type OperationalResult =
 
 ### 문항별 단서
 채점에는 실제 이미지와 그 문항의 필수 정보(핵심 대상·필수 속성·필수 관계·앵커)를 함께 쓴다. 단서는 **비공개 자산**이며
-`RESEARCH_ASSET_DIR/cue-pack.json`에서 읽는다. 단서가 없으면 연구 세션 채점을 거부한다(`cues_missing`).
+공개 저장소에 올리지 않는다. 단서가 없으면 연구 세션 채점을 거부한다(`cues_missing`). 보관·적재는 아래 "단서 팩 보관" 참고.
 앵커는 **1~4수준 키만** 지시문에 들어간다(옛 5수준 앵커는 v12-2용으로 다시 써야 한다). 앵커 키 `specificity`·`context`는
 각각 특징·관계로 읽어 준다. 일반 체험은 단서가 없으면 공통 문언만으로 채점하고 **그 결과는 연구 자료로 쓰지 않는다.**
 이미지 제작 프롬프트(`sourcePrompt`)는 정답 문장이 아니므로 지시문에 넣지 않는다(`src/server/registry/practice-source-prompts.ts`).
+
+### 단서 팩 보관 — 파일 우선, 없으면 Firestore 관리자 전용 사본
+Vercel에는 저장소 밖 파일을 둘 자리가 없고, 환경 변수는 크기 한도(약 64KB)와 재배포 문제가 있어 **Firestore 관리자 전용 문서**를 쓴다.
+- **출처 우선순위**(`src/server/registry/cue-pack-store.ts`의 `createCuePackLoader`): `RESEARCH_ASSET_DIR/cue-pack.json`이 있으면 그 파일(로컬·개발).
+  없으면 `admin_config/cue_pack` 사본. 파일이 깨져 있어도 사본으로 내려가지 않는다. 지금 출처는 `cuePackStatus().source`(`file`·`firestore`·`none`).
+- **사본 문서** `admin_config/cue_pack`(`CUE_PACK_DOC_ID`, 컬렉션은 `COLLECTIONS.adminConfig`): `schemaVersion:'cue-pack-store-1'`·`json`(원문)·`sha256`·
+  `cueVersion`·`questionCount`(검증 통과 수)·`invalidCount`·`byteLength`·`updatedAt`·`updatedBy`. `firestore.rules`가 `admin_config/*`의
+  클라이언트 읽기·쓰기를 모두 거부하고 서버 Admin SDK만 읽는다. 읽을 때 `sha256`을 다시 계산해 다르면(콘솔에서 손으로 고친 문서 등) 쓰지 않는다.
+- **적재**: 레지스트리 API는 동기이므로 `ensureCuePackLoaded()`(`src/server/registry/index.ts`)가 사본을 메모리에 읽어 두고(TTL **60초**, 동시 요청은 한 번만 읽음)
+  레지스트리가 그 캐시를 동기로 읽는다. 서버 진입점이 레지스트리를 쓰기 전에 기다린다 — 연습 차시 상태·제출(`lessons/actions.ts`),
+  관리 상태·반 만들기(`admin/actions.ts`), 검사 action(`assessment/actions.ts`의 `deps()`), 채점기(`grading/index.ts`의 `grading`·`legacyV7Grading`),
+  게임·타임어택(`evaluate-prompt.ts`), 검사 이미지 경로(`api/research/asset`). 다른 서버 인스턴스는 최대 60초 뒤에 새 사본을 읽는다.
+  **실패는 닫힌 쪽**: 읽기 오류·해시 불일치·깨진 JSON이면 빈 팩(사유 포함)이고, 앞서 읽은 사본도 계속 쓰지 않는다. 읽기 오류는 캐시하지 않아 다음 요청이 다시 읽는다.
+  서버 자격증명(`FIREBASE_SERVICE_ACCOUNT_JSON`)이 없으면 사본이 없는 것으로 본다(로컬에서 요청마다 오류 로그가 쌓이지 않게).
+  스크립트(`score-assessments`·`manifest`)는 파일을 쓴다(`score-assessments`의 실채점은 채점기를 거치므로 파일이 없으면 사본을 읽는다).
+- **올리기**(`src/server/admin/cue-pack-actions.ts`, 화면 `src/app/admin/cue-pack-panel.tsx`의 `CuePackPanel` — '연구 자료' 탭에 붙인다):
+  파일을 고르면 먼저 **점검만** 한다(`checkCuePackUpload`: 900KB 이하·JSON·`parseCuePack` 최상위 형식·`cueVersion` 필수·통과 문항 1개 이상·
+  지금 사본과 cueVersion이 같은데 내용이 다르면 거절). 결과로 **L01~L36 문항별 적재/실격(고정 사유)/없음**을 보여 주고, 관리자가 저장을 누르면
+  서버가 **다시 점검한 뒤** 덮어쓴다. 연습 36문항이 다 차지 않거나 지금 사본보다 줄어들면 경고한다. 단서 본문은 화면에 돌려주지 않으며
+  레지스트리에 없는 ID는 문자열 대신 개수만 보인다. `admin_events`에는 `upload_cue_pack`/`delete_cue_pack`과 SHA-256·개수·cueVersion(이전 값 포함)만 남긴다.
+- 단서 팩이 적재되면 일반 체험·연수도 그 단서로 채점된다(`experience`는 단서가 있으면 쓴다는 기존 규칙). 예전에는 Vercel에 팩이 없어 늘 공통 문언만 썼다.
 
 ### 학생 입력은 데이터이지 지시가 아니다
 지시문이 학생 응답을 `<<<학생응답 시작>>> … <<<학생응답 끝>>>`으로 감싸고, 그 안의 명령·점수 요구를
@@ -193,12 +234,16 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
    3문장이 실제로 그것을 묻는지, 4문장의 제안이 그림에 맞는지는 코드가 확인하지 않는다.
 4. 쓸 수 있는 표현 제안 또는 스스로 확인할 질문
 
-코드가 확인하는 것: 네 줄·줄마다 한 문장(넘으면 탈락), 인용이 원문에 있고 2문장 안에 있음(인용 끝의 마침표는 떼고 비교),
+코드가 확인하는 것: 네 줄·줄마다 한 문장(넘으면 탈락), 한 문장 80자 이하(`MAX_FEEDBACK_LINE_CHARS`, 2문장의 학생 인용 자리는 빼고
+셈 — 넘으면 `line_too_long`), 인용이 원문에 있고 2문장 안에 있음(인용 끝의 마침표는 떼고 비교),
 칭찬·비교·점수 언급 없음(2문장 안의 학생 인용 부분은 이 검사에서 가린다 — 학생이 쓴 '완벽한'은 탈락 사유가 아니다).
 2·3문장 앞에는 코드가 영역 이름을 붙인다(`[대상] …`). 탈락하면 **확정된 판정을 알려 주는 피드백 전용 호출로 1회만** 다시 만들고,
 그래도 탈락하면 고정 안내 `표현을 선생님과 함께 확인해 보세요`와 `feedbackStatus='fallback'`. 탈락 사유는 `feedback.rejections`에 남는다.
-**네 문장 형식과 제안 수는 아동의 처리 부담을 고려한 설계 선택이며 효과가 검증된 최적값이 아니다.**
+**네 문장 형식과 제안 수, 80자 한도는 아동의 처리 부담을 고려한 설계 선택이며 효과가 검증된 최적값이 아니다.**
 형식 검사를 통과한 것이 그림 부합이나 내용 정확성을 뜻하지 않는다.
+학생의 모든 피드백 화면(연습·연수)에는 모델 문장과 별도로 고정 안내 `FEEDBACK_CAUTION`
+(`피드백이 틀릴 수 있어요. 그림과 견주어 보고, 이상하면 선생님께 물어봐요.`)이 늘 붙고, 제목은 'AI 피드백'이다
+(의인화하지 않는다). 게임·타임어택(옛 v7)은 건드리지 않았다.
 
 ## 차시와 모드 (설계서 §4)
 
@@ -208,16 +253,19 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   |---|---|---|---|
   | 1 | 도구와 작성 방식 이해 | L01–L06 | 세 영역 |
   | 2 | 대상과 수량 | L07–L12 | 대상 |
-  | 3 | 특징 | L19–L24 | 특징 |
-  | 4 | 관계 | L13–L18 | 관계 |
+  | 3 | 특징 구체화 | L19–L24 | 특징 |
+  | 4 | 관계 표현 | L13–L18 | 관계 |
   | 5 | 피드백 검토와 재작성 | L25–L30 | 세 영역 |
-  | 6 | 종합 | L31–L36 | 세 영역 |
+  | 6 | 종합 작성 | L31–L36 | 세 영역 |
+
+  밴드로 보면 A = 1·2단계, B = 3·4단계, C = 5·6단계다.
 
   초점은 힌트의 질문 순서와 피드백(1문장 목표, 3문장 영역의 동점 처리)에만 쓴다. **채점은 모든 단계에서 세 영역(해당 없음 포함)을 기록한다.**
   레지스트리의 연습 문항 `lesson`은 이 단계 값이다(L13은 4, L19는 3). 옛 제출 문서의 `lesson`은 저장된 값 그대로다.
 - 차시 기록은 서버에 있다(`LessonSession`: classResearchId, currentLesson, allowedLessons,
   openedAt, closedAt, openedBy, reason). **관리 화면의 수업 시작이 1~6차시를 한 번에 연다.**
-  교사·관리자가 단계를 하나씩 열고 닫는 화면은 없앴다(교사 API `lessons/open·close`는 남아 있다).
+  교사·관리자가 단계를 하나씩 열고 닫거나 순서를 바꾸는 화면은 **두지 않는다**(교사 API `lessons/open·close`는 남아 있다).
+  연구 수집에서는 모든 학생이 같은 조건에서 쓰도록 제시 순서를 고정하는 것이 논문 결정이다(v12-2 87번 1-6).
 - **순서 진행(학생 화면).** 열린 단계 안에서 **제시 순서로** 아직 내지 않은 가장 앞 문항으로 들어가고(L12 다음은 L19),
   그보다 뒤 문항·단계는 **보이지도 고르지도 못한다.** 한 문항을 내야(저장 성공) 다음 문항이 열린다.
   단계 단추도 열린 문항이 있는 단계만 보인다. 규칙은 `src/lib/practice-progress.ts`(순수)에 있다.
@@ -238,10 +286,9 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 - 연구 세션에서는 게임·타임어택·감수·임의 이미지 생성의 직접 경로와 관련 서버 액션을 모두 거부한다.
   감수 화면은 `/admin/audit`로 옮겼고 middleware가 그 경로를 잡는다. `/admin` 자체는 관리자 비밀번호로 막는다.
 - 관리 화면에서 만든 반(`pacing:'teacher'`)은 일반 수업이어도 연 차시만 열린다(위 "통합 관리 화면" 참고).
-- **연구 세션에서는 고치지 않은 이유를 묻지 않는다(논문 v12).** 입력칸을 숨기고 서버도 `kept`를 받지 않는다.
+- **학생은 고치지 않은 이유를 적지 않는다(논문 v12-2).** 어떤 세션에서도 입력칸이 없고 서버도 `kept`·note를 받지 않는다.
   수정 과정은 제출할 때마다 남는 시도 기록으로만 본다. '고쳐서 다시 쓰기'의 `revised` 연결만 남고 글은 저장하지 않는다.
-  일반 체험은 **'다음 문제'를 누를 때** 고치지 않은 까닭을 묻고, 학생이 적고 넘어가거나 **건너뛸** 수 있다.
-  건너뛰면 아무것도 기록하지 않는다(`kept` 없음).
+  예전에 일반 체험에서 저장된 까닭(`feedbackReview.note`)은 **지우지 않는다.** 연구 내보내기에는 애초에 싣지 않는다.
 
 ## 통합 관리 화면 (`/admin`) — 반을 여는 쪽
 
@@ -250,9 +297,9 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 
 | 누가 | 어디서 | 무엇을 |
 |---|---|---|
-| 관리자 | `/admin` (관리자 비밀번호) | 반 만들기·반 비밀번호·수업 시작/끝내기·교사 계정 발급과 반 배정 |
+| 관리자 | `/admin` (관리자 비밀번호) | 반 만들기·반 비밀번호·수업 시작/끝내기·교사 계정 발급과 반 배정·연구 수업의 참가 번호 발급과 동의 체크 |
 | 교사 | `/teacher` (관리자가 만든 Firebase 계정) | 배정된 반의 학생 현황(번호별 차시 진행·점수·최근 답안). 단계는 통제하지 않는다 |
-| 학생 | `/` (수업 번호 + 반 비밀번호 + 번호) | 그 반의 36문항을 6단계 제시 순서대로(앞 문항을 내야 다음 문항이 열린다) |
+| 학생 | `/` (수업 번호 + 반 비밀번호 + 번호, 연구 수업은 번호 대신 참가 번호) | 그 반의 36문항을 6단계 제시 순서대로(앞 문항을 내야 다음 문항이 열린다) |
 
 ### 비밀번호는 원문을 저장하지 않는다
 - **관리자 비밀번호**: 처음에는 `ADMIN_PASSWORD`(10자 이상)로 들어온다. 설정 탭에서 바꾸면
@@ -277,7 +324,7 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   요금 체계가 달라질 수 있다). 확인하지 못한 경우(키 제한 등)는 문제로 단정하지 않고 아무것도 띄우지 않는다.
 - 조작 실패 문구는 `describeFirebaseError`(core.ts)가 만든다. 모르는 Firebase 오류도 **오류 코드를 화면에 함께** 보여 주고
   코드와 Firebase 문구를 서버 로그에 남긴다(입력값·비밀번호는 싣지 않는다). 예전에는 일반 문구로 뭉개져 원인을 알 수 없었다.
-- 모든 조작 action은 첫 줄에서 `requireAdmin()`을 부른다(`tests/admin.test.ts`가 정적으로 확인).
+- 모든 조작 action은 첫 줄에서 `requireAdmin()`을 부른다(`tests/admin.test.ts`, 참가자 action은 `tests/participants.test.ts`가 정적으로 확인).
 - 교사·연구자 계정(`users` 역할)과 별개다. 수업 운영·교사 계정 탭은 학생 답안·점수를 읽지 않는다.
   **예외는 '연구 자료' 탭**(아래 v12 절)이다. 연구 책임자가 관리 화면을 함께 운영하는 현재 구성에 맞춰
   연구ID 단위의 연습 기록을 읽으며, 조회·내보내기·제외·추출을 모두 `admin_events`에 남긴다.
@@ -287,7 +334,7 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 - 반을 만들면 **여섯 자리 수업 번호**(첫 자리 1~9)를 서버가 무작위로 정하고 `active:false`로 닫아 둔다.
   `classCode`=수업 번호, `requireStudentNumber`(일반 수업만), `managedBy:'admin_console'`을 함께 쓴다.
 - 반의 성격은 만들 때 한 번 정하고 바꾸지 않는다. 관리 화면에서 만들 수 있는 것은 **일반 수업과 연구 수업뿐**이다
-  (`parseCreatableSessionType`, 서버에서도 거부). **연구 수업은 `registry.readiness()`가 통과할 때만** 만든다.
+  (`parseCreatableSessionType`, 서버에서도 거부). **연구 수업은 `registry.readiness()`(논문 v12 조건, 아래 "연구 시작을 막는 값")가 통과할 때만** 만든다.
   논문 v12는 사전·사후 검사를 쓰지 않으므로 연구 검사(`research_assessment`) 반은 만들 수 없다. 그 세션 성격과 검사 경로는 옛 자료를 위해 코드에만 남아 있다.
 - 관리 화면에서 만든 반은 차시 기록에 `pacing:'teacher'`가 붙는다. 이 표시가 있으면 **일반 수업이어도 연 차시만** 열린다
   (`policy.ts`의 `teacherPaced`). 통제를 더할 수만 있고 연구 세션을 자율 진행으로 풀지는 못한다.
@@ -299,11 +346,36 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 - 학생 입장 시 학급 키(`classCode`)는 **반 기록의 값만** 쓴다. 학생이 보낸 값으로 다른 반 기록 트리에 쓰지 못한다.
 - 번호(출석 번호)는 일반 수업에서만 받아 `student_sessions`에 둔다. **토큰에는 넣지 않고**, 연구 수업에서는 받지 않는다.
 
+### 연구 참가자·동의 (연구 수업 카드 → **참가자·동의**)
+- 연구 수업(옛 `research_assessment` 포함)에서만 열린다. 일반 수업에는 발급하지 않는다(서버도 거부).
+  규칙은 `src/server/admin/participants.ts`(순수), 배선은 `participant-actions.ts`, 화면은 `src/app/admin/participants-dialog.tsx`.
+- **참가 번호 일괄 발급(1~60개).** 참가 번호는 0·O·1·I를 뺀 32글자 중 8자(인쇄는 `ABCD-EFGH`), 연구ID는 `P-` + 12자(무작위).
+  발급 직후 창에 **한 번만** 보인다. 인쇄하면 그 목록(순번·수업 번호·참가 번호, 이름 칸 없음)만 나온다.
+  서버에는 해시만 남아 **다시 볼 수 없다.** 잃어버리면 새로 발급한다.
+- 해시는 학생 입장과 같은 `src/server/auth/participant-code.ts` 하나다(`sha256(pepper:code)`, 예전 식 그대로).
+  학생이 소문자·`-`·빈칸을 섞어 적어도 찾는다(`participantCodeLookupHashes`, 손으로 넣었던 옛 코드는 적은 그대로도 찾는다).
+- 저장: `research_classes/{수업ID}/participants/{연구ID}` = `codeHash·seq·issuedAt·issuedBy`, 반 문서의 `participantSeq`(마지막 순번,
+  트랜잭션으로 올려 두 곳에서 눌러도 순번이 겹치지 않는다), 그리고 `consents/{연구ID}`에 빈 동의 문서(`unknown`)를 함께 만든다.
+- **실명 대응표는 앱에 두지 않는다.** 이름·출석 번호는 받지도 저장하지도 않는다. 누구에게 몇 번(순번)을 주었는지는
+  학교가 따로 보관한다. 순번은 반 안의 발급 순서이지 출석 번호가 아니다.
+- **동의 체크.** 참가자마다 보호자 동의·학생 승낙 두 칸. 체크 = `granted`, 풀기 = `unknown`(확인 전, 거절로 적지 않는다).
+  `consents/{연구ID}` = `guardianConsent·studentAssent·consentVersion·withdrawnAt·classResearchId·updatedAt·updatedBy` —
+  학생 입장(`auth`의 `evaluateResearchCollection`)과 연구 자료(`isConsentDocActive`)가 읽는 모양 그대로다.
+  두 칸 모두 체크되고 버전이 `CONSENT_VERSION`과 같아야 수집된다. **`CONSENT_VERSION`이 비면 체크를 받지 않는다.**
+  버전이 바뀌면 옛 동의는 효력이 없고, 새로 체크하면 다른 칸도 확인 전으로 돌아간다(옛 동의서로 받은 것을 옮기지 않는다).
+  바꿀 때마다 동의 문서와 한 트랜잭션으로 `consent_events`에
+  `{researchId, classResearchId, event:'consent_updated', changes:[{field,from,to}], consentVersion, previousConsentVersion, actorUid:'admin-console', recordedAt}`를 남긴다.
+- **철회**는 `auth.recordConsentWithdrawal`을 그대로 쓴다(`withdrawnAt` 기록, `consent_events`의 `withdrawn`, 그 연구ID의 학생 세션 폐기).
+  되돌리지 않고 자료를 지우지 않는다. 다시 참여하면 새 참가 번호를 발급한다.
+- `admin_events`에는 발급 수·순번 범위, 동의 변경(연구ID·항목·값), 철회(연구ID)만 남는다. 참가 번호·해시는 어디에도 기록하지 않는다.
+
 ### 교사 학생 현황 (LMS)
 - `loadClassProgress`(교사, 배정된 반만)가 반 기록·차시 기록·학생 세션·제출을 다시 읽어 `src/server/lms/progress.ts`로 묶는다.
   다시 들어와 세션이 바뀌어도 같은 번호면 한 줄이다. 30초마다 새로 읽는다.
 - 일반 수업은 영역별 수준·종합 수준(1~4)·최근 답안까지 보인다. 결측은 수준 1이 아니며 평균에 넣지 않는다.
-  옛 v7 기록은 '옛 채점'으로 따로 보이고 v12-2 평균에 섞지 않는다.
+  옛 v7 기록은 **점수 없이** '옛 채점 기록'으로만 보이고 v12-2 평균에 섞지 않는다. 옛 100점·축 점수는 교사 화면으로 가는
+  응답에서 빼고 보낸다(`stripLegacyScores`, 저장 문서는 그대로).
+- 개인정보 점검으로 멈춘 제출은 **건수만** 보인다(`privacyHoldCount`, 글·학생은 기록하지 않는다).
 - **연구 수업은 교사 블라인드 채점을 흐리지 않도록 AI 판정·답안·시각을 보여 주지 않는다.** 참가자별 진행 수만 보인다.
   교사 화면의 '연구 자료' 탭도 교사에게는 `toTeacherBlindRecord`(AI 판정·피드백·모든 시각 필드 제거)만 준다. 연구자 역할은 전체를 본다.
 - 단계 열은 문항 ID로 현재 단계표에서 정한다(옛 기록의 저장된 `lesson`은 3·4단계가 바뀌기 전 값이라 쓰지 않는다).
@@ -318,7 +390,11 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   researchId·classResearchId·questionId·questionLevel(=level)·lesson(=chasi)·band·attemptNo, 개인정보 점검을 거친 text,
   scoring.feedback(text·status·strengthArea·nextArea·nextTarget·rejections), scoring.result.areas(영역별 level·evidence·missing·evidenceMissing),
   rubricVersion('v12-2')·cueVersion·scoring.modelId(설정값)·scoring.servedModel(실제 모델)·promptHash·imageHash,
-  startedAt·submittedAt·durationMs, responseStatus·missingReason·persistStatus.
+  startedAt·submittedAt·durationMs, responseStatus·missingReason·persistStatus, schemaVersion('v12.2-practice-submission').
+  `tests/lessons.test.ts`의 'F1 시도마다 저장하는 필드'가 이 목록을 고정한다. 이름·출석번호·학교는 저장하지 않는다.
+- 개인정보 점검에 걸려 모델로 보내지 않은 제출은 **유형과 시각만** 남긴다(`PrivacyHoldRecord`: schemaVersion 'v12.2-privacy-hold',
+  sessionType·classKey·questionId·types·checkVersion·heldAt). 연구는 `research/v7.0/privacy_holds`, 일반 수업은
+  `classes/{학급 코드}/privacy_holds`. 글·일치한 글자·연구ID·세션은 담지 않는다. 학생은 고쳐 써서 다시 낸다.
 - 연습 문항은 레지스트리에 이미지 해시가 없어 예전에는 `imageHash`가 null이었다. 이제 채점 때 실제로 읽은 해시를 남긴다
   (채점 전에 끝난 결측이면 여전히 null — 지어내지 않는다).
 - **`SCHEMA_VERSION`을 `v12.2`로 올렸다**(문서의 `schemaVersion`, 예: `v12.2-practice-submission`). 저장 경로의 버전 조각은
@@ -326,12 +402,17 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   옛 `v7.0-…` 문서는 강제 이관하지 않고 그대로 읽는다(옛 5수준 결과는 연구 요약·추출에서 빠지고 표시된다).
 
 ### 문항별 힌트 — 목표 + 확인 기준 (설계 원리 1)
-- `src/lib/practice-hints.ts`가 36문항 힌트를 **규칙으로 만든다**(손으로 쓰지 않는다). 힌트 = 목표 한 문장
-  (`이 그림을 못 본 친구가 똑같이 떠올릴 수 있게 써요.`) + 영역마다 확인 질문 한 문장(루브릭 4수준 기준을 학생 말로).
-  관계 질문은 A밴드는 공간 관계, B·C밴드는 장소·행동. C밴드는 시간대·분위기에 관한 선택 안내를 덧붙인다.
-- **단계 초점 영역의 질문이 맨 앞**이다. 정답 값(대상 이름·색 이름·개수)과 특정 부위는 말하지 않는다(`tests/hints.test.ts`).
-- 비공개 단서 팩에서 해당 없음인 영역의 질문은 뺀다 — 서버가 차시 상태(`notApplicableAreas`)로 **영역 이름만** 알려 주고
-  화면이 `withoutAreas`로 거른다. 단서 팩 내용은 클라이언트로 가지 않는다.
+- `src/lib/practice-hints.ts`가 36문항 힌트를 **규칙으로 만든다**(손으로 쓰지 않는다).
+  힌트 = 목표(공통 `이 그림을 못 본 친구가 똑같이 떠올릴 수 있게 써요.` + 단계별 둘째 문장 `STAGE_GOAL`) + 영역마다 확인 질문 한 문장.
+  특징 질문은 3단계만 겉모습까지(`색·모양·겉모습(매끈한지, 거친지 등)이 …`). 관계 질문은 문항별 예외 목록(`src/lib/question-areas.ts`)으로:
+  A밴드 `서로 어디에 있는지(위·아래·옆·안)`, 행동이 없는 사물·풍경(L22·L24·L25·L28·L30) `무엇이 어디에 어떻게 놓여 있는지`,
+  그 밖의 B·C밴드 `어디에서 무엇을 하고 있는지`. C밴드는 시간대·분위기에 관한 선택 안내를 덧붙인다.
+- **단계 초점 영역의 질문이 맨 앞**이다. 정답 값(대상 이름·색 이름·개수)과 특정 부위는 말하지 않는다 — `tests/hints.test.ts`가
+  36문항의 모든 문장을 36개 그림 제목의 낱말·숫자·색·수량·부위 낱말과 견준다(예외: 일반 낱말 '모양', 보기 목록 '(위·아래·옆·안)'·'(매끈한지, 거친지 등)').
+- 해당 없음인 영역의 질문은 화면에서 뺀다(`screenHintOf`). 단서 팩이 있으면 단서 팩이, 없으면 기본 목록이 정하고
+  (L01–L04·L06·L08·L11·L20·L23의 관계), 서버가 차시 상태(`notApplicableAreas`)로 **영역 이름만** 알려 준다.
+  초안에는 세 영역 질문이 모두 있다(단서 팩이 관계를 요구하면 나가야 하므로). 단서 팩 내용은 클라이언트로 가지 않는다.
+- 검수 전에 나가는 단계 공통 안내(`GUIDE`)도 같은 규칙에 맞췄다(1단계 '둘 이상이 있으면 서로 어디에 있는지도', 3단계 겉모습, 5단계 '피드백을 그림과 견주어').
 - **`REVIEWED_QUESTIONS`에 넣은 문항의 힌트만 학생 화면에 나간다.** 검수 전에는 단계 공통 안내(`GUIDE`)가 나간다.
   검수표: `docs/practice-hints-review.md`(`npm run hints:table`). 예전 문항별 초안 문구는 지우지 않고 검수표의 참고 열로 남겼다
   (그림의 부위를 짚는 문구라 학생 번들에 싣지 않고 `scripts/print-practice-hints.mjs`에만 둔다).
@@ -343,8 +424,9 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 - **앱 종합 수준** = 해당 영역 수준 평균(not_applicable 제외)을 반올림(0.5 올림)한 1~4(`overallLevelOf`, `APP_LEVEL_RULE` — `src/lib/scoring.ts`).
   반올림 전 값(`app_level_raw`)도 함께 낸다. **이 규칙은 코드가 정한 것이다. 논문에 다른 정의가 있으면 `overallLevelOf` 하나만 바꾸면 된다.**
   저장된 수준이 1~4·not_applicable 밖이면 보정하지 않고 결측으로 읽는다. 결측은 분포·평균에 넣지 않고 따로 센다.
-- **옛 v7(5수준·100점) 기록은 요약·추출에서 뺀다.** 시도 CSV에는 `legacy_rubric=true`와 옛 값(`v7_*` 열)으로 남고,
-  빠진 수(`legacyAttemptCount`)를 관리 화면에 보인다. 판정은 `isLegacyPracticeRecord`(`src/server/lessons/store-core.ts`) 하나를 쓴다.
+- **옛 v7(5수준·100점) 기록은 요약·추출·교사 화면에서 뺀다.** 연구자용 시도 CSV에만 옛 기록 보존용으로 `legacy_rubric=true`와
+  옛 값(`v7_*` 열)이 남고(지우지 않는다), 빠진 수(`legacyAttemptCount`)를 관리 화면에 보인다. 판정은 `isLegacyPracticeRecord` 하나를 쓴다.
+  옛 5수준 추출 결과는 다시 내보내지 않는다(기록은 그대로). 학생이 예전에 적은 까닭(`feedbackReview.note`)은 어떤 연구 CSV에도 없다.
 - 학생 × 문항 요약: 시도 수, 첫·최종 프롬프트, 첫·최종 영역별 수준과 종합 수준, 최종 영역별 근거·빠진 정보, 피드백 목록(시도 순, ` | `),
   첫·최종 제출 시각, 결측 여부. 문항 요약: 36문항 모두, 단계(`chasiOfLevel`), 학생 수, 평균 시도 수(반올림 안 함),
   최종 종합 1~4수준 분포, 영역별 최종 수준 평균(반올림 안 함)과 해당 없음 수, 결측 수.
@@ -353,10 +435,26 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   (`schemaVersion: 'v12-extraction-1'`, 형이 바뀌지 않아 그대로). 최종 프롬프트가 개인정보 점검에 걸리면 '개인정보 의심'으로 표시만 한다(자동 제외 아님).
 - 추출: 문항(최대 3) × 앱 종합 4수준으로 층을 나눠 층마다 n개(**기본 5**, 1~9)를 뽑는다. 층마다 `${seed}|${문항}|${수준}` 난수로 섞어
   문항을 고른 순서와 무관하게 같은 결과가 나온다. 모자란 층은 채우지 않고 shortfall로 남긴다.
-  사례 ID `{문항번호}-{수준}{순번}`(예: 01-31). 시드·후보·제외 목록·결과를 `research/v7.0/extraction_samples`에 저장한다
-  (`schemaVersion: 'v12-2-extraction-1'`). 옛 5수준 추출 결과는 다시 받아도 옛 열 그대로 나온다(4수준으로 바꾸지 않는다).
-  **추출 CSV에는 앱의 판정(case_id·app_level·app_level_raw·영역별 수준·근거·빠진 정보)이 들어 있다.**
-  전문가에게 앱 판정을 가리려면 이 열들을 빼고 다른 번호를 붙인다(관리 화면에도 안내한다).
+  사례 ID `{문항번호}-{수준}{순번}`(예: 01-31). 시드·후보·제외 목록·뺀 수(`exclusionCounts`)·결과를 `research/v7.0/extraction_samples`에
+  저장한다(`schemaVersion: 'v12-2-extraction-1'`).
+- **추출 결과는 세 파일로 낸다**(추출할 때 함께, 지난 추출에서 다시 받기):
+  - 전문가용 `rp_sample_{id}_expert.csv`: `expert_case_id, question_id, student_text`뿐이다. 새 사례번호는 `${seed}|expert` 난수로
+    섞어 E001부터 매긴다(`expertCaseIdsOf`, 같은 시드면 같은 번호). 앱 판정·앱 사례 ID·연구ID·시각이 없다.
+  - 연구자용 `rp_sample_{id}_researcher.csv`: `expert_case_id` 대응표 + 앱 판정(기존 추출 열).
+  - 뺀 수 `rp_sample_{id}_exclusions.csv`: 문항 × 사유(`irrelevant`·`personal_info`·`no_consent`·`final_missing`)별 수. 학생 식별자 없음.
+- **내보낼 때마다 지금 기준으로 다시 본다**: 추출 뒤 동의를 철회했거나 제외 표시를 단 사례는 전문가용에서 빠지고, 연구자용에는
+  행만 남기고 학생 문장을 비운 채 `withheld_reason`을 적으며, 뺀 수 파일에 `no_consent_after_draw`·`excluded_after_draw`로 덧붙는다
+  (`withheldCasesOf`). 반복 채점 CSV에서도 빠진다. 뺀 수를 따로 담지 않은 예전 추출은 제외 목록에서 다시 만든다(결측·동의 없음은 'ALL' 합계).
+- 고른 문항이 A·B·C밴드 하나씩이 아니면 경고한다(막지 않음, `bandCoverageWarning`). 대표 사진은 설정값 `RESEARCH_SAMPLE_QUESTIONS`
+  (예: `L05,L16,L31`)로 미리 고른다. **지금은 비어 있다(미정).** 모자란 층은 다른 층에서 채우지 않고 부족분(shortfall)으로 남긴다.
+- **반복 채점(2·3회차)**: 지난 추출 목록의 '2회차'·'3회차' 단추가 추출 사례의 최종 시도 글을 운영 채점기
+  (`grading.runOperationalScoring`, 같은 모델·온도·지시문·단서 팩)로 다시 채점해 `research/v7.0/sample_repeat_scores/{추출}__{사례}__r{n}`에
+  따로 저장한다(`schemaVersion 'v12.2-sample-repeat-1'`, 필드: sampleId·caseId·questionId·finalSubmissionId·repeatIndex·status·run·scoredAt).
+  1회차(제출 문서의 채점)는 건드리지 않는다. 추출 뒤 동의를 철회했거나 제외 표시가 붙은 사례는 모델에 보내지 않고 문서도 만들지 않는다.
+  **모델 호출 실패·단서 없음 결측은 저장하지 않는다**(일시 장애가 영구 결측으로 굳지 않게 — 화면은 거기서 멈추고, 다시 누르면 이어서 한다).
+  형식 오류로 끝난 결측은 채점 절차의 결과라 저장한다. 서버 함수 시간 제한 때문에 사례 하나씩 이어 부르며 이미 저장한 사례는 다시 부르지 않는다. CSV: 회차별 영역 수준(`r1_object_level`…) / 영역별 세 번 일치 비율
+  (`agreement_rate` = 세 번 모두 같은 수준 ÷ 세 번 모두 1~4로 채점된 사례, 해당 없음·결측은 분모에서 빼고 따로 셈, 반올림 안 함).
+- 개인정보 점검으로 멈춘 제출 수를 개요에 건수로만 보인다.
 - CSV는 브라우저로만 내려간다(BOM은 브라우저에서 다시 붙인다). `rp_*.csv`·`/exports/`는 `.gitignore`에 있다.
 
 ## 연수 모드 (`/lecture`) — 연구 경로가 아니다
@@ -368,12 +466,12 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   한 번 입력하면 HttpOnly 쿠키(`rp_lecture`)를 심고 그 쿠키가 있을 때만 채점을 받는다.
   이 번호는 연수장에서 공유하는 값이므로 **비밀번호로 보지 않는다.** 막으려는 것은 URL이
   밖으로 퍼졌을 때의 무작위 모델 호출이지 인증이 아니다.
-- **아무것도 저장하지 않는다.** Firestore를 열지 않고 연구 컬렉션을 건드리지 않는다.
+- **아무것도 저장하지 않는다.** Firestore에 쓰지 않고 연구 컬렉션을 건드리지 않는다. 채점기가 채점 전에 단서 팩 사본(`admin_config/cue_pack`)을 읽는 것만 있다.
   여기 점수는 연구 자료가 아니며 교사 화면·내보내기에 나타나지 않는다. 화면에도 그렇게 적는다.
 - 문항은 연습 36개에서 뽑은 **고정 20개**(`src/lib/lecture-questions.ts`)뿐이다. 목록 밖 ID는
   서버가 거절한다. 검사 문항은 레지스트리가 `research_assessment`에만 허용하므로 애초에 열리지 않는다.
-- 채점은 일반 체험과 같은 `sessionType: 'experience'` 규칙(공통 루브릭 v12-2)이다. 문항별 비공개 단서가 없으므로
-  **공통 루브릭 문언만으로** 채점된다. 화면은 연습 화면과 같이 영역별 단계(●●●○)와 네 문장 피드백만 보이고 점수는 없다.
+- 채점은 일반 체험과 같은 `sessionType: 'experience'` 규칙(공통 루브릭 v12-2)이다. 단서 팩이 적재되지 않았으면
+  **공통 루브릭 문언만으로**, 적재되었으면(파일 또는 관리 화면에서 올린 사본) 그 단서로 채점된다. 화면은 연습 화면과 같이 영역별 단계(●●●○)와 네 문장 피드백만 보이고 점수는 없다.
 - 이 쿠키로는 연구 화면(`/practice`·`/assessment`·`/admin`)에 들어갈 수 없다. 그쪽은 그대로 서버 세션을 요구한다.
 - **연구 세션 학생은 `/lecture`를 쓸 수 없다.** 같은 L 그림으로 연구 밖에서 AI 채점을 받으면 연구 자료가 오염되기 때문이다.
   `middleware.ts` matcher에 `/lecture`를 넣어 연구 세션 힌트가 있으면 `/?blocked=lecture`로 돌려보내고, 연수 action도 연구 힌트 쿠키가 있으면
@@ -393,7 +491,8 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   채점자 payload에 **시점·학생·학급·자동 점수가 없다.**
 - 채점은 공통 루브릭 v12-2(영역별 1~4 또는 해당 없음)다. **최초 운영 채점(`repeatIndex: 1`)이 주 자료로 잠긴다.**
   반복 2·3은 신뢰도 분석용으로 영역별 수준을 따로 저장하며 주 자료를 덮어쓰지 않는다. 시점 혼합 순서는 시드로 재현한다.
-- 논문 v12는 사전·사후 검사를 쓰지 않는다. 검사 반(`research_assessment`)은 준비 조건(`readiness`) 때문에 지금 만들 수 없다.
+- 논문 v12는 사전·사후 검사를 쓰지 않는다. 검사 반(`research_assessment`)은 관리 화면이 만들지 않는다(`parseCreatableSessionType`).
+  검사 경로(수집·이미지 스트리밍·사후 채점)는 옛 준비 조건 `registry.assessmentReadiness()`(검사 문항 확정·이미지·해시·단서·`RESEARCH_ASSET_DIR`)로 그대로 막힌다.
 - 검사 이미지는 `public/`에 두지 않는다. `/api/research/asset/[questionId]`가 인증을 확인하고
   `private, no-store`로 스트리밍한다. **학생이 화면의 이미지를 복사하는 것까지 막았다고 주장하지 않는다.**
 
@@ -427,19 +526,24 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 ```
 users                       # 계정과 역할 (관리 화면이 만든 교사: email·displayName·createdBy 포함)
 research_classes            # 무작위 수업ID (실명 대응표는 저장소 밖)
-                            #   + label·entryPassword(해시)·classCode·requireStudentNumber·managedBy
+                            #   + label·entryPassword(해시)·classCode·requireStudentNumber·managedBy·participantSeq
+  {id}/participants/{연구ID} #   codeHash(참가 번호 해시)·seq·issuedAt·issuedBy. 이름·번호 없음
 admin_config/console        # 관리자 비밀번호 scrypt 해시
+admin_config/cue_pack       # 비공개 단서 팩 사본(json·sha256·cueVersion·개수). 클라이언트 거부, 서버만 읽음
 admin_events                # 관리 화면 조작 기록
-consents / consent_events   # 동의·승낙과 그 변경 이력
+consents / consent_events   # 동의·승낙(guardianConsent·studentAssent·consentVersion·withdrawnAt)과 그 변경 이력
 student_sessions            # 학생 세션 토큰 폐기 목록
 audit_approvals             # 실데이터 감수 승인 기록
 classes/…                   # 비연구 수업 기록 (기존 구조 유지)
+  {학급 코드}/privacy_holds  #   일반 수업의 개인정보 보류 기록(유형·시각만)
 
 research/v7.0/
   assessment_sessions  assessment_windows  assessment_submissions
   assessment_rejections  practice_submissions  lesson_sessions
   scoring_runs  scoring_batches  teacher_blind_scores
   extraction_exclusions  extraction_samples      # v12 연구 추출(제외 표시·추출 결과)
+  sample_repeat_scores                           # 추출 사례의 반복 채점 2·3회차(주 자료는 건드리지 않음)
+  privacy_holds                                  # 연구 수업의 개인정보 보류 기록(유형·시각만, 글 없음)
 ```
 
 클라이언트가 보낸 문자열을 문서 ID나 경로에 쓰기 전에는 `assertSafeDocId`를 지난다.
@@ -450,15 +554,24 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 
 ## 연구 시작을 막는 값 (미확정 운영값)
 
-`registry.readiness()`가 아래를 확인한다. 하나라도 걸리면 `researchReady=false`이고 연구 등록·검사·채점이 막힌다.
-**코드가 만들어 낼 수 없는 값을 자동으로 채우지 않는다.**
+**코드가 만들어 낼 수 없는 값을 자동으로 채우지 않는다.** 준비 조건은 둘로 나뉜다(`src/server/registry/entries.ts`).
 
-- 검사 문항 3개가 모두 `status: 'candidate'`, `approvedAt: null` — 전문가 검토·예비 채점 전
-- 비공개 단서 팩(`RESEARCH_ASSET_DIR/cue-pack.json`) 미적재
+**논문 v12 연구 수업** — `registry.readiness()`(`collectPracticeBlockers`). 하나라도 걸리면 `researchReady=false`이고
+관리 화면이 연구 수업 반을 만들지 않는다(`createClassAction`). 연구 세션 채점은 문항마다 단서가 없으면 따로 `cues_missing`으로 거부한다.
 - `CONSENT_VERSION` / `IRB_APPROVAL` / `EVALUATION_MODEL_VERIFIED` 미설정
-- 검사 이미지 SHA-256 불일치
+- 비공개 단서 팩(파일 또는 Firestore 사본) 미적재, 또는 팩이 `cueVersion`을 밝히지 않음
+- 연습 **L01~L36 가운데 하나라도** 단서가 없거나 검증에서 실격(빠진 문항 ID를 사유에 적는다)
 
-`candidate`를 코드가 `frozen`으로 올리는 경로는 만들지 않았다.
+사전·사후 검사 문항(T1~T3)의 확정 상태·이미지·해시·단서와 `RESEARCH_ASSET_DIR`은 **보지 않는다**(v12는 검사를 쓰지 않는다).
+
+**옛 사전·사후 검사** — `registry.assessmentReadiness()`(`collectAssessmentBlockers`, 예전 readiness 그대로). 검사 경로
+(`assessment/session.ts`의 `checkResearchStartAllowed`, 검사 이미지 경로)만 쓴다.
+- 검사 문항 3개가 모두 `status: 'candidate'`, `approvedAt: null` — 전문가 검토·예비 채점 전
+- `RESEARCH_ASSET_DIR` 미설정, 단서 팩 미적재, 검사 문항 단서 없음
+- `CONSENT_VERSION` / `IRB_APPROVAL` / `EVALUATION_MODEL_VERIFIED` 미설정
+- 검사 이미지 없음·SHA-256 불일치
+
+`candidate`를 코드가 `frozen`으로 올리는 경로는 만들지 않았다. `npm run manifest`는 두 결과를 `readiness`·`assessmentReadiness`로 함께 적는다.
 
 ## 학교 검색은 NEIS Open API
 
@@ -483,15 +596,25 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
   `npm test`에서 skip으로 나오며 **skip은 통과가 아니다.**
 - 실제 모델 연동 시험을 하지 않았다. 모델 호출은 전부 가짜 구현으로 시험했다. 특히 v12-2의 엄격한 형식 검사
   (evidence 원문 일치, 네 문장·한 줄 한 문장, 인용이 2문장 안에, 다음 행동 영역 일치)를 실제 모델이 얼마나 자주 통과하는지는
-  아직 모른다. 운영에서 결측(schema_error)·피드백 fallback 비율과 `feedback.rejections`를 먼저 확인할 것.
+  아직 모른다. 수집 전에 `scripts/pilot-score.mjs`(연구자 구성 문장 24개)로 결측률·fallback률·`feedback.rejections`를 먼저 확인할 것.
+  피드백 한 문장 80자 한도(`line_too_long`)도 fallback을 늘릴 수 있다.
 - `servedModel`은 Gemini 응답의 `modelVersion`을 읽는다. 플러그인이 그 값을 넘기지 않으면 null로 남는다(지어내지 않는다).
-- A밴드 관계 영역: 대상이 하나뿐인 그림은 관계가 해당 없음이어야 하는데, 단서 팩이 없으면 모델이 정한다.
-  단서 팩을 쓸 때는 필수 맥락(`requiredContext`)을 비워 두면 코드가 해당 없음으로 정한다. 검수표에 문항별 판단 거리를 적어 두었다.
+- 관계 해당 없음: 단서 팩이 없으면 코드의 기본 목록(L01–L04·L06·L08·L11·L20·L23)이 정하고, 단서 팩이 있으면 단서 팩(`requiredContext`가 비면
+  해당 없음)이 우선한다. 단서 팩이 L20·L23에 관계를 적으면 그 문항 화면에 B·C 기본 관계 질문('어디에서 무엇을 하고 있는지')이 나간다
+  (사물·풍경 목록에서 두 문항을 뺐기 때문 — 87번 1-2).
+- 연습 사진 교체(L03 흰색과 검은색 축구공, L12 회색 조약돌 네 개, L15 물풀 사이 물고기, L17 정원 잔디밭의 고양이, 선택 L36)는
+  **그림을 받기 전이라 하지 않았다.** 받으면 한 커밋에서 `public/questions/Lxx.jpg`, `src/lib/questions.ts`의 koreanTitle,
+  `src/server/registry/practice-source-prompts.ts`의 subject, `scripts/print-practice-hints.mjs`의 NOTES·예전 초안 → `npm run hints:table`,
+  레지스트리 이미지 해시(연습 문항은 고정 해시가 없어 채점 때 계산 — 고정하면 `entries.ts`), 연수 20문항 목록(`src/lib/lecture-questions.ts`),
+  제목·해시를 고정한 시험을 함께 고친다.
+- 연습 반복 채점(2·3회차)은 관리 화면 단추로 추출 사례에만 돌린다. 실제 모델·Firestore로 돌려 보지 않았다(순수 규칙만 시험).
+  서버 함수 시간 제한에 걸리지 않게 사례 하나씩 부르지만, 한 사례가 모델 호출 3번(채점·재시도·피드백)을 넘기면 끊길 수 있다 — 다시 누르면 이어서 한다.
+- 개인정보 보류 기록은 보류 여부·유형·시각만 남긴다. 교사가 개별 글을 확인하는 흐름은 없다(학생이 고쳐 쓴다).
 - 검사 단서 노출 점검은 비공개 단서 팩이 있을 때만 실제 문장으로 훑는다. 팩이 없으면 건너뛴다.
 - edge middleware는 힌트 쿠키만 읽는다(힌트가 없으면 열지 않는다). 실제 판정은 server action·API가 다시 한다.
 - 교사 블라인드·연구자 화면이 아직 연습 제출만 읽는다. 검사 6응답은 내보내기 경로로 받아야 한다.
 - 관리자 로그인은 실패마다 지연을 두고 10자 이상을 요구할 뿐, 서버 전체에서 시도 횟수를 세어 잠그지는 않는다.
-  반 입장 비밀번호(4자 이상) 대조에도 시도 횟수 제한이 없다. 교실 입장 문턱이지 강한 자격이 아니며,
+  반 입장 비밀번호(4자 이상)와 참가 번호(8자) 대조에도 시도 횟수 제한이 없다. 교실 입장 문턱이지 강한 자격이 아니며,
   수업이 끝나면 **수업 끝내기**로 입장을 닫아 두는 것이 실제 방어다.
 - 통합 관리 흐름(관리자 로그인 → 반 만들기 → 수업 시작 → 학생 입장 → 교사 현황 → 수업 종료 → 관리자 비밀번호 변경)은
   **로컬 Firebase 에뮬레이터(Firestore·Auth)로 브라우저에서 한 번 돌려 확인했다.** 실제 운영 프로젝트·Vercel에서는 돌리지 않았다.
@@ -502,10 +625,15 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 - 번호로 세션을 이을 때 번호는 학생이 적은 값이다. 같은 반에서 다른 학생의 번호를 적으면 그 학생의 진행(낸 문항 번호)이 보인다.
   답안·점수는 보이지 않는다.
 - 검사(사전·사후) 세션 열기·닫기는 아직 교사 화면에만 있다. 관리 화면에는 없다.
-- **연구 반을 만들 수 없는 상태다.** `registry.readiness()`가 v12에서 쓰지 않는 사전·사후 검사 문항(T1~T3)의 확정·이미지·단서까지
-  요구한다. 이 조건을 v12에 맞게 줄일지는 연구 설계 결정이라 코드를 바꾸지 않았다.
-- 참가 번호(`research_classes/{id}/participants/{researchId}.codeHash`)와 동의 기록(`consents/{researchId}`)을 만드는 화면이 없다.
-- 연구 세션 채점은 비공개 단서 팩을 `RESEARCH_ASSET_DIR` 파일에서 읽는다. Vercel에는 저장소 밖 파일을 둘 자리가 없어 운영 방식을 정해야 한다.
+- 연구 반은 v12 준비 조건(운영값 셋 + 연습 36문항 단서, 위 "연구 시작을 막는 값")을 채워야 만들 수 있다. 지금 저장소 기본 상태로는
+  운영값과 단서 팩이 없어 만들 수 없다. 검사 문항(T1~T3) 조건은 v12 조건에서 뺐고 검사 경로에만 남아 있다.
+- 참가자·동의 창(참가 번호 발급·인쇄·동의 체크·철회)은 순수 규칙과 정적 배선만 시험했다. 에뮬레이터·실제 Firestore와
+  브라우저 인쇄로는 돌려 보지 않았다. 연구 반을 만들 수 있어야(위) 이 창을 열 반이 생긴다.
+- 동의는 관리자가 종이 동의서를 확인하고 체크한 기록이다. 앱이 동의서 원본·서명을 받거나 보관하지 않는다.
+- 단서 팩은 Vercel에서 Firestore 관리자 전용 사본(`admin_config/cue_pack`)으로 읽는다(위 "단서 팩 보관"). 올리기·적재는 가짜 Firestore로만
+  시험했고 실제 운영 프로젝트·에뮬레이터·브라우저에서는 돌리지 않았다. 사본을 바꾸면 다른 서버 인스턴스에는 **최대 60초** 늦게 반영되어
+  그 사이에는 옛 팩과 새 팩이 인스턴스마다 섞여 쓰인다(각 기록의 `cueVersion`은 그 채점에 쓴 팩을 따른다) — 연구 수업 중에는 팩을 바꾸지 말 것.
+  단서 본문은 Firestore에 평문 JSON으로 있다(암호화하지 않음). 규칙이 클라이언트를 막을 뿐, 프로젝트 콘솔 권한자는 볼 수 있다.
 - v12 연구 추출 흐름(요약·제외·추출·CSV·연구 세션 학생 화면)은 로컬 에뮬레이터에서 가짜 연구 자료로 한 번 확인했다. 실제 연구 자료로는 돌리지 않았다.
 - **지금 켜기**(교사 로그인 방식 자동 설정)는 실제 Google API에 대고 시험하지 않았다. 에뮬레이터는 설정 없이 모든
   로그인을 받아 주므로 이 호출을 건너뛴다. 실패하면 화면이 콘솔 링크를 안내한다.
@@ -530,7 +658,9 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 | 게임·타임어택의 옛 v7 채점 | `src/lib/legacy-v7/`, `src/server/grading/legacy-v7.ts` |
 | 피드백 네 문장·영역·인용·금지 표현 검증 | `src/lib/feedback.ts` |
 | 문항 등록·검사 메타데이터 | `src/server/registry/entries.ts` |
-| 문항별 단서 | `RESEARCH_ASSET_DIR/cue-pack.json` (저장소 밖) |
+| 문항별 단서 | `RESEARCH_ASSET_DIR/cue-pack.json` (저장소 밖, 로컬) 또는 관리 화면 '연구 자료' 탭의 단서 팩(Firestore `admin_config/cue_pack`) |
+| 단서 팩 보관·적재 규칙(우선순위·TTL·올리기 점검) | `src/server/registry/cue-pack-store.ts` (배선은 `src/server/registry/index.ts`) |
+| 연구 수업·옛 검사 준비 조건 | `src/server/registry/entries.ts`의 `collectPracticeBlockers`·`collectAssessmentBlockers` |
 | 연습 문항 추가/수정 | `src/lib/questions.ts` + `public/questions/L01~L36.jpg` |
 | 차시 개방 판정 | `src/server/lessons/policy.ts` |
 | 세션별 허용 모드 | `src/lib/research/session-modes.ts` |
@@ -542,12 +672,17 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 | 개인정보 점검 규칙 | `src/server/privacy/index.ts` (오탐·미탐 사례는 `tests/privacy.test.ts`에 고정) |
 | 교사 차시 개방·루브릭·학생 현황 화면 | `src/app/teacher/page.tsx` |
 | 통합 관리 화면 | `src/app/admin/page.tsx` · `src/server/admin/actions.ts` |
+| 참가 번호 발급·동의 체크(연구 수업) | `src/server/admin/participants.ts` · `participant-actions.ts` · `src/app/admin/participants-dialog.tsx` |
+| 참가 번호 해시(발급·학생 입장 공용) | `src/server/auth/participant-code.ts` |
 | 비밀번호 규칙·해시·관리자 토큰 | `src/server/admin/core.ts` |
 | 학생 현황 집계(보이는 범위) | `src/server/lms/progress.ts` |
 | 문항별 힌트·검수 상태 | `src/lib/practice-hints.ts` (고친 뒤 `npm run hints:table`) |
 | 연습 순서 진행(어디로 들어가고 무엇이 보이는가) | `src/lib/practice-progress.ts` |
+| 관계 기본 해당 없음 문항·사물·풍경 관계 질문 문항 | `src/lib/question-areas.ts` |
+| 추출 사례 반복 채점·일치 비율 | `src/server/export/repeat-scores.ts` · `src/server/admin/research-actions.ts` |
+| 실제 모델 예비 점검(연구자 구성 문장) | `scripts/pilot-score.mjs` · `src/server/export/pilot-summary.ts` |
 | 요약·층화 추출 규칙(앱 종합 4수준 산정은 `scoring.ts`의 `overallLevelOf`) | `src/server/export/practice-summary.ts` |
-| 모델 교체 | `src/server/config.ts`의 `EVALUATION_MODEL_ID` |
+| 모델 교체 | `src/server/config.ts`의 `EVALUATION_MODEL_ID` — 3.8 Flash로 확정, 사고 수준 지정 없음·온도 0.2(2026-09-27, `docs/model-cost-analysis.md`). 바꾸려면 같은 절차로 다시 잰다 |
 
 ## 복구 기록
 

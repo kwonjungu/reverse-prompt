@@ -10,6 +10,7 @@
  * 이 화면은 요청만 보낸다. 관리자 세션 확인·비밀번호 해시·권한 판정은 모두 서버
  * (src/server/admin)가 한다. 단추를 숨기는 것은 차단이 아니다.
  * 학생 답안·점수는 이 화면에 나오지 않는다(관리 계정은 반·계정 관리만 한다).
+ * 연구 수업 카드의 '참가자·동의'는 참가 번호 발급과 동의 체크만 한다(participants-dialog.tsx).
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -37,6 +38,9 @@ import {
 } from '@/server/admin/actions';
 import type { SessionType } from '@/lib/research/types';
 import { ResearchPanel } from './research-panel';
+import { CuePackPanel } from './cue-pack-panel';
+import { ParticipantsDialog } from './participants-dialog';
+import { isResearchSession } from '@/lib/research/session-modes';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -82,6 +86,7 @@ import {
   Settings,
   ShieldCheck,
   Square,
+  Ticket,
   UserPlus,
   Users,
 } from 'lucide-react';
@@ -402,6 +407,7 @@ export default function AdminConsolePage() {
                     teachers={data.teachers.filter((t) => t.classResearchIds.includes(row.classId))}
                     busy={busy}
                     act={act}
+                    onSignedOut={markSignedOut}
                   />
                 ))}
               </div>
@@ -413,7 +419,11 @@ export default function AdminConsolePage() {
           </TabsContent>
 
           <TabsContent value="research" className="space-y-6">
-            <ResearchPanel onSignedOut={markSignedOut} />
+            <div className="space-y-6">
+              {/* 단서 팩 올리기·적재 상태(연구 수업 채점과 준비 조건의 근거). 내용은 화면에 다시 보이지 않는다. */}
+              <CuePackPanel onSignedOut={markSignedOut} />
+              <ResearchPanel onSignedOut={markSignedOut} />
+            </div>
           </TabsContent>
 
           <TabsContent value="settings" className="space-y-6">
@@ -612,7 +622,13 @@ function CreateClassCard(props: {
 
 /* ────────────────────────── 반 카드 ────────────────────────── */
 
-function ClassCard(props: { row: AdminClassRow; teachers: AdminTeacherRow[]; busy: boolean; act: Act }) {
+function ClassCard(props: {
+  row: AdminClassRow;
+  teachers: AdminTeacherRow[];
+  busy: boolean;
+  act: Act;
+  onSignedOut: () => void;
+}) {
   const { row, teachers, busy, act } = props;
   const { toast } = useToast();
   const phase = phaseOf(row);
@@ -624,6 +640,7 @@ function ClassCard(props: { row: AdminClassRow; teachers: AdminTeacherRow[]; bus
   const [revokeOnEnd, setRevokeOnEnd] = useState(true);
   const [pwOpen, setPwOpen] = useState(false);
   const [newPw, setNewPw] = useState('');
+  const [participantsOpen, setParticipantsOpen] = useState(false);
 
   const copyId = async () => {
     try {
@@ -708,6 +725,11 @@ function ClassCard(props: { row: AdminClassRow; teachers: AdminTeacherRow[]; bus
           <Button variant="ghost" disabled={busy} onClick={() => setPwOpen(true)}>
             <KeyRound className="mr-2 h-4 w-4" /> 비밀번호
           </Button>
+          {isResearchSession(row.sessionType) && (
+            <Button variant="outline" disabled={busy} onClick={() => setParticipantsOpen(true)}>
+              <Ticket className="mr-2 h-4 w-4" /> 참가자·동의
+            </Button>
+          )}
         </div>
 
         <div className="border-t pt-3 text-xs text-muted-foreground">
@@ -804,6 +826,16 @@ function ClassCard(props: { row: AdminClassRow; teachers: AdminTeacherRow[]; bus
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {isResearchSession(row.sessionType) && (
+        <ParticipantsDialog
+          classId={row.classId}
+          classLabel={row.label}
+          open={participantsOpen}
+          onOpenChange={setParticipantsOpen}
+          onSignedOut={props.onSignedOut}
+        />
+      )}
     </Card>
   );
 }
@@ -1140,7 +1172,7 @@ function SettingsPanel(props: { status: AdminStatus; busy: boolean; act: Act }) 
           <AlertTitle>연구 준비 상태: {props.status.research.ready ? '준비됨' : '준비 전'}</AlertTitle>
           <AlertDescription>
             {props.status.research.ready ? (
-              '연구 수업·연구 검사 반을 만들 수 있습니다.'
+              '연구 수업 반을 만들 수 있습니다(논문 v12 조건: 운영값 + 연습 36문항 단서).'
             ) : (
               <ul className="list-disc pl-5 text-sm">
                 {props.status.research.blockers.map((b) => (

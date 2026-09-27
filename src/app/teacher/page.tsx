@@ -13,7 +13,7 @@
  * 학생 현황(LMS): 관리자(/admin)가 만들어 배정한 반의 학생 진행을 번호별로 본다.
  * 일반 수업은 영역별 수준(공통 루브릭 v12-2: 대상·특징·관계 1~4)·최근 답안까지,
  * 연구 수업은 블라인드 채점을 위해 진행 수만 보인다. 100점 점수는 쓰지 않는다.
- * 옛 v7 기록(100점)은 '옛 채점'으로만 따로 보이고 수준 평균에 섞지 않는다.
+ * 옛 v7 기록은 '옛 채점 기록'으로만 따로 보이고(점수 없음) 수준 평균에 섞지 않는다.
  * 단계 이름은 src/lib/stages.ts 하나에서 가져온다.
  *
  * 검사 세션 열기·닫기도 여기서 한다(설계서 §5, 수용시험 6). 단계는 관리 화면의 수업 시작이 한 번에 연다.
@@ -117,8 +117,8 @@ function ScoringCell({ view, compact = false }: { view: ScoringView | null | und
   }
   if (view.kind === 'legacy') {
     return (
-      <span className="whitespace-nowrap text-xs text-muted-foreground" title="옛 기준(v7·100점)으로 채점된 기록입니다. 수준 평균에 넣지 않습니다.">
-        옛 채점 {view.score === null ? '· 결측' : `${view.score}점`}
+      <span className="whitespace-nowrap text-xs text-muted-foreground" title="옛 기준으로 채점된 기록입니다. 영역 수준이 없어 평균에 넣지 않습니다.">
+        옛 채점 기록
       </span>
     );
   }
@@ -139,8 +139,6 @@ type PracticeAttempt = {
   questionLevel?: number;
   questionTitle?: string;
   studentPrompt?: string;
-  /** 옛 연습 기록의 100점 점수. 화면은 scoringView를 쓴다. */
-  score?: number | null;
   /** 서버가 덧붙인 채점 결과(loadLessonRecords). */
   scoringView?: ScoringView;
   createdAt?: string | null;
@@ -633,6 +631,12 @@ export default function TeacherPage() {
                       ))}
                     </div>
                     {progress.notice && <p className="mt-3 text-sm text-amber-700">{progress.notice}</p>}
+                    {progress.privacyHoldCount !== null && progress.privacyHoldCount > 0 && (
+                      <p className="mt-3 text-sm text-muted-foreground">
+                        개인정보 점검에 걸려 AI로 보내지 않고 멈춘 제출이 {progress.privacyHoldCount}건 있습니다. 학생은 고쳐 써서
+                        다시 냈을 수 있습니다. 글은 남기지 않고 건수·유형·시각만 기록합니다.
+                      </p>
+                    )}
                     {!progress.detailVisible && (
                       <p className="mt-3 text-sm text-muted-foreground">
                         연구 수업은 교사 블라인드 채점을 흐리지 않도록 AI 채점 결과·답안·제출 시각을 이 화면에
@@ -645,7 +649,7 @@ export default function TeacherPage() {
                         보이지 않습니다. 종합 수준은 해당 영역 수준의 평균을 반올림한 1~4이고, 평균은 문항마다
                         마지막 종합 수준의 평균입니다. 학생 화면에는 종합 수준도 점수도 보이지 않습니다.
                         {progress.totals.legacySubmissions > 0 &&
-                          ` 옛 기준(100점)으로 채점된 기록 ${progress.totals.legacySubmissions}건은 '옛 채점'으로 따로 보이며 평균에 넣지 않았습니다.`}
+                          ` 옛 기준으로 채점된 기록 ${progress.totals.legacySubmissions}건은 '옛 채점 기록'으로 따로 보이며 평균에 넣지 않았습니다.`}
                       </p>
                     )}
                     <p className="mt-2 text-xs text-muted-foreground">
@@ -758,7 +762,7 @@ export default function TeacherPage() {
                                                     a.levels
                                                       ? { kind: 'areas', levels: a.levels, overallLevel: a.overallLevel }
                                                       : a.legacy
-                                                        ? { kind: 'legacy', score: a.legacyScore }
+                                                        ? { kind: 'legacy' }
                                                         : { kind: 'missing' }
                                                   }
                                                 />
@@ -997,16 +1001,9 @@ export default function TeacherPage() {
                                     <TableCell className="whitespace-pre-wrap py-3 leading-relaxed">
                                       {att.studentPrompt ?? ''}
                                     </TableCell>
-                                    {/* 결측은 0점·1수준이 아니다. 옛 100점 기록은 '옛 채점'으로만 둔다. */}
+                                    {/* 결측은 0점·1수준이 아니다. 옛 기록은 점수 없이 '옛 채점 기록'으로만 둔다. */}
                                     <TableCell className="text-right">
-                                      <ScoringCell
-                                        view={
-                                          att.scoringView ??
-                                          (typeof att.score === 'number'
-                                            ? { kind: 'legacy', score: att.score }
-                                            : { kind: 'missing' })
-                                        }
-                                      />
+                                      <ScoringCell view={att.scoringView ?? { kind: 'missing' }} />
                                     </TableCell>
                                     <TableCell className="no-print">
                                       <Button
@@ -1092,8 +1089,8 @@ export default function TeacherPage() {
                 <CardContent className="space-y-4 p-5 overflow-x-auto">
                   {!research.blind && (
                     <p className="text-xs text-muted-foreground">
-                      공통 루브릭 v12-2의 영역별 수준입니다(해당 없음 영역은 숨김). 옛 기준(v7·100점)으로
-                      채점된 기록은 영역 수준이 없어 &lsquo;옛 채점&rsquo;으로 따로 표시합니다.
+                      공통 루브릭 v12-2의 영역별 수준입니다(해당 없음 영역은 숨김). 옛 기준으로
+                      채점된 기록은 영역 수준이 없어 &lsquo;옛 채점 기록&rsquo;으로 따로 표시합니다(점수 없음).
                     </p>
                   )}
                   <Table>

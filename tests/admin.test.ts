@@ -11,7 +11,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 
@@ -255,6 +255,8 @@ test('차시 기록의 pacing이 판정 상태로 옮겨진다', async () => {
       lessonSessions: 'lessons',
       researchPracticeSubmissions: 'research',
       experienceSubmissions: (c) => `classes/${c}/exp`,
+      researchPrivacyHolds: 'research/holds',
+      experiencePrivacyHolds: (c) => `classes/${c}/holds`,
     },
     safeDocId: (v) => v,
   });
@@ -284,13 +286,30 @@ test('차시 기록의 pacing이 판정 상태로 옮겨진다', async () => {
 
 const readSource = (relative: string) => readFileSync(path.join(ROOT, relative), 'utf8');
 
+/** 관리 화면의 'use server' 파일과 최소 export 수. 새 파일은 아래 검사가 목록에 넣으라고 알린다. */
+const ADMIN_ACTION_FILES: Array<[string, number]> = [
+  ['src/server/admin/actions.ts', 6],
+  ['src/server/admin/research-actions.ts', 6],
+  ['src/server/admin/cue-pack-actions.ts', 4],
+  ['src/server/admin/participant-actions.ts', 4],
+];
+
+test('관리 server action 파일 목록이 src/server/admin의 모든 use server 파일을 담는다', () => {
+  const dir = path.join(ROOT, 'src/server/admin');
+  const useServer = readdirSync(dir)
+    .filter((f) => /\.tsx?$/.test(f))
+    .map((f) => `src/server/admin/${f}`)
+    .filter((rel) => /^\s*(?:\/\/[^\n]*\n\s*)*['"]use server['"]/.test(readSource(rel)));
+  assert.deepEqual(useServer.sort(), ADMIN_ACTION_FILES.map(([f]) => f).sort());
+});
+
 test('관리 server action은 모두 관리자 세션을 먼저 확인한다', () => {
   // 로그인·상태 조회·로그아웃만 세션 없이 부를 수 있다.
   const open = new Set(['getAdminStatusAction', 'adminSignInAction', 'adminSignOutAction']);
-  for (const file of ['src/server/admin/actions.ts', 'src/server/admin/research-actions.ts']) {
+  for (const [file, minExports] of ADMIN_ACTION_FILES) {
     const src = readSource(file);
     const exported = [...src.matchAll(/export async function (\w+)\(/g)].map((m) => m[1]);
-    assert.ok(exported.length > 5, file);
+    assert.ok(exported.length >= minExports, file);
     for (const name of exported) {
       if (open.has(name)) continue;
       const start = src.indexOf(`export async function ${name}(`);

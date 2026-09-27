@@ -19,6 +19,7 @@ import {
   type Band,
 } from '@/lib/scoring';
 import type { QuestionCues } from '@/server/registry/contract';
+import { defaultNotApplicableAreas } from '@/lib/question-areas';
 import { RUBRIC_VERSION, renderForModel } from '@/lib/rubric';
 
 export { RUBRIC_VERSION };
@@ -64,15 +65,23 @@ const ANCHOR_AREA: Record<string, string> = {
 /**
  * 단서 팩으로 영역 판정 여부를 정한다. 단서 팩 구조는 바꾸지 않는다.
  *   대상: 늘 판정  특징: 필수 속성이 있을 때  관계: 필수 관계(requiredContext)가 있을 때
- * 단서 팩이 없으면(일반 체험) 대상만 정하고 특징·관계는 모델이 정한다(null).
+ * 단서 팩이 없으면(일반 체험·단서 미적재) 대상만 정하고 특징·관계는 모델이 정한다(null).
+ * 다만 questionId를 주면 코드의 기본 목록(src/lib/question-areas.ts — 관계가 기본으로 해당 없음인 문항)을
+ * 적용해 그 영역을 해당 없음(false)으로 둔다. **단서 팩이 있으면 단서 팩이 우선한다.**
  */
-export function applicabilityOf(cues: QuestionCues | null): AreaApplicability {
-  if (!cues) return { object: true, feature: null, relation: null };
-  return {
-    object: true,
-    feature: (cues.requiredAttributes ?? []).length > 0,
-    relation: (cues.requiredContext ?? []).length > 0,
-  };
+export function applicabilityOf(cues: QuestionCues | null, questionId?: string): AreaApplicability {
+  if (cues) {
+    return {
+      object: true,
+      feature: (cues.requiredAttributes ?? []).length > 0,
+      relation: (cues.requiredContext ?? []).length > 0,
+    };
+  }
+  const app: AreaApplicability = { object: true, feature: null, relation: null };
+  for (const area of questionId ? defaultNotApplicableAreas(questionId) : []) {
+    if (area !== 'object') app[area] = false;
+  }
+  return app;
 }
 
 /** 단서를 지시문 문언으로 옮긴다. 앵커는 문자열 대조가 아니라 수준 경계의 예시다. 1~4수준만 넣는다. */
@@ -138,7 +147,8 @@ feedbackLine3: 다음 행동 한 가지. 판정한 영역 가운데 수준이 �
    (missing이 비어 있으면 nextTarget은 null). 모든 영역이 수준 4이면 nextArea·nextTarget을 null로 두고 중립적으로 확인한다.
 feedbackLine4: 3문장을 쓸 때 쓸 수 있는 표현을 제안하거나, 스스로 확인할 질문을 하나 낸다.
 
-지키기: 그림에 없는 정보를 요구하지 않는다. 칭찬하는 말(잘했어요·훌륭해요 같은 말), 다른 친구와의 비교,
+지키기: 초등학생이 바로 알아듣는 쉬운 말로 짧게 쓴다(한 문장은 80자 안쪽). 그림에 없는 정보를 요구하지 않는다.
+다음 행동은 한 가지만 말한다. 칭찬하는 말(잘했어요·훌륭해요 같은 말), 다른 친구와의 비교,
 점수·수준·등급을 말하지 않는다. 한 필드에 두 문장 이상 쓰지 않는다. 네 문장을 넘기지 않는다.`;
 }
 
@@ -157,6 +167,8 @@ export interface EvaluationPromptInput {
   noCuePolicy?: 'refuse' | 'common_only';
   /** 문항이 속한 단계의 초점 영역. 검사 문항·초점 없는 단계는 null. */
   focusArea?: AreaId | null;
+  /** 문항 ID. 코드가 정해 둔 영역 예외(applicabilityOf)에 쓴다. */
+  questionId?: string;
 }
 
 /** 채점 모형에 보내는 전체 지시문. 공통 문언과 문항별 필수 정보를 같은 버전으로 함께 넣는다. */
@@ -167,7 +179,7 @@ export function buildEvaluationPrompt(input: EvaluationPromptInput): string {
     studentPrompt: input.studentPrompt,
     cueBlock,
     noCuePolicy: input.noCuePolicy ?? 'refuse',
-    applicability: applicabilityOf(input.cues),
+    applicability: applicabilityOf(input.cues, input.questionId),
     focusArea: input.focusArea ?? null,
   });
 }

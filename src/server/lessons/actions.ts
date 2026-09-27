@@ -19,11 +19,12 @@ import { randomUUID } from 'node:crypto';
 
 import { CODE_COMMIT } from '@/server/config';
 import { grading } from '@/server/grading';
-import { registry } from '@/server/registry';
+import { ensureCuePackLoaded, registry } from '@/server/registry';
 import { privacy } from '@/server/privacy';
 import { AuthError } from '@/server/auth/contract';
 import { applicabilityOf } from '@/lib/evaluation-prompt';
 import { AREA_IDS, type AreaId } from '@/lib/scoring';
+import type { QuestionCues } from '@/server/registry/contract';
 import type { AppMode, SessionType } from '@/lib/research/types';
 
 import { allowedModes } from '@/lib/research/session-modes';
@@ -146,22 +147,24 @@ const PRACTICE_QUESTION_IDS = Array.from(
 /**
  * 연습 문항별 해당 없음 영역 — 채점이 쓰는 규칙(applicabilityOf)과 같은 근거다.
  *
- * 이 세션에서 쓸 수 있고 단서가 적재된 문항만 본다. 단서가 없는 문항은 넣지 않는다
- * (해당 여부를 모델이 정하므로 화면은 세 영역의 질문을 모두 보여 준다).
+ * 코드가 정해 둔 예외(대상이 하나뿐인 A밴드 그림의 관계)는 단서와 무관하게 넣는다.
+ * 그 밖에는 이 세션에서 쓸 수 있고 단서가 적재된 문항만 본다. 단서가 없는 문항은 넣지 않는다
+ * (해당 여부를 모델이 정하므로 화면은 나머지 영역의 질문을 보여 준다).
  * 단서 팩을 읽지 못해도 차시 상태는 깨지지 않게 그 문항만 건너뛴다.
  */
 function notApplicableAreasFor(sessionType: SessionType): Record<string, AreaId[]> {
   const out: Record<string, AreaId[]> = {};
   for (const questionId of PRACTICE_QUESTION_IDS) {
+    let cues: QuestionCues | null = null;
     try {
       const entry = registry.requireEntry(questionId, sessionType);
-      if (entry.kind !== 'practice' || !entry.cuesLoaded) continue;
-      const applicability = applicabilityOf(registry.getCues(questionId));
-      const skip = AREA_IDS.filter((area) => applicability[area] === false);
-      if (skip.length) out[questionId] = skip;
+      if (entry.kind === 'practice' && entry.cuesLoaded) cues = registry.getCues(questionId);
     } catch {
-      // 등록되지 않았거나 이 세션에서 쓸 수 없거나 단서를 읽지 못한 문항은 빼고 계속한다.
+      // 등록되지 않았거나 이 세션에서 쓸 수 없거나 단서를 읽지 못한 문항은 코드 예외만 본다.
     }
+    const applicability = applicabilityOf(cues, questionId);
+    const skip = AREA_IDS.filter((area) => applicability[area] === false);
+    if (skip.length) out[questionId] = skip;
   }
   return out;
 }
@@ -193,6 +196,9 @@ export async function getLessonStateAction(
 
   const decision = decideLessonAccess(state, requestedLesson ?? null);
   const entryLesson = resolveEntryLesson(state, requestedLesson ?? null);
+
+  // 해당 없음 영역은 단서 팩에서 정한다. 파일이 없는 서버(Vercel)는 Firestore 사본을 먼저 읽어 둔다.
+  await ensureCuePackLoaded();
 
   const classKey = resolveClassKey(toSubmitContext(ctx));
   const progress = await progressOwnerKeys(ctx);
@@ -377,6 +383,8 @@ export async function submitPracticeAction(
   } catch (err) {
     return { status: 'blocked', message: errorMessage(err) };
   }
+  // 문항 항목의 cuesLoaded·cueVersion과 채점 단서가 같은 팩에서 나오도록 먼저 적재한다.
+  await ensureCuePackLoaded();
   return submitPracticeCore(submitDeps(), toSubmitContext(ctx), input);
 }
 

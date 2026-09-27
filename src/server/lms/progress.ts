@@ -12,7 +12,7 @@
  *     (deidentify.ts의 TEACHER_BLIND_HIDDEN_FIELDS와 같은 취지). 연구ID별 진행 수만 센다.
  *   - 채점 결과는 공통 루브릭 v12-2(3영역 4수준)다. 100점 점수는 쓰지 않는다.
  *     평균·최근은 종합 수준(해당 영역 평균을 반올림한 1~4, src/lib/scoring.ts의 overallLevelOf)이다.
- *   - 옛 v7 기록(축별 5수준·100점)은 legacyScore로만 남긴다. 화면에는 '옛 채점'으로 보이고
+ *   - 옛 v7 기록(축별 5수준·100점)은 legacy 표시만 남기고 점수는 싣지 않는다. 화면에는 '옛 채점 기록'으로 보이고
  *     v12-2 평균·최근 수준에 섞지 않는다. 옛 기록에서 영역 수준을 지어내지 않는다.
  *   - 결측은 1수준도 0점도 아니라 null이다. 평균에 넣지 않는다.
  *   - 제출 수는 진행 정보일 뿐 단계 개방 조건이 아니다.
@@ -28,18 +28,40 @@ import { isLegacyPracticeRecord, storedAreaLevels } from '@/server/lessons/store
 /**
  * 저장된 제출 문서 한 건의 채점 결과를 화면에 보일 모양으로 줄인 것.
  *   areas   공통 루브릭 v12-2로 채점됨. 영역별 수준(해당 없음 포함)과 종합 수준.
- *   legacy  옛 v7(또는 그 이전) 방식 기록. 100점 점수만 있다. score가 null이면 옛 채점 결측.
+ *   legacy  옛 v7(또는 그 이전) 방식 기록. 100점 점수는 화면·내보내기에 싣지 않으므로 읽지 않는다(논문 v12-2 B1).
  *   missing v12-2 기록인데 채점하지 못했다(결측) 또는 채점 결과가 없다.
  */
 export type ScoringView =
   | { kind: 'areas'; levels: AreaLevels; overallLevel: AreaLevel | null }
-  | { kind: 'legacy'; score: number | null }
+  | { kind: 'legacy' }
   | { kind: 'missing' };
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const isObject = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * 옛 기록의 100점 점수·축 점수를 화면으로 보내지 않는다(논문 v12-2 B1 — 합계·100점이 어디에도 남지 않게).
+ * 저장된 문서는 그대로 두고 응답에서만 뺀다. 채점 결과 분류(scoringViewOf)는 이 필드 없이도 옛 기록으로 읽는다.
+ */
+export function stripLegacyScores(doc: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...doc };
+  for (const key of ['score', 'totalScore', 'axisScores']) delete out[key];
+  const scoring = out.scoring;
+  if (scoring && typeof scoring === 'object' && !Array.isArray(scoring)) {
+    const sc = { ...(scoring as Record<string, unknown>) };
+    const result = sc.result;
+    if (result && typeof result === 'object' && !Array.isArray(result)) {
+      const r = { ...(result as Record<string, unknown>) };
+      delete r.score;
+      delete r.axisScores;
+      sc.result = r;
+    }
+    out.scoring = sc;
+  }
+  return out;
+}
 
 /**
  * 제출 문서에서 채점 결과를 읽는다.
@@ -53,12 +75,12 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
 export function scoringViewOf(raw: Record<string, unknown>): ScoringView {
   const scoring = isObject(raw.scoring) ? raw.scoring : null;
   if (!scoring) {
-    if ('score' in raw) return { kind: 'legacy', score: num(raw.score) };
+    if ('score' in raw) return { kind: 'legacy' };
     return { kind: 'missing' };
   }
   const result = isObject(scoring.result) ? scoring.result : null;
   if (isLegacyPracticeRecord(raw)) {
-    return { kind: 'legacy', score: result && result.status === 'scored' ? num(result.score) : null };
+    return { kind: 'legacy' };
   }
   const levels = storedAreaLevels(result);
   if (!levels) return { kind: 'missing' };
@@ -94,10 +116,8 @@ export interface ProgressSubmission {
   levels: AreaLevels | null;
   /** v12-2 종합 수준(1~4). levels가 null이면 null */
   overallLevel: AreaLevel | null;
-  /** 옛 v7 기록인가. 옛 기록은 v12-2 평균·최근 수준에 넣지 않는다. */
+  /** 옛 v7 기록인가. 옛 기록은 v12-2 평균·최근 수준에 넣지 않고 점수도 싣지 않는다. */
   legacy: boolean;
-  /** 옛 v7 기록의 100점 점수. 옛 기록이 아니거나 옛 채점 결측이면 null */
-  legacyScore: number | null;
   reviewed: boolean;
 }
 
@@ -117,9 +137,8 @@ export interface RecentAttempt {
   /** v12-2 영역별 수준. 결측·옛 기록이면 null */
   levels: AreaLevels | null;
   overallLevel: AreaLevel | null;
+  /** 옛 v7 기록. 화면에는 '옛 채점 기록'으로만 보이고 점수는 없다. */
   legacy: boolean;
-  /** 옛 채점(100점). 화면에는 '옛 채점'으로만 보인다. */
-  legacyScore: number | null;
   text: string;
   submittedAt: string | null;
   reviewed: boolean;
@@ -187,7 +206,6 @@ export function toProgressSubmission(raw: Record<string, unknown>): ProgressSubm
     levels: view.kind === 'areas' ? view.levels : null,
     overallLevel: view.kind === 'areas' ? view.overallLevel : null,
     legacy: view.kind === 'legacy',
-    legacyScore: view.kind === 'legacy' ? view.score : null,
     reviewed: raw.feedbackReview !== null && raw.feedbackReview !== undefined,
   };
 }
@@ -386,7 +404,6 @@ export function summarizeClassProgress(input: {
             levels: i.levels,
             overallLevel: i.overallLevel,
             legacy: i.legacy,
-            legacyScore: i.legacyScore,
             text: i.text ?? '',
             submittedAt: i.submittedAt,
             reviewed: i.reviewed,

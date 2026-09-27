@@ -17,7 +17,7 @@
  */
 
 import { auth } from '@/server/auth';
-import { registry } from '@/server/registry';
+import { ensureCuePackLoaded, registry } from '@/server/registry';
 import { privacy } from '@/server/privacy';
 import { CONSENT_VERSION } from '@/server/config';
 import type { AssessmentPhase } from '@/lib/research/types';
@@ -34,7 +34,9 @@ function store(): AssessmentStore {
   return cachedStore;
 }
 
-function deps(): CollectDeps {
+/** 레지스트리가 단서 팩(파일 또는 Firestore 사본)을 동기로 읽으므로 먼저 적재한 뒤 의존을 넘긴다. */
+async function deps(): Promise<CollectDeps> {
+  await ensureCuePackLoaded();
   return {
     auth,
     registry,
@@ -50,25 +52,25 @@ export async function openAssessmentSession(
   classResearchId: string,
   phase: AssessmentPhase
 ): Promise<{ ok: boolean; assessmentSessionId?: string; blockers?: string[] }> {
-  return collect.openAssessmentSession(deps(), classResearchId, phase);
+  return collect.openAssessmentSession(await deps(), classResearchId, phase);
 }
 
 export async function closeAssessmentSession(
   assessmentSessionId: string
 ): Promise<{ ok: boolean }> {
-  return collect.closeAssessmentSession(deps(), assessmentSessionId);
+  return collect.closeAssessmentSession(await deps(), assessmentSessionId);
 }
 
 /* ────────────────────── 학생: 상태 조회·문항 열기 ────────────────────── */
 
 export async function getAssessmentState(): Promise<AssessmentStateResponse> {
-  return collect.getAssessmentState(deps());
+  return collect.getAssessmentState(await deps());
 }
 
 export async function startAssessmentItem(
   requestedQuestionId: string | null
 ): Promise<AssessmentStateResponse> {
-  return collect.startAssessmentItem(deps(), requestedQuestionId);
+  return collect.startAssessmentItem(await deps(), requestedQuestionId);
 }
 
 /* ────────────────────── 학생: 제출 ────────────────────── */
@@ -78,7 +80,7 @@ export async function submitAssessmentResponse(input: {
   questionId: string;
   text: string;
 }): Promise<SubmitResult> {
-  return collect.submitAssessmentResponse(deps(), input);
+  return collect.submitAssessmentResponse(await deps(), input);
 }
 
 /* ────────────────────── 기술 실패 ────────────────────── */
@@ -90,7 +92,7 @@ export async function reportTechnicalFailure(input: {
   questionId: string;
   reason: string;
 }): Promise<{ ok: boolean; recorded: boolean }> {
-  return collect.reportTechnicalFailure(deps(), input);
+  return collect.reportTechnicalFailure(await deps(), input);
 }
 
 /** 교사가 확인한 기술 실패. 이 값만이 결측 사유를 technical_failure로 만든다. */
@@ -101,7 +103,7 @@ export async function confirmTechnicalFailure(input: {
   questionId: string;
   reason: string;
 }): Promise<{ ok: boolean }> {
-  return collect.confirmTechnicalFailure(deps(), input);
+  return collect.confirmTechnicalFailure(await deps(), input);
 }
 
 /* ────────────────────── 마감 처리 ────────────────────── */
@@ -110,5 +112,5 @@ export async function finalizeTimeouts(
   assessmentSessionId: string,
   researchIds: string[]
 ): Promise<{ ok: boolean; created: number }> {
-  return collect.finalizeTimeouts(deps(), assessmentSessionId, researchIds);
+  return collect.finalizeTimeouts(await deps(), assessmentSessionId, researchIds);
 }

@@ -63,6 +63,8 @@ export type {
  * submissions 문서를 건드리지 않으려고 새 이름을 여기서만 쓴다.
  */
 const EXPERIENCE_SUBMISSIONS = 'experience_practice_submissions';
+/** 일반 체험의 개인정보 보류 기록(유형·시각만) */
+const EXPERIENCE_PRIVACY_HOLDS = 'privacy_holds';
 
 /**
  * 일반 체험 제출이 놓이는 컬렉션 경로. 교사 학생 현황(LMS)이 같은 경로를 읽는다.
@@ -77,10 +79,20 @@ export const RESEARCH_PRACTICE_SUBMISSIONS_PATH = researchPath(
   RESEARCH_COLLECTIONS.practiceSubmissions
 );
 
+/** 개인정보 보류 기록(연구) 컬렉션 경로 */
+export const RESEARCH_PRIVACY_HOLDS_PATH = researchPath(RESEARCH_COLLECTIONS.privacyHolds);
+
+/** 일반 체험의 개인정보 보류 기록 경로(비연구 수업 기록 트리 아래) */
+export function experiencePrivacyHoldsPath(classCode: string): string {
+  return `${COLLECTIONS.classes}/${assertSafeDocId(classCode, '학급')}/${EXPERIENCE_PRIVACY_HOLDS}`;
+}
+
 const PATHS: LessonPaths = {
   lessonSessions: researchPath(RESEARCH_COLLECTIONS.lessonSessions),
   researchPracticeSubmissions: RESEARCH_PRACTICE_SUBMISSIONS_PATH,
   experienceSubmissions: experienceSubmissionsPath,
+  researchPrivacyHolds: RESEARCH_PRIVACY_HOLDS_PATH,
+  experiencePrivacyHolds: experiencePrivacyHoldsPath,
 };
 
 /** Firestore를 문서 단위 계약으로 감싼다. 규칙 판정은 store-core가 한다. */

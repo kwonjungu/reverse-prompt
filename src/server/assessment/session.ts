@@ -26,7 +26,11 @@ export interface AssessmentRegistryView {
   assessmentOrder(): string[];
   getEntry(questionId: string): RegistryEntry;
   toPublicView(entry: RegistryEntry): PublicQuestionView;
-  readiness(): { researchReady: boolean; blockers: string[] };
+  /**
+   * 옛 사전·사후 검사의 준비 조건. 논문 v12 연구 수업의 readiness()와 다르다 —
+   * 검사 문항 확정·이미지·해시·단서까지 본다(v12 readiness가 검사 조건을 빼도 검사 경로는 그대로 막힌다).
+   */
+  assessmentReadiness(): { researchReady: boolean; blockers: string[] };
 }
 
 /** 검사 문항 하나의 서버측 계획. 단서·앵커는 담지 않는다. */
@@ -93,7 +97,7 @@ export interface ResearchStartCheck {
 /**
  * 본연구 검사를 시작해도 되는지 판정한다.
  *
- * candidate 상태이거나 승인일이 없거나 readiness가 false이면 막는다.
+ * candidate 상태이거나 승인일이 없거나 검사 준비 조건(assessmentReadiness)이 false이면 막는다.
  * 화면 토글이 아니라 이 판정이 근거이며 route·server action·스크립트가 모두 이것을 부른다.
  *
  * allowCandidate는 '합성 자료 모의 실행'에서만 쓴다. 이 옵션은 레지스트리 상태에 대한
@@ -107,7 +111,7 @@ export function checkResearchStartAllowed(
   options?: { allowCandidate?: boolean }
 ): ResearchStartCheck {
   const blockers: string[] = [];
-  const readiness = registry.readiness();
+  const readiness = registry.assessmentReadiness();
   if (!readiness.researchReady) blockers.push(...readiness.blockers);
 
   const plan = buildAssessmentPlan(registry);
