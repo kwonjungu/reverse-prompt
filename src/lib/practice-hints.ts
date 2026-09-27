@@ -105,7 +105,8 @@ export function buildHintChecks(level: number): HintCheck[] {
 }
 
 /** 연구자가 검수를 마친 문항(L01~L36). 검수표를 보고 여기에 문항 ID를 더한다. */
-export const REVIEWED_QUESTIONS: readonly string[] = [];
+// 미리 보기 전용 브랜치(hints-preview-all36): 36개를 모두 켠 판. main에 합치지 않는다.
+export const REVIEWED_QUESTIONS: readonly string[] = Array.from({ length: 36 }, (_, i) => `L${String(i + 1).padStart(2, '0')}`);
 
 /** questionId(L01~L36) → 힌트 초안 */
 export const PRACTICE_HINTS: Record<string, PracticeHintDraft> = Object.fromEntries(
