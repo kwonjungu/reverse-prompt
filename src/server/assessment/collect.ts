@@ -31,6 +31,7 @@ import type {
   SubmissionRecord,
 } from '@/lib/research/types';
 import { isResearchConsentActive } from '@/lib/research/types';
+import { MODE_BLOCKED_MESSAGE, isModeAllowed } from '@/lib/research/session-modes';
 import { acceptsSubmission, type ItemWindow } from './timing';
 import {
   PARTICIPATION_MESSAGE,
@@ -65,6 +66,8 @@ export interface AssessmentAuthView {
   requirePrincipal(): Promise<Principal>;
   requireClassAccess(classResearchId: string, ...roles: Role[]): Promise<Principal>;
   getConsent(researchId: string): Promise<ConsentRecord | null>;
+  /** 학급의 세션 성격을 서버 기록에서 읽는다. 검사 세션은 연구 검사 학급에서만 연다. */
+  getClassSessionType(classResearchId: string): Promise<SessionType>;
 }
 
 /** 레지스트리에서 쓰는 기능. 세션 판정용 뷰에 requireEntry를 더한 것이다. */
@@ -145,6 +148,11 @@ async function loadStudentContext(
   if (principal.role !== 'student' || !principal.researchId || !principal.classResearchId) {
     return { ok: false, message: PARTICIPATION_MESSAGE.session_not_open };
   }
+  // 검사는 연구 검사 세션에서만 받는다. 연구 수업(연습)·일반 체험 학생이 같은 학급에
+  // 열린 검사 세션을 만나도 응답을 모으지 않는다(middleware 힌트와 별개의 서버 판정).
+  if (!isModeAllowed(principal.sessionType, 'assessment')) {
+    return { ok: false, message: MODE_BLOCKED_MESSAGE };
+  }
 
   const researchStart = checkResearchStartAllowed(deps.registry);
   const consent = await deps.auth.getConsent(principal.researchId);
@@ -188,6 +196,13 @@ export async function openAssessmentSession(
     'researcher',
     'admin'
   );
+
+  // 검사 세션은 연구 검사 학급에서만 연다. 연구 수업·일반 체험 학급에 검사 창을 열면
+  // 그 학급 학생의 연습 흐름에 검사 수집이 섞이므로 서버 기록으로 막는다.
+  const classSessionType = await deps.auth.getClassSessionType(classResearchId);
+  if (classSessionType !== 'research_assessment') {
+    return { ok: false, blockers: ['연구 검사 학급에서만 검사를 열 수 있습니다.'] };
+  }
 
   // 후보·미승인 레지스트리에서는 본연구 검사를 열 수 없다. 화면 토글로 대신하지 않는다.
   const start = checkResearchStartAllowed(deps.registry);

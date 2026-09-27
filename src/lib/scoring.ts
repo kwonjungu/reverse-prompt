@@ -192,18 +192,27 @@ export function validateAreaCall(
 export const APP_LEVEL_RULE =
   '앱 종합 수준 = round_half_up(해당 영역 수준의 평균). not_applicable 영역은 평균에서 뺀다. 결과는 1~4.';
 
+/**
+ * 반올림 전 종합 수준. 결측(null)·판정한 영역이 없음·형식이 어긋난 값이면 null이다.
+ * 저장 문서에서 읽은 값이 손상되어 있어도(범위 밖·소수·문자열·빈 영역) 1~4로 끌어다 맞추지 않는다.
+ */
 export function overallLevelRaw(levels: AreaLevels | null | undefined): number | null {
-  if (!levels) return null;
-  const vs = AREA_IDS.map((a) => levels[a]).filter((v): v is AreaLevel => typeof v === 'number');
+  if (!levels || typeof levels !== 'object') return null;
+  const vs: AreaLevel[] = [];
+  for (const a of AREA_IDS) {
+    const v = parseAreaLevel((levels as Record<string, unknown>)[a]);
+    if (v === null) return null;
+    if (v !== NOT_APPLICABLE) vs.push(v);
+  }
   if (!vs.length) return null;
-  return vs.reduce((s, v) => s + v, 0) / vs.length;
+  return vs.reduce<number>((s, v) => s + v, 0) / vs.length;
 }
 
 export function overallLevelOf(levels: AreaLevels | null | undefined): AreaLevel | null {
   const raw = overallLevelRaw(levels);
   if (raw === null) return null;
-  // 부동소수 오차로 2.4999…가 2가 되지 않게 아주 작은 값을 더한다.
-  return Math.min(4, Math.max(1, Math.floor(raw + 0.5 + 1e-9))) as AreaLevel;
+  // 평균은 늘 1~4 안이다. 부동소수 오차로 2.4999…가 2가 되지 않게 아주 작은 값을 더한다.
+  return Math.floor(raw + 0.5 + 1e-9) as AreaLevel;
 }
 
 /* ────────────────────────── 다음 행동의 영역 ────────────────────────── */

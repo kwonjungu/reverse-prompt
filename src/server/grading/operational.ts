@@ -18,6 +18,7 @@ import {
   nextActionArea,
   validateAreaCall,
   type AreaApplicability,
+  type AreaId,
   type AreaJudgments,
   type Band,
 } from '@/lib/scoring';
@@ -33,6 +34,7 @@ import {
   extractFeedbackDraft,
   feedbackNotRequested,
   produceFeedback,
+  targetKey,
   type FeedbackDraft,
 } from '@/lib/feedback';
 import { stageFocusArea } from '@/lib/stages';
@@ -103,6 +105,34 @@ export function resolveModelConfig(raw: Record<string, unknown>): Record<string,
     config.temperature = 0.2;
   }
   return config;
+}
+
+/**
+ * 단서 팩의 영역별 필수 정보(허용 표현 포함). 3문장 nextTarget 확인에 쓴다. 단서 팩이 없으면 null.
+ * 서버 안에서만 쓰며 학생 화면으로 보내지 않는다.
+ */
+export function cueTargetsOf(cues: QuestionCues | null): Record<AreaId, string[]> | null {
+  if (!cues) return null;
+  const accepted = cues.acceptedExpressions ?? [];
+  return {
+    object: [...(cues.coreObjects ?? []), ...accepted],
+    feature: [...(cues.requiredAttributes ?? []), ...accepted],
+    relation: [...(cues.requiredContext ?? []), ...accepted],
+  };
+}
+
+/** 판정은 그대로 두고, 빠진 정보 목록만 단서 팩으로 확인되는 항목으로 줄인 사본. 단서 팩이 없으면 원본. */
+function withVerifiedMissing(areas: AreaJudgments, cueTargets: Record<AreaId, string[]> | null): AreaJudgments {
+  if (!cueTargets) return areas;
+  const keep = (area: AreaId) => {
+    const allowed = new Set(cueTargets[area].map(targetKey));
+    return areas[area].missing.filter((m) => allowed.has(targetKey(m)));
+  };
+  return {
+    object: { ...areas.object, missing: keep('object') },
+    feature: { ...areas.feature, missing: keep('feature') },
+    relation: { ...areas.relation, missing: keep('relation') },
+  };
 }
 
 export function createGrading(deps: GradingDeps): GradingApi {
@@ -329,6 +359,8 @@ export function createGrading(deps: GradingDeps): GradingApi {
 
       const levels = levelsOf(areas);
       const requiredNextArea = nextActionArea(levels, focusArea);
+      // 단서 팩이 있으면 3문장이 겨냥할 정보를 단서 팩의 필수 정보로 한 번 더 확인한다(그림에 없는 정보 요구 차단).
+      const cueTargets = cueTargetsOf(cues);
       const feedback = await produceFeedback({
         context: {
           studentText: req.studentText,
@@ -339,6 +371,7 @@ export function createGrading(deps: GradingDeps): GradingApi {
             relation: areas.relation.missing,
           },
           requiredNextArea,
+          cueTargets,
         },
         generate: async (attempt): Promise<FeedbackDraft | null> => {
           if (attempt === 0) return extractFeedbackDraft(success.raw);
@@ -362,7 +395,8 @@ export function createGrading(deps: GradingDeps): GradingApi {
               purpose: 'feedback',
               prompt: buildFeedbackPrompt({
                 studentPrompt: req.studentText,
-                areas,
+                // 다시 만들 때는 단서 팩으로 확인되는 빠진 정보만 알려 준다. 판정(수준)은 그대로다.
+                areas: withVerifiedMissing(areas, cueTargets),
                 focusArea,
                 requiredNextArea,
               }),

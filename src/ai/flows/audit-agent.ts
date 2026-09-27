@@ -29,6 +29,8 @@ import { ai } from '@/ai/genkit';
 import { z } from 'genkit';
 import { auth } from '@/server/auth';
 import { EVALUATION_MODEL_ID } from '@/server/config';
+import { STAGES } from '@/lib/stages';
+import { RUBRIC_VERSION } from '@/lib/rubric';
 
 // ── 입력 스키마 ──────────────────────────────────────────
 const QuestionSchema = z.object({
@@ -40,10 +42,10 @@ const QuestionSchema = z.object({
 });
 
 // 감수 payload에는 신원 ID(연구ID·학급ID·출석번호·학교명)를 넣지 않는다.
+// 공통 루브릭 v12-2에는 100점 점수가 없으므로 점수 칸을 두지 않는다.
 const EvalSampleSchema = z.object({
   questionLevel: z.number().optional(),
   studentPrompt: z.string(),
-  score: z.number().optional(),
   feedback: z.string().optional(),
   originalPrompt: z.string().optional(),
 });
@@ -189,9 +191,14 @@ const auditFlow = ai.defineFlow(
 대상: 초등학교 5~6학년 / 역프롬프트 학습 시스템
 
 ──────────────────────────────────────────
-[1] 연습 문항 ${input.questions.length}개 (level / 차시 / 제목 / 이미지 원 프롬프트 / 안내문)
+[1] 연습 문항 ${input.questions.length}개 (level / 단계 / 제목 / 이미지 원 프롬프트 / 단계 안내문)
 ${input.questions.map(q =>
-  `  Lv.${q.level}(${q.chasi}차시) ${q.koreanTitle}: src="${q.sourcePrompt.slice(0, 80)}..." | 안내="${q.rubric.slice(0, 60)}..."`
+  `  Lv.${q.level}(${q.chasi}단계) ${q.koreanTitle}: src="${q.sourcePrompt.slice(0, 80)}..." | 안내="${q.rubric.slice(0, 60)}..."`
+).join('\n')}
+
+[1-1] 연습 6단계 (문항은 단계 순서대로 푼다)
+${STAGES.map(s =>
+  `  ${s.chasi}단계 ${s.title}: Lv.${s.levels[0]}~${s.levels[s.levels.length - 1]}`
 ).join('\n')}
 
 [2] 채점 AI 시스템 프롬프트
@@ -203,11 +210,12 @@ ${dataSection}
 ──────────────────────────────────────────
 
 감수 포인트:
-1. 문제 난이도 — 1~15단계 사이에 과도한 점프가 있는가? 초등학생이 소화 가능한가?
+1. 문제 난이도 — 6단계 사이(단계 순서대로)에 과도한 점프가 있는가? 초등학생이 소화 가능한가?
 2. 이미지 프롬프트 — 모델 편향(불필요한 요소 추가) 방지 장치가 충분한가?
-3. 힌트(rubric) — 학생의 상상력을 여는가, 닫는가? 난이도에 맞는가?
-4. 채점 기준 — 초등학생 수준에 공정한가? 특정 축이 너무 어렵지 않은가?
-5. 피드백 품질 — 실제 데이터가 있으면 피드백이 구체적인지, 칭찬-개선 비율이 적절한지 확인.
+3. 안내(단계 안내·목표와 확인 질문) — 정답 값(대상 이름·색 이름·개수)을 알려 주지 않으면서 무엇을 확인할지 알려 주는가? 단계에 맞는가?
+4. 채점 기준(공통 루브릭 ${RUBRIC_VERSION}: 대상·특징·관계 3영역 4수준) — 초등학생 수준에 공정한가? 특정 영역이 너무 어렵지 않은가?
+5. 피드백 품질 — 실제 데이터가 있으면 피드백이 네 문장(목표·잘 쓴 점·다음 행동 한 가지·표현 제안 또는 확인 질문)을 지키는지,
+   학생 표현에 근거하는지, 그림에 없는 정보를 요구하지 않는지, 칭찬·비교·점수 언급이 없는지 확인.
 6. 교육학적 적절성 — 전체 학습 경험이 초등생의 인지 발달에 맞는가?
 
 findings는 severity 순(즉시수정 → 개선권장 → 양호)으로 정렬해서 JSON 반환.

@@ -10,6 +10,9 @@ import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 
 import { SCHEMA_VERSION, type ScoringRun, type SubmissionRecord } from '@/lib/research/types';
+import type { AreaLevel, AreaLevelValue } from '@/lib/scoring';
+import type { LegacyScoringRun } from '@/lib/legacy-v7/types';
+import { TEACHER_BLIND_HIDDEN_FIELDS, toTeacherBlindRecord } from '@/server/auth/deidentify';
 import type { PublicQuestionView, RegistryEntry } from '@/server/registry/contract';
 import type { GradingRequest } from '@/server/grading/contract';
 import {
@@ -29,6 +32,7 @@ import {
   buildAssessmentPlan,
   checkParticipation,
   checkResearchStartAllowed,
+  FORBIDDEN_PAYLOAD_KEYS,
   findForbiddenPayloadKeys,
   toStudentItem,
   type AssessmentRegistryView,
@@ -46,9 +50,11 @@ import {
 import {
   cellIdOf,
   createInMemoryAssessmentStore,
+  isLegacyScoringRun,
   makeItemWindow,
   type AssessmentStore,
   type InspectableStore,
+  type StoredScoringRun,
 } from '@/server/assessment/store';
 import {
   confirmTechnicalFailure,
@@ -61,6 +67,7 @@ import {
   type CollectDeps,
 } from '@/server/assessment/collect';
 import {
+  FORBIDDEN_GRADER_FIELDS,
   PRIMARY_REPEAT_INDEX,
   buildGraderPayload,
   buildScoringQueue,
@@ -70,8 +77,9 @@ import {
   runScoringJob,
   ScoringBlockedError,
 } from '@/server/assessment/scoring-job';
-import type { ConsentRecord } from '@/lib/research/types';
+import type { ConsentRecord, SessionType } from '@/lib/research/types';
 import type { Principal, Role } from '@/server/auth/contract';
+import { MODE_BLOCKED_MESSAGE } from '@/lib/research/session-modes';
 
 /* ────────────────────── 가짜 레지스트리 ────────────────────── */
 
@@ -552,31 +560,43 @@ test('수용시험 10: 결측 응답은 채점 큐에 들어가지 않는다', (
   assert.equal(queue.some((q) => q.submissionId === missing.submissionId), false);
 });
 
-/** 가짜 채점 함수 — 실제 모델을 부르지 않는다. */
-function fakeGrader(scoreByRepeat: Record<number, number>) {
+/**
+ * 가짜 채점 함수 — 실제 모델을 부르지 않는다. 공통 루브릭 v12-2(3영역 4수준) 모양을 돌려준다.
+ * 반복마다 대상 영역 수준을 달리 주어 주 자료가 덮이지 않는지 확인한다.
+ */
+function fakeGrader(objectLevelByRepeat: Record<number, AreaLevel>) {
   const calls: GradingRequest[] = [];
   const fn = async (req: GradingRequest): Promise<ScoringRun> => {
     calls.push(req);
     // 밴드는 payload가 아니라 서버 레지스트리에서 온다. 가짜 채점도 같은 방식으로 정한다.
     const band = BANDS[req.questionId];
+    const objectLevel = objectLevelByRepeat[req.repeatIndex] ?? 2;
     return {
       operationId: req.operationId,
       repeatIndex: req.repeatIndex,
       band,
       result: {
         status: 'scored',
-        levels: { objectLevel: 3, specificityLevel: 3, contextLevel: band === 'A' ? null : 3 },
-        score: scoreByRepeat[req.repeatIndex] ?? 50,
-        axisScores: { object: 17.5, specificity: 17.5, context: band === 'A' ? null : 15 },
+        areas: {
+          object: { level: objectLevel, evidence: null, missing: ['합성 누락'], evidenceMissing: [] },
+          feature: { level: 3, evidence: null, missing: [], evidenceMissing: [] },
+          relation:
+            band === 'A'
+              ? { level: 'not_applicable', evidence: null, missing: [], evidenceMissing: [] }
+              : { level: 2, evidence: null, missing: [], evidenceMissing: [] },
+        },
         feedbackStatus: 'not_requested',
       },
       calls: [],
       extraCall: false,
       feedback: null,
       modelId: 'fake-model',
+      servedModel: 'fake-model-served',
       modelConfig: { temperature: 0.2 },
-      rubricVersion: 'v7',
-      cueVersion: 'v7',
+      rubricVersion: 'v12-2',
+      cueVersion: 'v7-candidate',
+      applicabilitySource: 'cue_pack',
+      focusArea: null,
       imageHash: IMAGE_HASH[req.questionId],
       promptHash: 'hash',
       codeCommit: 'test',
@@ -586,9 +606,15 @@ function fakeGrader(scoreByRepeat: Record<number, number>) {
   return { fn, calls };
 }
 
+/** 저장된 작업의 대상 영역 수준. 옛 v7 작업이나 결측이면 null이다. */
+function objectLevelOf(run: StoredScoringRun | null): AreaLevelValue | null {
+  if (!run || isLegacyScoringRun(run) || run.result.status !== 'scored') return null;
+  return run.result.areas.object.level;
+}
+
 test('수용시험 10: 후보 레지스트리에서는 채점 작업이 시작되지 않는다', async () => {
   const store = createInMemoryAssessmentStore();
-  const grader = fakeGrader({ 1: 50 });
+  const grader = fakeGrader({ 1: 2 });
   await assert.rejects(
     () =>
       runScoringJob(
@@ -611,7 +637,7 @@ test('수용시험 10: 최초 운영 점수가 주 자료로 잠기고 반복 2�
   const registry = fakeRegistry();
   const target = SAMPLE.slice(0, 3);
 
-  const first = fakeGrader({ 1: 50 });
+  const first = fakeGrader({ 1: 2 });
   const r1 = await runScoringJob(
     { store, registry, runOperationalScoring: first.fn, isConsentActive: async () => true },
     target,
@@ -620,7 +646,7 @@ test('수용시험 10: 최초 운영 점수가 주 자료로 잠기고 반복 2�
   assert.equal(r1.scored.length, 3);
 
   // 같은 주 자료를 다시 채점해도 값을 바꾸지 않는다.
-  const again = fakeGrader({ 1: 99 });
+  const again = fakeGrader({ 1: 4 });
   const r1again = await runScoringJob(
     { store, registry, runOperationalScoring: again.fn, isConsentActive: async () => true },
     target,
@@ -634,13 +660,13 @@ test('수용시험 10: 최초 운영 점수가 주 자료로 잠기고 반복 2�
   );
 
   // 신뢰도 반복 2·3은 따로 저장된다.
-  const second = fakeGrader({ 2: 70 });
+  const second = fakeGrader({ 2: 3 });
   await runScoringJob(
     { store, registry, runOperationalScoring: second.fn, isConsentActive: async () => true },
     target,
     { seed: 'seed-2026', repeatIndex: 2 }
   );
-  const third = fakeGrader({ 3: 90 });
+  const third = fakeGrader({ 3: 4 });
   await runScoringJob(
     { store, registry, runOperationalScoring: third.fn, isConsentActive: async () => true },
     target,
@@ -652,13 +678,18 @@ test('수용시험 10: 최초 운영 점수가 주 자료로 잠기고 반복 2�
     await store.getScoringRun(id, 1),
     await store.getScoringRun(id, 2),
     await store.getScoringRun(id, 3),
-  ].filter((r): r is ScoringRun => r !== null);
+  ].filter((r): r is StoredScoringRun => r !== null);
 
   assert.equal(runs.length, 3);
-  // 주 자료는 처음 값 그대로다. 세 반복의 평균(70)으로 덮이지 않았다.
+  // 주 자료는 처음 값 그대로다. 세 반복의 평균(3)이나 다시 채점한 값(4)으로 덮이지 않았다.
   const primary = primaryRun(runs);
   assert.equal(primary?.repeatIndex, PRIMARY_REPEAT_INDEX);
-  assert.equal(primary?.result.status === 'scored' ? primary.result.score : null, 50);
+  assert.equal(objectLevelOf(primary), 2);
+  // 반복 2·3도 영역별 수준으로 따로 남는다.
+  assert.deepEqual(
+    reliabilityRuns(runs).map((r) => objectLevelOf(r)),
+    [3, 4]
+  );
   assert.deepEqual(
     reliabilityRuns(runs).map((r) => r.repeatIndex),
     [2, 3]
@@ -667,7 +698,7 @@ test('수용시험 10: 최초 운영 점수가 주 자료로 잠기고 반복 2�
 
 test('수용시험 10: 채점 묶음에 시드와 순서가 기록된다', async () => {
   const store = createInMemoryAssessmentStore();
-  const grader = fakeGrader({ 1: 50 });
+  const grader = fakeGrader({ 1: 2 });
   const result = await runScoringJob(
     {
       store,
@@ -694,7 +725,7 @@ test('수용시험 10: 채점 묶음에 시드와 순서가 기록된다', async
 
 test('수용시험 10: 동의 철회 뒤에는 새 전송과 대기 작업이 취소된다', async () => {
   const store = createInMemoryAssessmentStore();
-  const grader = fakeGrader({ 1: 50 });
+  const grader = fakeGrader({ 1: 2 });
   const withdrawn = new Set(['R-0002']);
 
   const result = await runScoringJob(
@@ -776,15 +807,19 @@ interface Harness {
 function makeHarness(options?: {
   status?: RegistryEntry['status'];
   store?: InspectableStore;
+  student?: Principal;
+  classSessionType?: SessionType;
 }): Harness {
   const store = options?.store ?? createInMemoryAssessmentStore();
   let now = T0;
   const consent = { value: ACTIVE_CONSENT as ConsentRecord | null };
+  const student = options?.student ?? STUDENT;
+  const classSessionType: SessionType = options?.classSessionType ?? 'research_assessment';
 
   const deps: CollectDeps = {
     auth: {
       async requirePrincipal() {
-        return STUDENT;
+        return student;
       },
       async requireClassAccess(classResearchId: string, ..._roles: Role[]) {
         void _roles;
@@ -795,6 +830,9 @@ function makeHarness(options?: {
       },
       async getConsent() {
         return consent.value;
+      },
+      async getClassSessionType() {
+        return classSessionType;
       },
     },
     registry: fakeRegistryPort({ status: options?.status }),
@@ -876,6 +914,51 @@ test('C1: 같은 제출ID의 더블클릭도 최초 값을 바꾸지 않는다',
   assert.equal(again.duplicate, true);
   const stored = await h.store.getSubmissionForCell('R-0001', 'pre', 'T1');
   assert.equal(stored?.text, '첫 글');
+});
+
+test('모드 차단: 연구 수업(연습) 학생은 같은 학급에 검사 세션이 열려 있어도 검사를 열거나 내지 못한다', async () => {
+  const practiceStudent: Principal = { ...STUDENT, sessionType: 'research_practice' };
+  const h = makeHarness({ student: practiceStudent });
+  const opened = await openAssessmentSession(h.deps, 'C-01', 'pre');
+  assert.equal(opened.ok, true, opened.blockers?.join(' / '));
+
+  const state = await getAssessmentState(h.deps);
+  assert.equal(state.ok, false);
+  assert.equal(state.message, MODE_BLOCKED_MESSAGE);
+  assert.deepEqual(state.items, []);
+
+  const started = await startAssessmentItem(h.deps, null);
+  assert.equal(started.ok, false);
+  assert.equal(await h.store.getItemWindow(cellIdOf('R-0001', 'pre', 'T1')), null, '창을 만들지 않는다');
+
+  const submitted = await submitAssessmentResponse(h.deps, {
+    submissionId: 'd'.repeat(32),
+    questionId: 'T1',
+    text: '연습 학생이 보낸 글',
+  });
+  assert.equal(submitted.stored, false);
+  assert.equal((await h.store.listSubmissions({ classResearchId: 'C-01' })).length, 0);
+
+  const reported = await reportTechnicalFailure(h.deps, { questionId: 'T1', reason: 'network' });
+  assert.equal(reported.ok, false);
+});
+
+test('모드 차단: 일반 체험 학생도 검사 수집 대상이 아니다', async () => {
+  const h = makeHarness({ student: { ...STUDENT, sessionType: 'experience' } });
+  await openAssessmentSession(h.deps, 'C-01', 'pre');
+  const state = await getAssessmentState(h.deps);
+  assert.equal(state.ok, false);
+  assert.equal(state.message, MODE_BLOCKED_MESSAGE);
+});
+
+test('모드 차단: 연구 검사 학급이 아니면 검사 세션을 열 수 없다', async () => {
+  for (const classSessionType of ['research_practice', 'experience'] as SessionType[]) {
+    const h = makeHarness({ classSessionType });
+    const opened = await openAssessmentSession(h.deps, 'C-01', 'pre');
+    assert.equal(opened.ok, false, classSessionType);
+    assert.ok(opened.blockers?.length, classSessionType);
+    assert.equal(await h.store.findOpenSession('C-01', 'pre'), null, classSessionType);
+  }
 });
 
 test('C2: 열지 않은 문항에 기술 실패를 보내도 유령 창이 생기지 않는다', async () => {
@@ -981,7 +1064,7 @@ test('C7: dryRun은 합성 자료에만 적용되고 실데이터 채점을 열�
   });
 
   // 1) 합성 표식이 없는 기록은 dataSource를 synthetic이라 밝혀도 모의 실행되지 않는다.
-  const g1 = fakeGrader({ 1: 50 });
+  const g1 = fakeGrader({ 1: 2 });
   await assert.rejects(
     () =>
       runScoringJob(
@@ -994,7 +1077,7 @@ test('C7: dryRun은 합성 자료에만 적용되고 실데이터 채점을 열�
   assert.equal(g1.calls.length, 0, '막혔으면 모델을 한 번도 부르지 않는다');
 
   // 2) 자료 성격을 밝히지 않으면 합성 표식이 있어도 모의 실행되지 않는다.
-  const g2 = fakeGrader({ 1: 50 });
+  const g2 = fakeGrader({ 1: 2 });
   await assert.rejects(
     () =>
       runScoringJob({ ...base(), runOperationalScoring: g2.fn }, synthetic, {
@@ -1006,7 +1089,7 @@ test('C7: dryRun은 합성 자료에만 적용되고 실데이터 채점을 열�
   );
 
   // 3) 연구 저장소에 쓰는 저장소로는 모의 실행하지 않는다.
-  const g3 = fakeGrader({ 1: 50 });
+  const g3 = fakeGrader({ 1: 2 });
   await assert.rejects(
     () =>
       runScoringJob(
@@ -1023,7 +1106,7 @@ test('C7: dryRun은 합성 자료에만 적용되고 실데이터 채점을 열�
   );
 
   // 4) 합성 자료임을 밝히고 비영속 저장소일 때만 돈다. 그래도 미확정 값은 그대로 남는다.
-  const g4 = fakeGrader({ 1: 50 });
+  const g4 = fakeGrader({ 1: 2 });
   const ok = await runScoringJob(
     { ...base(), runOperationalScoring: g4.fn, dataSource: 'synthetic' },
     synthetic,
@@ -1037,7 +1120,7 @@ test('C7: dryRun은 합성 자료에만 적용되고 실데이터 채점을 열�
 });
 
 test('C7: 본채점 대상에 합성 기록이 섞이면 막는다', async () => {
-  const g = fakeGrader({ 1: 50 });
+  const g = fakeGrader({ 1: 2 });
   await assert.rejects(
     () =>
       runScoringJob(
@@ -1249,4 +1332,201 @@ test('저장소 일치: 이미 열린 창에는 학생 신고를 남긴다', asy
     assert.equal(stored?.studentReportedFailureReason, 'network');
     assert.equal(stored?.delivery, 'delivered');
   }
+});
+
+/* ────────────────────── 공통 루브릭 v12-2: 결과 키 차단·옛 작업 읽기 ────────────────────── */
+
+/** v12-2 결과를 가리키는 열쇠말. 채점자·학생·교사 블라인드 payload 어디에도 실리면 안 된다. */
+const V12_RESULT_KEYS = ['areas', 'overallLevel', 'appLevel', 'evidence', 'missing'] as const;
+
+test('v12-2: 채점자 payload 금지 목록에 영역 판정·종합 수준·근거·누락이 있다', () => {
+  for (const key of V12_RESULT_KEYS) {
+    assert.ok(
+      (FORBIDDEN_GRADER_FIELDS as readonly string[]).includes(key),
+      `채점자 금지 목록에 ${key}가 없다`
+    );
+  }
+  const payload = buildGraderPayload(SAMPLE[0], 'op_1', 1);
+  assert.deepEqual(findForbiddenGraderFields(payload), []);
+  const leaky = { ...payload, areas: { object: { level: 3 } }, appLevel: 3, evidence: 'x' };
+  assert.deepEqual(findForbiddenGraderFields(leaky).sort(), ['appLevel', 'areas', 'evidence']);
+});
+
+test('v12-2: 학생 검사 payload 금지 목록에 AI 결과 키가 있고 중첩돼도 걸린다', () => {
+  for (const key of V12_RESULT_KEYS) {
+    assert.ok(
+      (FORBIDDEN_PAYLOAD_KEYS as readonly string[]).includes(key),
+      `학생 payload 금지 목록에 ${key}가 없다`
+    );
+  }
+  const leaky = {
+    ok: true,
+    items: [{ questionId: 'T1', result: { areas: { object: { level: 2, missing: ['x'] } } } }],
+    overallLevel: 2,
+  };
+  const found = findForbiddenPayloadKeys(leaky);
+  assert.ok(found.includes('$.items[0].result.areas'));
+  assert.ok(found.includes('$.items[0].result.areas.object.missing'));
+  assert.ok(found.includes('$.overallLevel'));
+});
+
+test('v12-2: 교사 블라인드 자료에 AI 채점 결과(scoring·areas)가 실리지 않는다', () => {
+  for (const key of [...V12_RESULT_KEYS, 'scoring']) {
+    assert.ok(
+      (TEACHER_BLIND_HIDDEN_FIELDS as readonly string[]).includes(key),
+      `교사 블라인드 숨김 목록에 ${key}가 없다`
+    );
+  }
+  // 연습 제출 문서는 AI 결과를 scoring 아래에 담는다.
+  const practiceDoc = {
+    researchId: 'R-0001',
+    classResearchId: 'C-01',
+    questionId: 'L01',
+    text: '노란 세모 블록이 있다.',
+    submittedAt: new Date(T0).toISOString(),
+    scoring: {
+      result: {
+        status: 'scored',
+        areas: { object: { level: 3, evidence: '노란 세모 블록', missing: [], evidenceMissing: [] } },
+      },
+      feedback: { status: 'verified', text: '네 문장' },
+      servedModel: 'fake-model-served',
+    },
+    areas: { object: { level: 3 } },
+    appLevel: 3,
+  };
+  const view = toTeacherBlindRecord(practiceDoc);
+  assert.equal('scoring' in view, false);
+  assert.equal('areas' in view, false);
+  assert.equal('appLevel' in view, false);
+  assert.equal('submittedAt' in view, false);
+  assert.equal(JSON.stringify(view).includes('level'), false, 'AI 수준이 어디에도 남지 않는다');
+  assert.equal(view.text, '노란 세모 블록이 있다.');
+  assert.equal(view.questionId, 'L01');
+});
+
+test('v12-2: 일괄 채점 작업이 영역별 수준과 실제 모델을 그대로 저장한다', async () => {
+  const store = createInMemoryAssessmentStore();
+  const grader = fakeGrader({ 1: 3 });
+  const target = SAMPLE.slice(0, 2);
+  const result = await runScoringJob(
+    { store, registry: fakeRegistry(), runOperationalScoring: grader.fn, isConsentActive: async () => true },
+    target,
+    { seed: 'seed-2026', repeatIndex: 1 }
+  );
+  assert.equal(result.scored.length, 2);
+  const run = await store.getScoringRun(target[0].submissionId, 1);
+  assert.ok(run && !isLegacyScoringRun(run));
+  if (!run || isLegacyScoringRun(run)) return;
+  assert.equal(run.servedModel, 'fake-model-served');
+  assert.equal(run.rubricVersion, 'v12-2');
+  assert.equal(run.extraCall, false);
+  assert.equal(objectLevelOf(run), 3);
+  assert.equal('score' in run.result, false, '100점 환산을 저장하지 않는다');
+});
+
+/** 저장소에 이미 남아 있는 옛 v7 채점 작업(축별 5수준·100점). */
+function legacyRunFor(submissionId: string, repeatIndex: number): LegacyScoringRun {
+  void submissionId;
+  return {
+    operationId: `old_${repeatIndex}`,
+    repeatIndex,
+    band: 'A',
+    result: {
+      status: 'scored',
+      levels: { objectLevel: 2.5, specificityLevel: 4, contextLevel: null },
+      score: 56.25,
+      axisScores: { object: 18.75, specificity: 37.5, context: null },
+      feedbackStatus: 'not_requested',
+    },
+    calls: [],
+    extraCall: false,
+    feedback: null,
+    modelId: 'old-model',
+    modelConfig: { temperature: 0.2 },
+    rubricVersion: 'v7-candidate',
+    cueVersion: 'v7-candidate',
+    imageHash: IMAGE_HASH.T1,
+    promptHash: 'old-hash',
+    codeCommit: 'old',
+    scoredAt: new Date(T0).toISOString(),
+  };
+}
+
+test('v12-2: 옛 v7 채점 작업도 두 저장소에서 그대로 읽히고 주 자료 잠금이 유지된다', async () => {
+  const fake = createFakeFirestore();
+  const stores: AssessmentStore[] = [
+    createInMemoryAssessmentStore(),
+    await firestoreStoreFor(fake.db),
+  ];
+  const submission = SAMPLE[0];
+
+  for (const store of stores) {
+    // 예전 코드가 저장한 문서를 흉내 낸다(새 코드는 옛 모양을 쓰지 않는다).
+    await store.putScoringRun(
+      submission.submissionId,
+      legacyRunFor(submission.submissionId, 1) as unknown as ScoringRun
+    );
+    const stored = await store.getScoringRun(submission.submissionId, 1);
+    assert.ok(stored);
+    assert.equal(isLegacyScoringRun(stored!), true);
+    // 옛 결과에서 영역 수준을 지어내지 않는다.
+    assert.equal(objectLevelOf(stored), null);
+
+    // 옛 주 자료도 다시 채점해 덮어쓰지 않는다.
+    const grader = fakeGrader({ 1: 4 });
+    const result = await runScoringJob(
+      {
+        store,
+        registry: fakeRegistry(),
+        runOperationalScoring: grader.fn,
+        isConsentActive: async () => true,
+      },
+      [submission],
+      { seed: 'seed-2026', repeatIndex: 1 }
+    );
+    assert.deepEqual(
+      result.skipped.map((s) => s.reason),
+      ['already_scored_primary_locked']
+    );
+    assert.equal(grader.calls.length, 0);
+
+    // 반복 2는 새 v12-2 작업으로 따로 쌓인다.
+    const second = fakeGrader({ 2: 3 });
+    await runScoringJob(
+      {
+        store,
+        registry: fakeRegistry(),
+        runOperationalScoring: second.fn,
+        isConsentActive: async () => true,
+      },
+      [submission],
+      { seed: 'seed-2026', repeatIndex: 2 }
+    );
+    const repeat2 = await store.getScoringRun(submission.submissionId, 2);
+    assert.equal(repeat2 && isLegacyScoringRun(repeat2), false);
+    assert.equal(objectLevelOf(repeat2), 3);
+  }
+});
+
+test('v12-2: Firestore 저장소는 채점 작업 안의 undefined 키를 빼고 null은 남긴다', async () => {
+  const fake = createFakeFirestore();
+  const store = await firestoreStoreFor(fake.db);
+  const grader = fakeGrader({ 1: 2 });
+  const run = await grader.fn(buildGraderPayload(SAMPLE[0], 'op_x', 1));
+  const withHoles = {
+    ...run,
+    feedback: {
+      status: 'not_requested' as const,
+      text: '',
+      quote: null,
+      regenerated: false,
+      strengthArea: undefined,
+    },
+  };
+  await store.putScoringRun(SAMPLE[0].submissionId, withHoles);
+  const stored = await store.getScoringRun(SAMPLE[0].submissionId, 1);
+  assert.ok(stored?.feedback);
+  assert.equal('strengthArea' in (stored!.feedback as object), false);
+  assert.equal(stored!.feedback!.quote, null);
 });

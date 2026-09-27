@@ -25,7 +25,24 @@ import {
   type ScoringRun,
   type SubmissionRecord,
 } from '@/lib/research/types';
+import type { LegacyScoringRun } from '@/lib/legacy-v7/types';
 import { resolveSubmission, type SubmissionDecision } from './submission';
+
+/**
+ * 저장소에서 읽은 채점 작업. 새로 쓰는 작업은 공통 루브릭 v12-2(ScoringRun, result.areas)이고,
+ * 이미 저장된 옛 v7 작업(LegacyScoringRun, result.levels·score)도 그대로 읽힌다.
+ * 옛 작업을 새 모양으로 바꾸거나 영역 수준을 지어내지 않는다. isLegacyScoringRun으로 구분한다.
+ */
+export type StoredScoringRun = ScoringRun | LegacyScoringRun;
+
+/**
+ * 옛 v7 채점 작업인가. v12-2 결과는 결측이어도 `areas` 키가 있으므로 그 유무로 가른다.
+ * 결과가 객체가 아니면(깨진 문서) 새 모양으로 읽을 수 없으므로 옛 작업으로 본다.
+ */
+export function isLegacyScoringRun(run: StoredScoringRun): run is LegacyScoringRun {
+  const result = (run as { result?: unknown }).result;
+  return !(result !== null && typeof result === 'object' && 'areas' in result);
+}
 
 /**
  * 학생·시점·문항 한 칸의 자연 키.
@@ -153,8 +170,11 @@ export interface AssessmentStore {
   appendRejection(record: SubmissionRecord): Promise<void>;
   listSubmissions(scope: SubmissionScope): Promise<SubmissionRecord[]>;
 
-  /** repeatIndex별로 따로 쌓는다. 같은 (submissionId, repeatIndex)를 덮어쓰지 않는다. */
-  getScoringRun(submissionId: string, repeatIndex: number): Promise<ScoringRun | null>;
+  /**
+   * repeatIndex별로 따로 쌓는다. 같은 (submissionId, repeatIndex)를 덮어쓰지 않는다.
+   * 읽을 때는 옛 v7 작업도 돌려준다(StoredScoringRun). 새로 쓰는 작업은 v12-2만이다.
+   */
+  getScoringRun(submissionId: string, repeatIndex: number): Promise<StoredScoringRun | null>;
   putScoringRun(submissionId: string, run: ScoringRun): Promise<void>;
   putScoringBatch(batch: ScoringBatchRecord): Promise<void>;
 }
@@ -209,7 +229,7 @@ export function createInMemoryAssessmentStore(): InspectableStore {
   /** 문서ID는 칸 키다. 한 칸에 제출 하나. */
   const submissions = new Map<string, SubmissionRecord>();
   const rejections: SubmissionRecord[] = [];
-  const runs = new Map<string, ScoringRun>();
+  const runs = new Map<string, StoredScoringRun>();
   const batches: ScoringBatchRecord[] = [];
 
   const runKey = (submissionId: string, repeatIndex: number) => `${submissionId}#${repeatIndex}`;

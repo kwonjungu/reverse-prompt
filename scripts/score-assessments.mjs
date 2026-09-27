@@ -89,18 +89,26 @@ async function main() {
     }
     store = createInMemoryAssessmentStore();
     // 모의 실행에서는 실제 모델을 부르지 않는다. 합성 결과를 결측으로 남긴다.
+    // 모양은 공통 루브릭 v12-2의 ScoringRun(src/lib/research/types.ts)을 따른다.
+    // 결측은 최저 수준이 아니라 areas: null이다. 밴드는 요청이 아니라 레지스트리에서 정한다
+    // (채점 요청에는 밴드가 없다). 등록되지 않은 문항이면 여기서 실패해 작업의 failed로 남는다.
     runOperationalScoring = async (req) => ({
       operationId: req.operationId,
       repeatIndex: req.repeatIndex,
-      band: req.band,
-      result: { status: 'missing', levels: null, score: null, axisScores: null, reason: 'model_error' },
+      band: registry.getEntry(req.questionId).band,
+      result: { status: 'missing', areas: null, reason: 'model_error' },
       calls: [],
       extraCall: false,
       feedback: null,
       modelId: 'dry-run',
+      // 모델을 부르지 않았으므로 실제로 답한 모델이 없다.
+      servedModel: null,
       modelConfig: {},
       rubricVersion: 'dry-run',
       cueVersion: 'dry-run',
+      // 판정하지 않았으므로 판정 여부의 근거도 없다.
+      applicabilitySource: null,
+      focusArea: null,
       imageHash: 'dry-run',
       promptHash: 'dry-run',
       codeCommit: 'dry-run',

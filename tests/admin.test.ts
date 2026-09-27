@@ -18,6 +18,14 @@ import { test } from 'node:test';
 import { generateKeyPairSync } from 'node:crypto';
 import { deriveServerSessionSecret } from '../src/server/auth/session-token';
 import {
+  CREATABLE_SESSION_TYPES,
+  allowedModes,
+  isModeAllowed,
+  isResearchSession,
+  parseCreatableSessionType,
+} from '../src/lib/research/session-modes';
+import type { AppMode } from '../src/lib/research/types';
+import {
   ADMIN_SESSION_TTL_MS,
   classifyPasswordSignInProbe,
   describeFirebaseError,
@@ -299,6 +307,33 @@ test('연구 자료는 동의가 유효한 학생만 읽고 조회·내보내기
   assert.match(src, /RESEARCH_PRACTICE_SUBMISSIONS_PATH/, '연구 연습 제출만 읽는다');
   assert.match(src, /recordAdminEvent\('research_export'/);
   assert.equal(/\.delete\(\)/.test(src), false, '제외 표시·추출 기록을 지우지 않는다');
+});
+
+test('연구 세션은 연습 모드만 연다 — 반 만들기가 연구 검사(사전·사후) 반을 거절한다', () => {
+  // 규칙: 새로 만들 수 있는 연구 반은 설명·연습만 연다(게임·타임어택·검사 차단).
+  assert.deepEqual([...CREATABLE_SESSION_TYPES], ['experience', 'research_practice']);
+  for (const t of CREATABLE_SESSION_TYPES) {
+    if (!isResearchSession(t)) continue;
+    assert.deepEqual(allowedModes(t).sort(), ['guide', 'practice'], `${t}에서 연습 밖의 모드가 열린다`);
+    for (const mode of ['assessment', 'game', 'time-attack', 'audit', 'generate'] as AppMode[]) {
+      assert.equal(isModeAllowed(t, mode), false, `${t}에서 ${mode}가 열리면 안 된다`);
+    }
+  }
+  assert.equal(parseCreatableSessionType('research_assessment'), null);
+  // 모르는 값을 체험으로 바꾸지 않는다.
+  assert.equal(parseCreatableSessionType('bogus'), null);
+  assert.equal(parseCreatableSessionType(undefined), null);
+  assert.equal(parseCreatableSessionType('experience'), 'experience');
+  assert.equal(parseCreatableSessionType('research_practice'), 'research_practice');
+
+  // 배선: server action이 이 표로 거절하고(화면 숨김만으로 막지 않는다), 화면에도 선택지가 없다.
+  const actions = readSource('src/server/admin/actions.ts');
+  const start = actions.indexOf('export async function createClassAction(');
+  const body = actions.slice(start, actions.indexOf('export async function', start + 10));
+  assert.match(body, /parseCreatableSessionType\(input\.sessionType\)/);
+  assert.equal(/toSessionType\(input\.sessionType\)/.test(body), false, '모르는 값을 체험으로 바꾸지 않는다');
+  const page = readSource('src/app/admin/page.tsx');
+  assert.equal(/SelectItem value="research_assessment"/.test(page), false, '연구 검사 반 선택지가 없다');
 });
 
 test('반 입장 비밀번호와 관리자 비밀번호를 원문으로 저장하지 않는다', () => {

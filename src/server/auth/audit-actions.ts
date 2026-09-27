@@ -9,6 +9,10 @@
  * 연구 세션은 별도 승인 없는 감수 전송을 금지한다. 실데이터는 연구자 역할과
  * 명시적 승인 기록이 함께 있을 때만 넣는다. 기본은 합성 자료다.
  *
+ * 감수에 넘기는 채점 문언은 공통 루브릭 v12-2(대상·특징·관계 3영역 4수준)의 실제 전송 문언이다
+ * (getEvaluationPromptForAudit, 문항별 단서는 자리표시자). 문항 목록의 chasi는 6단계 배치
+ * (src/lib/stages.ts)를 따르고, rubric은 단계 공통 안내다.
+ *
  * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §1 P1, §6
  */
 
@@ -86,12 +90,16 @@ export async function runAuditFromServer(options?: {
     .get();
 
   // 신원 ID는 감수 payload에 넣지 않는다. 개인정보가 의심되면 그 건을 뺀다.
+  // questionLevel은 문항 번호(L01~L36의 숫자)다. 예전에는 차시(lesson)를 넣었는데, 6단계 배치에서는
+  // 단계와 문항 번호가 더 이상 비례하지 않아(3단계=L19~, 4단계=L13~) 잘못된 문항을 가리킨다.
+  // 문항 번호가 없으면 비워 둔다(차시로 지어내지 않는다).
   const samples = snap.docs
     .map((d) => d.data())
     .filter((d) => typeof d.text === 'string')
     .filter((d) => privacy.checkBeforeSend(String(d.text)).decision === 'pass')
     .map((d) => ({
-      questionLevel: typeof d.lesson === 'number' ? d.lesson : undefined,
+      questionLevel:
+        typeof d.questionLevel === 'number' && Number.isInteger(d.questionLevel) ? d.questionLevel : undefined,
       studentPrompt: String(d.text),
     }));
 

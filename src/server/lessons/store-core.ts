@@ -21,6 +21,14 @@ import type {
   SubmissionRecord,
   CallRecord,
 } from '@/lib/research/types';
+import type { LegacyCallRecord, LegacyOperationalResult } from '@/lib/legacy-v7/types';
+import {
+  AREA_IDS,
+  parseAreaLevel,
+  type AreaId,
+  type AreaLevels,
+  type AreaLevelValue,
+} from '@/lib/scoring';
 import {
   openLesson as applyOpenLesson,
   closeLesson as applyCloseLesson,
@@ -43,14 +51,33 @@ export interface LessonSessionRecord extends LessonSession {
   pacing?: LessonPacing | null;
 }
 
+/**
+ * 제출 문서의 scoring 필드.
+ *
+ * 새 기록은 공통 루브릭 v12-2(3영역 4수준)의 결과를 담는다(result.areas).
+ * 저장소에는 옛 v7(축별 5수준·100점) 기록도 남아 있으므로 형을 둘 다 받는다.
+ * 읽는 쪽은 isLegacyPracticeRecord로 구분하고, 옛 기록에서 영역 수준을 지어내지 않는다.
+ */
 export interface PracticeScoringRecord {
   operationId: string | null;
   repeatIndex: number | null;
-  result: OperationalResult | null;
-  calls: CallRecord[];
+  /** v12-2는 OperationalResult(areas), 옛 v7은 LegacyOperationalResult(levels·score). 채점 전 실패는 null. */
+  result: OperationalResult | LegacyOperationalResult | null;
+  calls: Array<CallRecord | LegacyCallRecord>;
+  /** v12-2는 늘 false(추가 호출 없음). 옛 v7은 세 번째 호출 여부. 채점하지 못했으면 null. */
   extraCall: boolean | null;
   feedback: FeedbackPresentation | null;
+  /** 설정한 모델 ID(config의 EVALUATION_MODEL_ID) */
   modelId: string | null;
+  /**
+   * 모델 API가 밝힌, 점수를 낸 실제 모델. 결측이거나 알 수 없으면 null.
+   * 옛 v7 기록에는 이 필드가 없다. 읽을 때는 `?? null`로 본다.
+   */
+  servedModel: string | null;
+  /** 판정 여부(해당 없음)를 정한 근거. 옛 기록에는 없다. */
+  applicabilitySource?: 'cue_pack' | 'model' | null;
+  /** 피드백의 단계 초점 영역. 옛 기록에는 없다. */
+  focusArea?: AreaId | null;
   modelConfig: Record<string, unknown> | null;
   promptHash: string | null;
   codeCommit: string | null;
@@ -88,7 +115,7 @@ export interface PracticeSubmissionRecord
   ownerKey: string;
   /** 클라이언트가 만들어 보낸 제출ID. 문서 경로에는 쓰지 않고 기록만 남긴다. */
   clientSubmissionId: string | null;
-  /** 채점 작업의 결과와 호출 이력. 결측이면 score·levels·axisScores가 모두 null이다. */
+  /** 채점 작업의 결과와 호출 이력. 결측이면 result.areas가 null이다(옛 v7 기록은 levels·score가 null). */
   scoring: PracticeScoringRecord;
   /** 피드백 검토 기록. 재제출 또는 고치지 않은 까닭 중 하나가 남는다. */
   feedbackReview: FeedbackReview | null;
@@ -111,8 +138,86 @@ export interface StudentSubmissionSummary {
   reviewedQuestionCount: number;
 }
 
+/**
+ * 새로 쓰는 문서의 스키마 버전. 읽을 때 이 값과 같은지로 옛 문서를 거르지 않는다
+ * (옛 v7.0 문서도 그대로 읽는다). 옛 기록 여부는 아래 isLegacyPracticeRecord가 정한다.
+ */
 export const LESSON_SCHEMA_VERSION = `${SCHEMA_VERSION}-lesson-session`;
 export const PRACTICE_SUBMISSION_SCHEMA_VERSION = `${SCHEMA_VERSION}-practice-submission`;
+
+/* ────────────────────────── 옛 기록 구분 ────────────────────────── */
+
+function isObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * 저장된 채점 결과가 공통 루브릭 v12-2의 모양(areas 키가 있음)인가.
+ * v12-2는 결측이어도 `areas: null`을 남기므로 키의 유무로 가른다.
+ */
+export function isAreaResult(result: unknown): result is OperationalResult {
+  return isObject(result) && 'areas' in result;
+}
+
+/**
+ * 옛 v7(축별 5수준·100점) 방식의 제출 기록인가.
+ *
+ *   1. 채점 결과가 있으면 모양으로 가른다. areas가 없고 levels·score가 있으면 옛 기록이다.
+ *   2. 채점 결과가 없으면(채점 전 실패) rubricVersion이 v12로 시작하지 않으면 옛 기록이다.
+ *   3. rubricVersion도 없으면 schemaVersion이 v7로 시작하는지 본다. 알 수 없으면 옛 기록으로 보지 않는다.
+ *
+ * 스키마 버전이 지금 값과 다르다는 이유만으로 문서를 버리지 않는다. 구분만 한다.
+ */
+export function isLegacyPracticeRecord(record: {
+  rubricVersion?: unknown;
+  schemaVersion?: unknown;
+  scoring?: unknown;
+}): boolean {
+  const result = isObject(record.scoring) ? record.scoring.result : null;
+  if (isObject(result)) {
+    if ('areas' in result) return false;
+    if ('levels' in result || 'score' in result || 'axisScores' in result) return true;
+  }
+  if (typeof record.rubricVersion === 'string' && record.rubricVersion) {
+    return !record.rubricVersion.startsWith('v12');
+  }
+  return typeof record.schemaVersion === 'string' && record.schemaVersion.startsWith('v7');
+}
+
+/**
+ * 저장된 v12-2 채점 결과에서 영역 수준을 읽는다.
+ * 채점된 결과이고 세 영역 모두 형식이 맞을 때만 돌려준다. 하나라도 어긋나면 null이다
+ * (보정하거나 빈 영역을 1수준·해당 없음으로 채우지 않는다). 옛 v7 결과는 늘 null이다.
+ */
+export function storedAreaLevels(result: unknown): AreaLevels | null {
+  if (!isAreaResult(result) || result.status !== 'scored' || !isObject(result.areas)) return null;
+  const areas = result.areas as unknown as Record<string, unknown>;
+  const out: Partial<Record<AreaId, AreaLevelValue>> = {};
+  for (const area of AREA_IDS) {
+    const block = areas[area];
+    const level = isObject(block) ? parseAreaLevel(block.level) : null;
+    if (level === null) return null;
+    out[area] = level;
+  }
+  return out as AreaLevels;
+}
+
+/**
+ * Firestore 문서에는 undefined를 넣을 수 없다(넣으면 쓰기 전체가 실패한다).
+ * 채점 기록의 선택 필드(피드백의 영역 표시 등)가 빠져 있을 때 저장이 통째로 실패하지 않도록
+ * undefined인 키만 뺀다. null은 그대로 둔다(결측 구분을 지킨다). 일반 객체와 배열만 훑는다.
+ */
+export function withoutUndefined<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((v) => withoutUndefined(v)) as unknown as T;
+  if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v !== undefined) out[k] = withoutUndefined(v);
+    }
+    return out as T;
+  }
+  return value;
+}
 
 /* ────────────────────────── 저장 매체 계약 ────────────────────────── */
 

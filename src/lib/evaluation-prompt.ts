@@ -129,7 +129,7 @@ export function feedbackGuide(focus: AreaId | null): string {
 Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참고한 배열이다.
 ${focusLine}
 feedbackLine1: 이번 목표. 이 그림을 못 본 친구가 똑같이 떠올릴 수 있게 쓰는 것과 이번 단계의 초점을 한 문장으로 알려 준다.
-feedbackLine2: 잘 쓴 점. 어느 영역(대상·특징·관계)에 관한 것인지 문장에서 밝히고, 학생 글의 표현을 따옴표 없이 그대로 넣는다.
+feedbackLine2: 잘 쓴 점. 어느 영역(대상·특징·관계)에 관한 것인지 문장에서 밝히고, 학생 글의 표현을 따옴표 없이 그대로 넣는다(표현 끝의 마침표는 뺀다).
    넣은 표현을 quote에도 똑같이 넣고, 그 영역을 strengthArea에 넣는다(object·feature·relation 가운데 하나).
    판정한 영역이 모두 수준 1이라 잘 쓴 표현이 없으면 지금 쓴 내용을 중립적으로 확인하고 quote·strengthArea를 null로 둔다.
 feedbackLine3: 다음 행동 한 가지. 판정한 영역 가운데 수준이 가장 낮은 영역에서 하나만 안내한다.
@@ -212,6 +212,8 @@ object·feature·relation 각각에 다음을 넣는다.
   level: 1~4의 정수, 또는 "${NOT_APPLICABLE}"
   evidence: 학생 글에서 판정의 근거가 된 부분을 원문 그대로(글자 하나 바꾸지 않는다). 없으면 null
   missing: 빠진 필수 정보 목록(문자열 배열). 없으면 []
+    문항별 필수 정보가 주어졌으면 그 영역의 목록(대상=핵심 대상, 특징=필수 속성, 관계=필수 관계)에 있는 항목만 목록의 문구 그대로 옮긴다.
+    목록에 없는 정보를 지어내지 않는다.
   evidence_missing: 핵심 대상이 빠져 확인할 수 없는 그 대상의 속성·관계 목록. 없으면 []
 "${NOT_APPLICABLE}"인 영역은 evidence를 null, missing과 evidence_missing을 []로 둔다.
 그리고 feedbackLine1·feedbackLine2·feedbackLine3·feedbackLine4, quote, strengthArea, nextArea, nextTarget을 넣는다.

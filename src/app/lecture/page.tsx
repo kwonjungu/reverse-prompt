@@ -7,8 +7,10 @@
  * 차시 개방이 없고, 연수 번호를 한 번 넣으면 고정 20문항을 순서대로 쓴다.
  *
  * 지키는 것
- *   - **아무것도 저장하지 않는다.** 화면에도 그렇게 적어 둔다. 여기 점수는 연구
+ *   - **아무것도 저장하지 않는다.** 화면에도 그렇게 적어 둔다. 여기 채점 결과는 연구
  *     자료가 아니며 교사 화면·내보내기에 나타나지 않는다.
+ *   - 결과는 연습 화면과 같은 학생 보기다. 100점 점수를 보이지 않고 영역별 네 칸(대상 ●●●○)과
+ *     네 문장 피드백만 보인다. 해당 없음 영역은 숨긴다(공통 루브릭 v12-2).
  *   - 채점 허용 여부는 화면이 아니라 서버가 판정한다(@/server/lecture/actions).
  *     번호를 통과하지 않은 요청, 목록에 없는 문항은 서버가 거절한다.
  *   - 채점 결측을 0점·최저 수준으로 보여 주지 않는다.
@@ -17,7 +19,9 @@
 import { useCallback, useEffect, useState, useTransition } from 'react';
 import Image from 'next/image';
 import { LECTURE_QUESTIONS, lectureQuestionId } from '@/lib/lecture-questions';
-import { FEEDBACK_FALLBACK_TEXT } from '@/lib/feedback';
+import { FEEDBACK_FALLBACK_TEXT, FEEDBACK_LINE_COUNT } from '@/lib/feedback';
+import { AREA_IDS, AREA_LABEL, type AreaId, type AreaLevels } from '@/lib/scoring';
+import { STAGE_TITLE } from '@/lib/stages';
 import {
   enterLectureAction,
   evaluateLectureAction,
@@ -39,14 +43,79 @@ import {
   BookOpen,
   Info,
   RefreshCw,
+  MessageSquareText,
   RotateCcw,
-  Star,
   Wand2,
 } from 'lucide-react';
 
 type DoneResult = Extract<LectureEvaluateResult, { status: 'done' }>;
 
 const questions = LECTURE_QUESTIONS;
+
+/** 네 문장 피드백의 줄 이름. 4문장은 표현 제안이거나 스스로 확인할 질문이다. */
+const FEEDBACK_LINE_LABELS = ['이번 목표', '잘 쓴 점', '다음에 해 볼 것', '써 보거나 확인해 볼 것'] as const;
+
+const AREA_BY_LABEL: Record<string, AreaId> = Object.fromEntries(
+  AREA_IDS.map((a) => [AREA_LABEL[a], a])
+) as Record<string, AreaId>;
+
+/** 영역 하나의 네 칸. 찬 칸은 ●, 빈 칸은 ○. */
+function LevelDots({ area, level }: { area: AreaId; level: 1 | 2 | 3 | 4 }) {
+  return (
+    <div className="flex items-center gap-3" aria-label={`${AREA_LABEL[area]} 네 칸 가운데 ${level}칸`}>
+      <span className="w-10 text-sm font-semibold">{AREA_LABEL[area]}</span>
+      <span className="text-xl tracking-[0.2em]" aria-hidden="true">
+        <span className="text-primary">{'●'.repeat(level)}</span>
+        <span className="text-muted-foreground/60">{'○'.repeat(4 - level)}</span>
+      </span>
+    </div>
+  );
+}
+
+/** 해당 영역만 네 칸으로 보인다. 해당 없음(not_applicable) 영역은 숨긴다. */
+function AreaLevelsView({ levels }: { levels: AreaLevels }) {
+  return (
+    <div className="space-y-2">
+      {AREA_IDS.map((area) => {
+        const level = levels[area];
+        return typeof level === 'number' ? <LevelDots key={area} area={area} level={level} /> : null;
+      })}
+    </div>
+  );
+}
+
+/**
+ * 네 문장 피드백. 한 줄에 한 문장이며 2·3문장 앞의 [대상]·[특징]·[관계]는 영역 표시로 바꿔 보인다.
+ * 고정 안내(fallback)나 줄 수가 맞지 않는 글은 그대로 한 덩어리로 보인다(문장을 지어 붙이지 않는다).
+ */
+function FeedbackLines({ text }: { text: string }) {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length !== FEEDBACK_LINE_COUNT) {
+    return <p className="whitespace-pre-wrap font-body text-base leading-relaxed text-muted-foreground">{text}</p>;
+  }
+  return (
+    <ol className="space-y-3">
+      {lines.map((line, i) => {
+        const m = /^\[([^\]]{1,6})\]\s*/.exec(line);
+        const area = m ? AREA_BY_LABEL[m[1]] : undefined;
+        const body = m && area ? line.slice(m[0].length) : line;
+        return (
+          <li key={i} className="rounded-lg bg-muted/40 p-3">
+            <p className="mb-1 flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+              {FEEDBACK_LINE_LABELS[i]}
+              {area && (
+                <span className="rounded-full border border-primary/40 px-2 py-0.5 text-[11px] text-primary">
+                  {AREA_LABEL[area]}
+                </span>
+              )}
+            </p>
+            <p className="font-body text-base leading-relaxed">{body}</p>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
 
 export default function LecturePage() {
   /** null = 아직 확인 중. 확인 전에는 문항을 그리지 않는다. */
@@ -179,7 +248,7 @@ export default function LecturePage() {
                 </Button>
               </form>
               <p className="mt-4 text-xs text-muted-foreground">
-                연수 체험판이라 쓴 글과 점수를 저장하지 않습니다. 학생과 함께 쓰는 수업용 화면은
+                연수 체험판이라 쓴 글과 채점 결과를 저장하지 않습니다. 학생과 함께 쓰는 수업용 화면은
                 따로 있습니다.
               </p>
             </CardContent>
@@ -211,7 +280,8 @@ export default function LecturePage() {
           <Info className="h-4 w-4" />
           <AlertTitle>연수 체험판입니다</AlertTitle>
           <AlertDescription>
-            쓴 글과 점수를 저장하지 않아요. 연구 자료로도 쓰이지 않습니다.
+            쓴 글과 채점 결과를 저장하지 않아요. 연구 자료로도 쓰이지 않습니다. 결과는 학생 화면과 같이
+            점수 없이 대상·특징·관계의 네 칸과 네 문장 피드백으로 보여요.
           </AlertDescription>
         </Alert>
 
@@ -234,7 +304,9 @@ export default function LecturePage() {
               <CardContent className="flex flex-grow flex-col p-6">
                 <Alert className="mb-4 rounded-lg border-accent/50 bg-accent/80">
                   <BookOpen className="h-4 w-4 text-accent-foreground" />
-                  <AlertTitle className="font-semibold text-accent-foreground">힌트</AlertTitle>
+                  <AlertTitle className="font-semibold text-accent-foreground">
+                    힌트 · {question.chasi}단계 {STAGE_TITLE[question.chasi] ?? ''}
+                  </AlertTitle>
                   <AlertDescription className="whitespace-pre-line font-body text-sm text-accent-foreground/90">
                     {question.rubric}
                   </AlertDescription>
@@ -282,11 +354,17 @@ export default function LecturePage() {
           {isSubmitting && (
             <div className="space-y-4 p-6">
               <Skeleton className="h-8 w-1/3" />
-              <div className="flex items-center gap-6">
-                <Skeleton className="size-24 rounded-full" />
+              <div className="flex flex-col gap-6 sm:flex-row">
+                <div className="w-40 space-y-2">
+                  <Skeleton className="h-6 w-full" />
+                  <Skeleton className="h-6 w-full" />
+                  <Skeleton className="h-6 w-full" />
+                </div>
                 <div className="flex-1 space-y-2">
                   <Skeleton className="h-6 w-full" />
                   <Skeleton className="h-6 w-5/6" />
+                  <Skeleton className="h-6 w-full" />
+                  <Skeleton className="h-6 w-4/6" />
                 </div>
               </div>
             </div>
@@ -300,41 +378,25 @@ export default function LecturePage() {
                     AI 선생님의 피드백
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="flex flex-col items-center gap-6 sm:flex-row">
-                  <div className="flex flex-col items-center">
-                    {result.scoring.status === 'scored' ? (
-                      <>
-                        <div className="relative flex size-32 items-center justify-center rounded-full bg-gradient-to-br from-primary/20 to-accent/30">
-                          <p className="text-5xl font-bold text-primary">
-                            {Math.round(result.scoring.score)}
-                          </p>
-                        </div>
-                        <p className="mt-2 font-semibold text-muted-foreground">/ 100점</p>
-                      </>
-                    ) : (
-                      <div className="flex size-32 items-center justify-center rounded-full bg-muted/60 px-4 text-center">
-                        <p className="text-sm text-muted-foreground">점수 없음</p>
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    {result.scoring.status === 'missing' ? (
-                      <p className="text-base leading-loose text-muted-foreground">
-                        {result.scoring.message}
-                      </p>
-                    ) : (
-                      <>
-                        <h4 className="mb-2 flex items-center gap-2 text-lg font-semibold">
-                          <Star className="text-yellow-400" fill="currentColor" />
-                          칭찬 및 개선점
-                        </h4>
-                        <p className="mt-2 whitespace-pre-wrap font-body text-base leading-loose text-muted-foreground">
-                          {result.feedback?.text ?? FEEDBACK_FALLBACK_TEXT}
-                        </p>
-                      </>
-                    )}
-                  </div>
-                </CardContent>
+                {result.scoring.status === 'missing' ? (
+                  <CardContent>
+                    {/* 결측은 0점·1수준이 아니다. 칸을 그리지 않고 다시 보내라고만 알린다. */}
+                    <p className="text-base leading-loose text-muted-foreground">{result.scoring.message}</p>
+                  </CardContent>
+                ) : (
+                  <CardContent className="flex flex-col gap-6 sm:flex-row sm:items-start">
+                    <div className="shrink-0 rounded-xl border bg-background/60 p-4">
+                      <AreaLevelsView levels={result.scoring.levels} />
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="mb-3 flex items-center gap-2 text-lg font-semibold">
+                        <MessageSquareText className="h-5 w-5 text-primary" />
+                        다시 쓸 때 볼 것
+                      </h4>
+                      <FeedbackLines text={result.feedback?.text ?? FEEDBACK_FALLBACK_TEXT} />
+                    </div>
+                  </CardContent>
+                )}
                 <CardFooter>
                   <Button variant="outline" onClick={reset} className="w-full sm:w-auto">
                     <RotateCcw className="mr-2 h-4 w-4" />

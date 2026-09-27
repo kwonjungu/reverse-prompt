@@ -16,9 +16,12 @@
  *     건너뛸 수 있다. 적지 않아도 넘어갈 수 있다.
  *   - 제출 뒤 완료 수를 새로 받아 와도 보고 있는 문항과 결과는 그대로 둔다.
  *   - 순서 진행: 열린 단계(관리 화면의 수업 시작이 1~6단계를 모두 연다) 안에서 아직 내지 않은
- *     가장 낮은 번호 문항으로 들어가고, 그보다 뒤 문항·단계는 보이지도 고르지도 못한다
+ *     제시 순서상 가장 앞 문항으로 들어가고, 그보다 뒤 문항·단계는 보이지도 고르지도 못한다
  *     (src/lib/practice-progress.ts). 교사가 단계를 하나씩 열지 않는다.
- *   - 힌트는 문항별 힌트(검수를 마친 것만)를 먼저 쓰고, 없으면 차시 공통 안내를 쓴다.
+ *   - 힌트는 문항별 힌트(목표 + 확인 질문, 검수를 마친 것만)를 먼저 쓰고, 없으면 단계 공통 안내를 쓴다.
+ *     비공개 단서 팩에서 해당 없음인 영역의 확인 질문은 뺀다(서버가 영역 ID만 알려 준다).
+ *   - 결과는 100점 점수 없이 영역별 단계(대상 ●●●○)와 4줄 피드백만 보여 준다(공통 루브릭 v12-2).
+ *     해당 없음 영역은 숨긴다. 단계 이름은 src/lib/stages.ts의 6단계 구성을 따른다.
  *   - 학급·신원은 서버 세션이 정한다. 화면이 sessionStorage의 학급코드·출석번호를 보내지 않는다.
  */
 
@@ -27,6 +30,16 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { PRACTICE_QUESTIONS } from '@/lib/questions';
 import { FEEDBACK_FALLBACK_TEXT } from '@/lib/feedback';
+import { STAGE_TITLE } from '@/lib/stages';
+import { withoutAreas, type PracticeHint } from '@/lib/practice-hints';
+import {
+  AREA_IDS,
+  AREA_LABEL,
+  parseAreaLevel,
+  type AreaId,
+  type AreaLevel,
+  type AreaLevels,
+} from '@/lib/scoring';
 import {
   landingQuestion,
   nextQuestionInOrder,
@@ -52,7 +65,6 @@ import {
   Wand2,
   RefreshCw,
   BookOpen,
-  Star,
   Home,
   RotateCcw,
   AlertTriangle,
@@ -65,29 +77,91 @@ import { Badge } from '@/components/ui/badge';
 
 const questions = PRACTICE_QUESTIONS;
 
-/** 차시 이름. 논문 <부록 표 2> 차시별 문항 구간 배정과 같다. */
-const CHASI_TITLE: Record<number, string> = {
-  1: '이름과 눈에 보이는 색·모양 함께 쓰기',
-  2: '색과 모양을 더 자세히',
-  3: '어디에서 무엇을 하고 있나',
-  4: '질감과 자세까지 말하기',
-  5: '분위기를 담아 쓰기',
-  6: '내 문장이 어떻게 달라졌나',
-};
+// 단계 이름(STAGE_TITLE)은 논문 v12의 6단계 구성이며 정의는 src/lib/stages.ts 하나에 있다.
 
-/** 한 차시의 문항 수. 정보 표시용이며 잠금 조건이 아니다. */
+/** 한 단계의 문항 수. 정보 표시용이며 잠금 조건이 아니다. */
 const QUESTIONS_PER_CHASI = 6;
 
 /** 연습 문항 ID는 레지스트리와 같은 규칙(L01~L36)을 쓴다. */
 const questionIdOf = (level: number) => `L${String(level).padStart(2, '0')}`;
 
-/** 순서 진행 계산에 쓰는 목록. index는 questions 배열의 위치다. */
+/**
+ * 순서 진행 계산에 쓰는 목록. index는 questions 배열의 위치다.
+ * 진행은 문항 번호(level)가 아니라 제시 순서(order)를 따른다(3단계 L19–L24 → 4단계 L13–L18).
+ */
 const PROGRESS_LIST = questions.map((q, index) => ({
   id: questionIdOf(q.level),
   level: q.level,
   chasi: q.chasi,
+  order: q.order,
   index,
 }));
+
+/**
+ * 화면에 보일 영역 단계. 해당 없음(not_applicable) 영역은 숨긴다.
+ * 정수 1~4가 아닌 값은 고쳐 보이지 않고 그 영역을 빼 둔다(형식 오류를 유효 값으로 바꾸지 않는다).
+ */
+function visibleAreaLevels(levels: AreaLevels): { area: AreaId; level: AreaLevel }[] {
+  const out: { area: AreaId; level: AreaLevel }[] = [];
+  for (const area of AREA_IDS) {
+    const level = parseAreaLevel(levels[area]);
+    if (typeof level === 'number') out.push({ area, level });
+  }
+  return out;
+}
+
+/** 저장된 피드백 문장(4줄, \n으로 이음)을 줄로 나눈다. 빈 줄은 뺀다. */
+function feedbackLines(text: string): string[] {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+/** 영역 단계 점 — 채운 점(●)이 단계, 빈 점(○)이 남은 단계. 숫자·점수는 보이지 않는다. */
+function AreaDots({ area, level }: { area: AreaId; level: AreaLevel }) {
+  const label = AREA_LABEL[area];
+  return (
+    <li className="flex items-center gap-3">
+      <span className="w-10 shrink-0 font-semibold">{label}</span>
+      <span
+        role="img"
+        aria-label={`${label} 4단계 중 ${level}단계`}
+        className="text-xl leading-none tracking-[0.2em]"
+      >
+        <span aria-hidden="true" className="text-primary">
+          {'●'.repeat(level)}
+        </span>
+        <span aria-hidden="true" className="text-muted-foreground/40">
+          {'○'.repeat(4 - level)}
+        </span>
+      </span>
+    </li>
+  );
+}
+
+/** 힌트 상자 — 목표 한 문장과 확인 질문. 영역에 딸리지 않은 선택 안내(C밴드)는 목록 아래에 둔다. */
+function HintBody({ hint }: { hint: PracticeHint }) {
+  const areaChecks = hint.checks.filter((c) => c.area !== null);
+  const optional = hint.checks.filter((c) => c.area === null);
+  return (
+    <div className="space-y-2">
+      <p className="font-medium">{hint.goal}</p>
+      {areaChecks.length > 0 && (
+        <ul className="list-disc space-y-1 pl-5">
+          {areaChecks.map((c) => (
+            <li key={`${c.area}:${c.text}`}>{c.text}</li>
+          ))}
+        </ul>
+      )}
+      {optional.map((c) => (
+        <p key={c.text} className="text-xs opacity-80">
+          {c.text}
+        </p>
+      ))}
+    </div>
+  );
+}
 
 /** 서버 제출 기록 + 이 화면에서 방금 낸 문항(+ 번호 없는 옛 반이면 이 기기 캐시). */
 function submittedSetOf(state: LessonStateView | null, local: Iterable<string>): Set<string> {
@@ -191,7 +265,7 @@ export default function PracticePage() {
       setLoadError(null);
       if (opts?.keepPosition) return state;
       if (state.deniedMessage) setBlockedMessage(state.deniedMessage);
-      // 아직 내지 않은 가장 낮은 문항(단계 단추를 눌렀으면 그 단계 안에서)으로 들어간다.
+      // 아직 내지 않은 제시 순서상 가장 앞 문항(단계 단추를 눌렀으면 그 단계 안에서)으로 들어간다.
       const target = landingQuestion(
         openQuestionsInOrder(PROGRESS_LIST, state.allowedLessons),
         submittedSetOf(state, localSubmittedRef.current),
@@ -228,7 +302,7 @@ export default function PracticePage() {
     () => submittedSetOf(lessonState, cachedQuestionIds),
     [lessonState, cachedQuestionIds]
   );
-  /** 교사가 연 단계의 문항(번호 순서)과, 그 가운데 아직 내지 않은 가장 낮은 문항. */
+  /** 열린 단계의 문항(제시 순서)과, 그 가운데 아직 내지 않은 가장 앞 문항. */
   const orderedOpen = useMemo(
     () => openQuestionsInOrder(PROGRESS_LIST, lessonState?.allowedLessons ?? []),
     [lessonState]
@@ -335,7 +409,7 @@ export default function PracticePage() {
     setStartedAt(new Date().toISOString());
   };
 
-  /** 번호 순서의 다음 문항. 단계를 넘어갈 수 있고, 지금 문항을 내지 못했으면 넘어가지 않는다. */
+  /** 제시 순서의 다음 문항. 단계를 넘어갈 수 있고, 지금 문항을 내지 못했으면 넘어가지 않는다. */
   const handleNextQuestion = () => {
     if (!currentQuestion) return;
     const next = nextQuestionInOrder(
@@ -394,11 +468,16 @@ export default function PracticePage() {
     }
   };
 
-  const levelColor = (lv: number) => {
-    if (lv <= 6) return 'bg-green-100 text-green-800 border-green-200';
-    if (lv <= 12) return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-    if (lv <= 18) return 'bg-orange-100 text-orange-800 border-orange-200';
-    if (lv <= 24) return 'bg-red-100 text-red-800 border-red-200';
+  /**
+   * 배지 색은 단계를 따른다. 제시 순서가 문항 번호와 다르므로(3단계 L19–L24 → 4단계 L13–L18)
+   * 번호로 색을 정하면 단계가 올라가도 색이 거꾸로 간다.
+   */
+  const stageColor = (chasi: number) => {
+    if (chasi <= 1) return 'bg-green-100 text-green-800 border-green-200';
+    if (chasi === 2) return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+    if (chasi === 3) return 'bg-orange-100 text-orange-800 border-orange-200';
+    if (chasi === 4) return 'bg-red-100 text-red-800 border-red-200';
+    if (chasi === 5) return 'bg-pink-100 text-pink-800 border-pink-200';
     return 'bg-purple-100 text-purple-800 border-purple-200';
   };
 
@@ -439,16 +518,31 @@ export default function PracticePage() {
   const doneInChasi = attemptedCount(currentChasi);
   /** 연구 세션이면 고치지 않은 까닭을 묻지 않는다. 세션 성격은 서버가 정한 값이다. */
   const asksReviewNote = lessonState.sessionType === 'experience';
+  /**
+   * 검수를 마친 문항 힌트. 비공개 단서 팩에서 해당 없음인 영역의 확인 질문은 뺀다.
+   * 서버는 영역 ID만 알려 준다(단서 내용은 오지 않는다).
+   */
+  const hint = currentQuestion.hint
+    ? withoutAreas(
+        currentQuestion.hint,
+        lessonState.notApplicableAreas?.[questionIdOf(currentQuestion.level)] ?? []
+      )
+    : null;
+  const areaRows = result?.scoring.status === 'scored' ? visibleAreaLevels(result.scoring.levels) : [];
 
   return (
     <div className="min-h-screen bg-background font-sans">
       <header className="p-4 flex justify-between items-center">
         <div className="flex items-center gap-3">
+          {/*
+            문항 번호(level)로 'Lv.' 표시를 하면 3단계 L19–L24 → 4단계 L13–L18에서 숫자가 거꾸로 가
+            난이도가 내려가는 것처럼 보인다. 제시 순서(order)로 전체 가운데 몇 번째인지만 보인다.
+          */}
           <Badge
             variant="outline"
-            className={`text-sm px-3 py-1 border ${levelColor(currentQuestion.level)}`}
+            className={`text-sm px-3 py-1 border ${stageColor(currentQuestion.chasi)}`}
           >
-            Lv.{currentQuestion.level}
+            {currentQuestion.order} / {questions.length}
           </Badge>
           <span className="text-sm text-muted-foreground">
             {currentChasi}단계 · {posInChasi + 1}번째 문항
@@ -472,7 +566,7 @@ export default function PracticePage() {
                   type="button"
                   onClick={() => void goToChasi(c)}
                   aria-current={active ? 'step' : undefined}
-                  title={CHASI_TITLE[c]}
+                  title={STAGE_TITLE[c]}
                   className={[
                     'flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition',
                     active
@@ -481,7 +575,7 @@ export default function PracticePage() {
                   ].join(' ')}
                 >
                   <span className="font-semibold">{c}단계</span>
-                  <span className="hidden sm:inline opacity-80">{CHASI_TITLE[c]}</span>
+                  <span className="hidden sm:inline opacity-80">{STAGE_TITLE[c]}</span>
                   <span className="tabular-nums opacity-70">
                     {attemptedCount(c)}/{QUESTIONS_PER_CHASI} 문항
                   </span>
@@ -511,7 +605,7 @@ export default function PracticePage() {
             연습 모드
           </h1>
           <p className="mt-2 text-muted-foreground">
-            {currentChasi}단계 · {CHASI_TITLE[currentChasi]}
+            {currentChasi}단계 · {STAGE_TITLE[currentChasi]}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
             그림을 보고 설명을 써 보세요. 몇 번이든 다시 도전할 수 있어요.
@@ -547,7 +641,7 @@ export default function PracticePage() {
                   <BookOpen className="h-4 w-4 text-accent-foreground" />
                   <AlertTitle className="font-semibold text-accent-foreground">힌트</AlertTitle>
                   <AlertDescription className="text-accent-foreground/90 font-body whitespace-pre-line text-sm">
-                    {currentQuestion.hint ?? currentQuestion.rubric}
+                    {hint ? <HintBody hint={hint} /> : currentQuestion.rubric}
                   </AlertDescription>
                 </Alert>
 
@@ -584,12 +678,14 @@ export default function PracticePage() {
           {isSubmitting && (
             <div className="p-6 space-y-4">
               <Skeleton className="h-8 w-1/3" />
-              <div className="flex items-center gap-6">
-                <Skeleton className="h-24 w-24 rounded-full" />
-                <div className="space-y-2 flex-1">
-                  <Skeleton className="h-6 w-full" />
-                  <Skeleton className="h-6 w-5/6" />
-                </div>
+              <div className="space-y-2">
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="h-5 w-40" />
+              </div>
+              <div className="space-y-2">
+                <Skeleton className="h-6 w-full" />
+                <Skeleton className="h-6 w-5/6" />
               </div>
             </div>
           )}
@@ -629,40 +725,31 @@ export default function PracticePage() {
                     AI 선생님의 피드백
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="flex flex-col sm:flex-row items-center gap-6">
-                  <div className="flex flex-col items-center">
-                    {result.scoring.status === 'scored' ? (
-                      <>
-                        <div className="relative flex items-center justify-center size-32 bg-gradient-to-br from-primary/20 to-accent/30 rounded-full">
-                          <p className="text-5xl font-bold text-primary">
-                            {Math.round(result.scoring.score)}
-                          </p>
-                        </div>
-                        <p className="text-muted-foreground mt-2 font-semibold">/ 100점</p>
-                      </>
-                    ) : (
-                      <div className="flex size-32 items-center justify-center rounded-full bg-muted/60 px-4 text-center">
-                        <p className="text-sm text-muted-foreground">점수 없음</p>
+                <CardContent className="space-y-5">
+                  {/*
+                    100점 점수는 보여 주지 않는다(공통 루브릭 v12-2). 영역별 단계(●●●○)와 4줄 피드백만.
+                    해당 없음 영역은 숨긴다. 결측이면 단계를 만들지 않고 안내만 한다(0점·1단계로 보이지 않게).
+                  */}
+                  {result.scoring.status === 'missing' ? (
+                    <p className="text-base leading-loose text-muted-foreground">
+                      {result.scoring.message}
+                    </p>
+                  ) : (
+                    <>
+                      {areaRows.length > 0 && (
+                        <ul className="space-y-2" aria-label="영역별 단계">
+                          {areaRows.map(({ area, level }) => (
+                            <AreaDots key={area} area={area} level={level} />
+                          ))}
+                        </ul>
+                      )}
+                      <div className="space-y-2 font-body text-base leading-relaxed text-muted-foreground">
+                        {feedbackLines(result.feedback?.text ?? FEEDBACK_FALLBACK_TEXT).map((line, i) => (
+                          <p key={i}>{line}</p>
+                        ))}
                       </div>
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    {result.scoring.status === 'missing' ? (
-                      <p className="text-base leading-loose text-muted-foreground">
-                        {result.scoring.message}
-                      </p>
-                    ) : (
-                      <>
-                        <h4 className="font-semibold text-lg mb-2 flex items-center gap-2">
-                          <Star className="text-yellow-400" fill="currentColor" />
-                          칭찬 및 개선점
-                        </h4>
-                        <p className="mt-2 text-muted-foreground whitespace-pre-wrap font-body text-base leading-loose">
-                          {result.feedback?.text ?? FEEDBACK_FALLBACK_TEXT}
-                        </p>
-                      </>
-                    )}
-                  </div>
+                    </>
+                  )}
                 </CardContent>
 
                 {askingReason ? (

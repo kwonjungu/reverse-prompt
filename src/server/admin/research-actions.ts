@@ -1,7 +1,7 @@
 'use server';
 
 /**
- * 통합 관리 화면의 '연구 자료' 탭 — 연습 시도 요약과 연구용 추출(논문 v12)의 배선.
+ * 통합 관리 화면의 '연구 자료' 탭 — 연습 시도 요약과 연구용 추출(논문 v12, 공통 루브릭 v12-2)의 배선.
  *
  * 계산 규칙은 src/server/export/practice-summary.ts에 있고, 여기서는 관리자 세션 확인,
  * Firestore 읽기, 동의 필터, 제외 표시·추출 결과 저장, CSV 파일 이름만 맡는다.
@@ -12,6 +12,8 @@
  *   - 동의(보호자 동의 + 학생 승낙, 철회 없음)가 지금 유효하지 않은 학생은 요약·추출에서 뺀다.
  *   - researchId만 쓴다. 실명·출석번호·학교명은 저장 스키마에 없고 여기서 되살리지 않는다.
  *   - 요약은 저장된 기록에서 계산한다. 원문을 고치지 않는다.
+ *   - 옛 v7 기록(축별 5수준·100점)은 시도별 CSV에만 legacy_rubric=true로 남고, 요약·추출에서는
+ *     빠진다. 뺀 수를 화면에 알린다.
  *   - 내보낸 CSV는 브라우저로만 내려가며 저장소에 두지 않는다(.gitignore: rp_*.csv).
  *
  * 이 탭은 통합 관리 화면이 학생 답안을 읽는 유일한 자리다. 연구 책임자가 관리 화면을 함께
@@ -33,19 +35,25 @@ import {
 } from '@/server/firebase-admin';
 import { RESEARCH_PRACTICE_SUBMISSIONS_PATH } from '@/server/lessons/store';
 import { privacy } from '@/server/privacy';
+import { APP_LEVEL_RULE } from '@/lib/scoring';
+import { RUBRIC_VERSION } from '@/lib/rubric';
 import {
-  APP_LEVEL_RULE,
+  APP_LEVELS,
   DEFAULT_PER_LEVEL,
   EXCLUSION_REASON_LABEL,
+  SAMPLE_SCHEMA_VERSION,
   buildAttemptCsv,
   buildExtractionCsv,
+  buildLegacySampleCsv,
   buildQuestionSummaryCsv,
   buildSampleCsv,
   buildStudentQuestionCsv,
+  countLegacyAttempts,
   drawStratifiedSample,
   exclusionKey,
   isConsentDocActive,
   isExclusionReason,
+  isLegacySampleDoc,
   sampleInputProblem,
   summarizeQuestions,
   summarizeStudentQuestions,
@@ -61,8 +69,12 @@ import {
 } from '@/server/export/practice-summary';
 import { recordAdminEvent, requireAdmin } from './auth';
 
-/** 새로 만드는 추출 기록의 형식 버전. 저장 경로(research/v7.0)는 바꾸지 않는다. */
-const EXTRACTION_SCHEMA_VERSION = 'v12-extraction-1';
+/**
+ * 제외 표시 문서의 형식 버전. 학생 × 문항 키와 사유만 담아 v12-2 전환으로 모양이 바뀌지 않았다.
+ * 추출 기록의 형식 버전은 SAMPLE_SCHEMA_VERSION(practice-summary.ts)이다.
+ * 저장 경로(research/v7.0)는 어느 쪽도 바꾸지 않는다.
+ */
+const EXCLUSION_SCHEMA_VERSION = 'v12-extraction-1';
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string; signedOut: boolean };
 
@@ -84,6 +96,7 @@ async function run<T>(fn: () => Promise<T>): Promise<Result<T>> {
 /* ────────────────────────── 읽기 ────────────────────────── */
 
 interface LoadedResearchData {
+  /** 동의가 유효한 학생의 시도. 옛 v7 시도(legacyRubric)도 들어 있다. */
   attempts: PracticeAttempt[];
   /** 동의가 지금 유효하지 않아 뺀 학생 수 */
   consentExcludedStudents: number;
@@ -161,11 +174,17 @@ function fileScope(classResearchId: string | null): string {
 
 export interface ResearchOverview {
   classes: { classResearchId: string; label: string | null; sessionType: string }[];
+  /** 요약·추출에 쓰는 v12-2 시도 수 */
   attemptCount: number;
+  /** v12-2 시도가 있는 학생 수 */
   studentCount: number;
   consentExcludedStudents: number;
+  /** 요약·추출에서 뺀 옛 v7(5수준·100점) 시도 수. 시도별 CSV에는 남는다. */
+  legacyAttemptCount: number;
   questionSummary: QuestionSummary[];
+  /** 앱 종합 4수준의 산정 규칙(@/lib/scoring) */
   appLevelRule: string;
+  rubricVersion: string;
   loadedAt: string;
 }
 
@@ -181,6 +200,7 @@ export async function loadResearchOverviewAction(input: {
       loadConsentedAttempts(scope),
     ]);
     const rows = summarizeStudentQuestions(loaded.attempts);
+    const current = loaded.attempts.filter((a) => !a.legacyRubric);
     await recordAdminEvent('research_overview', scope, { attempts: loaded.attempts.length });
     return {
       classes: classSnap.docs
@@ -191,11 +211,13 @@ export async function loadResearchOverviewAction(input: {
         }))
         .filter((c) => c.sessionType !== 'experience')
         .sort((a, b) => a.classResearchId.localeCompare(b.classResearchId)),
-      attemptCount: loaded.attempts.length,
-      studentCount: new Set(loaded.attempts.map((a) => a.researchId)).size,
+      attemptCount: current.length,
+      studentCount: new Set(current.map((a) => a.researchId)).size,
       consentExcludedStudents: loaded.consentExcludedStudents,
+      legacyAttemptCount: countLegacyAttempts(loaded.attempts),
       questionSummary: summarizeQuestions(rows),
       appLevelRule: APP_LEVEL_RULE,
+      rubricVersion: RUBRIC_VERSION,
       loadedAt: new Date().toISOString(),
     };
   });
@@ -223,6 +245,7 @@ export async function exportResearchCsvAction(input: {
     const rows = summarizeStudentQuestions(attempts);
     let file: CsvFile;
     if (input.kind === 'attempts') {
+      // 시도별 CSV만 옛 v7 시도를 함께 낸다(legacy_rubric=true, 옛 값은 v7_* 열).
       const sorted = [...attempts].sort(
         (a, b) =>
           a.researchId.localeCompare(b.researchId) ||
@@ -257,23 +280,31 @@ function validQuestionIds(questionIds: unknown): string[] {
 async function buildExtractionRows(
   questionIds: string[],
   scope: string | null
-): Promise<{ rows: ExtractionRow[]; consentExcludedStudents: number }> {
+): Promise<{ rows: ExtractionRow[]; consentExcludedStudents: number; legacyAttemptCount: number }> {
   const [loaded, exclusions] = await Promise.all([loadConsentedAttempts(scope), loadActiveExclusions()]);
   const wanted = new Set(questionIds);
-  const rows = summarizeStudentQuestions(loaded.attempts.filter((a) => wanted.has(a.questionId))).map(
+  const picked = loaded.attempts.filter((a) => wanted.has(a.questionId));
+  // 옛 v7 시도는 요약에서 빠진다(summarizeStudentQuestions). 뺀 수만 알린다.
+  const rows = summarizeStudentQuestions(picked).map(
     (r): ExtractionRow => ({
       ...r,
       exclusion: exclusions.get(exclusionKey(r.researchId, r.questionId)) ?? null,
       piiSuspected: privacy.checkBeforeSend(r.finalPrompt).decision === 'hold_for_teacher',
     })
   );
-  return { rows, consentExcludedStudents: loaded.consentExcludedStudents };
+  return {
+    rows,
+    consentExcludedStudents: loaded.consentExcludedStudents,
+    legacyAttemptCount: countLegacyAttempts(picked),
+  };
 }
 
 export interface ExtractionView {
   questionIds: string[];
   rows: ExtractionRow[];
   consentExcludedStudents: number;
+  /** 고른 문항에서 요약·추출에서 뺀 옛 v7 시도 수 */
+  legacyAttemptCount: number;
 }
 
 /** 고른 문항(최대 3개)의 학생 × 문항 요약과 제외 표시 */
@@ -285,9 +316,9 @@ export async function loadExtractionAction(input: {
     await requireAdmin();
     const questionIds = validQuestionIds(input?.questionIds);
     const scope = scopeOf(input?.classResearchId);
-    const { rows, consentExcludedStudents } = await buildExtractionRows(questionIds, scope);
+    const { rows, consentExcludedStudents, legacyAttemptCount } = await buildExtractionRows(questionIds, scope);
     await recordAdminEvent('research_extraction_view', scope, { questionIds, rows: rows.length });
-    return { questionIds, rows, consentExcludedStudents };
+    return { questionIds, rows, consentExcludedStudents, legacyAttemptCount };
   });
 }
 
@@ -337,7 +368,7 @@ export async function setExclusionAction(input: {
     if (input.reason) {
       await ref.set(
         {
-          schemaVersion: EXTRACTION_SCHEMA_VERSION,
+          schemaVersion: EXCLUSION_SCHEMA_VERSION,
           researchId,
           questionId,
           reason: input.reason,
@@ -372,6 +403,8 @@ export interface SampleView {
   excludedCount: number;
   unlevelledCount: number;
   consentExcludedStudents: number;
+  /** 고른 문항에서 추출 대상에서 뺀 옛 v7 시도 수 */
+  legacyAttemptCount: number;
 }
 
 function newSampleId(): string {
@@ -379,9 +412,9 @@ function newSampleId(): string {
 }
 
 /**
- * 제외 뒤 앱 AI 5수준별로 문항마다 perLevel개를 고정 시드로 뽑고, 결과를 저장한다.
- * 저장하는 것: 시드·문항·n·수준 산정 규칙·층별 후보(연구ID·최종 제출ID)·제외 목록·뽑힌 사례.
- * 같은 시드와 같은 후보면 같은 결과가 나온다.
+ * 제외 뒤 앱 종합 4수준별로 문항마다 perLevel개(기본 5)를 고정 시드로 뽑고, 결과를 저장한다.
+ * 저장하는 것: 시드·문항·n·수준 산정 규칙·루브릭 버전·층별 후보(연구ID·최종 제출ID)·제외 목록·
+ * 뺀 옛 v7 시도 수·뽑힌 사례. 같은 시드와 같은 후보면 같은 결과가 나온다.
  */
 export async function drawSampleAction(input: {
   questionIds: string[];
@@ -398,7 +431,7 @@ export async function drawSampleAction(input: {
     if (problem) throw new ResearchInputError(problem);
     const scope = scopeOf(input?.classResearchId);
 
-    const { rows, consentExcludedStudents } = await buildExtractionRows(questionIds, scope);
+    const { rows, consentExcludedStudents, legacyAttemptCount } = await buildExtractionRows(questionIds, scope);
     const excludedKeys = new Set(
       rows.filter((r) => r.exclusion).map((r) => exclusionKey(r.researchId, r.questionId))
     );
@@ -408,7 +441,7 @@ export async function drawSampleAction(input: {
     const sampleId = newSampleId();
     const createdAt = new Date().toISOString();
     const candidates = questionIds.flatMap((questionId) =>
-      [1, 2, 3, 4, 5].map((level) => ({
+      APP_LEVELS.map((level) => ({
         questionId,
         level,
         members: plain
@@ -424,19 +457,22 @@ export async function drawSampleAction(input: {
     );
 
     await samplesCollection().doc(sampleId).create({
-      schemaVersion: EXTRACTION_SCHEMA_VERSION,
+      schemaVersion: SAMPLE_SCHEMA_VERSION,
       sampleId,
       seed,
       perLevel,
       questionIds,
       classResearchId: scope,
       appLevelRule: APP_LEVEL_RULE,
+      appLevels: [...APP_LEVELS],
+      rubricVersion: RUBRIC_VERSION,
       createdAt,
       codeCommit: CODE_COMMIT,
       strata: result.strata,
       excludedCount: result.excludedCount,
       unlevelledCount: result.unlevelledCount,
       consentExcludedStudents,
+      legacyAttemptsExcluded: legacyAttemptCount,
       exclusions: rows
         .filter((r) => r.exclusion)
         .map((r) => ({
@@ -467,6 +503,7 @@ export async function drawSampleAction(input: {
       excludedCount: result.excludedCount,
       unlevelledCount: result.unlevelledCount,
       consentExcludedStudents,
+      legacyAttemptCount,
       filename: `rp_sample_${sampleId}.csv`,
       csv: buildSampleCsv(sampleId, seed, result.cases),
       rowCount: result.cases.length,
@@ -482,6 +519,8 @@ export interface SampleListItem {
   createdAt: string;
   caseCount: number;
   shortfall: number;
+  /** 옛 앱 AI 5수준(v7 100점 환산) 층으로 뽑은 추출인가 */
+  legacy: boolean;
 }
 
 export async function listSamplesAction(): Promise<Result<SampleListItem[]>> {
@@ -499,12 +538,16 @@ export async function listSamplesAction(): Promise<Result<SampleListItem[]>> {
         createdAt: typeof data.createdAt === 'string' ? data.createdAt : '',
         caseCount: Array.isArray(data.cases) ? data.cases.length : 0,
         shortfall: strata.reduce((s, x) => s + (typeof x.shortfall === 'number' ? x.shortfall : 0), 0),
+        legacy: isLegacySampleDoc(data),
       };
     });
   });
 }
 
-/** 저장해 둔 추출 결과를 그대로 CSV로 다시 받는다(다시 뽑지 않는다). */
+/**
+ * 저장해 둔 추출 결과를 그대로 CSV로 다시 받는다(다시 뽑지 않는다).
+ * 옛 5수준 추출(v12-extraction-1)은 그때의 열 그대로 낸다. 새 4수준으로 옮기지 않는다.
+ */
 export async function exportSampleCsvAction(sampleId: string): Promise<Result<CsvFile>> {
   return run(async () => {
     await requireAdmin();
@@ -512,8 +555,11 @@ export async function exportSampleCsvAction(sampleId: string): Promise<Result<Cs
     const snap = await samplesCollection().doc(id).get();
     if (!snap.exists) throw new ResearchInputError('없는 추출 기록입니다.');
     const data = snap.data() ?? {};
-    const cases = Array.isArray(data.cases) ? (data.cases as SampleCase[]) : [];
-    const csv = buildSampleCsv(id, typeof data.seed === 'string' ? data.seed : '', cases);
+    const cases = Array.isArray(data.cases) ? (data.cases as unknown[]) : [];
+    const seed = typeof data.seed === 'string' ? data.seed : '';
+    const csv = isLegacySampleDoc(data)
+      ? buildLegacySampleCsv(id, seed, cases)
+      : buildSampleCsv(id, seed, cases as SampleCase[]);
     await recordAdminEvent('research_export', id, { kind: 'sample', rows: cases.length });
     return { filename: `rp_sample_${id}.csv`, csv, rowCount: cases.length };
   });

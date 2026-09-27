@@ -92,7 +92,8 @@ const REFRESH_INTERVAL_MS = 20_000;
 const SESSION_TYPE_LABEL: Record<SessionType, string> = {
   experience: '일반 수업',
   research_practice: '연구 수업',
-  research_assessment: '연구 검사',
+  // 새로 만들 수는 없고, 예전에 만든 반을 목록에 보일 때만 쓴다.
+  research_assessment: '연구 검사(옛 v7)',
 };
 
 const CREDENTIAL_HINT: Record<string, string> = {
@@ -567,12 +568,11 @@ function CreateClassCard(props: {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                {/* 연구 세션은 연습 모드만 연다(논문 v12). 사전·사후 검사가 열리는 '연구 검사' 반은
+                    만들지 않는다 — server action(parseCreatableSessionType)도 같은 표로 거절한다. */}
                 <SelectItem value="experience">일반 수업</SelectItem>
                 <SelectItem value="research_practice" disabled={!props.researchReady}>
                   연구 수업{props.researchReady ? '' : ' (준비 전)'}
-                </SelectItem>
-                <SelectItem value="research_assessment" disabled={!props.researchReady}>
-                  연구 검사{props.researchReady ? '' : ' (준비 전)'}
                 </SelectItem>
               </SelectContent>
             </Select>

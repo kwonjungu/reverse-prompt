@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { SCHEMA_VERSION, type ScoringRun, type SubmissionRecord } from '@/lib/research/types';
+import type { LegacyScoringRun } from '@/lib/legacy-v7/types';
 import {
   CSV_BOM,
   CSV_NULL_TOKEN,
@@ -16,7 +17,13 @@ import {
   toCsv,
   toCsvBytes,
 } from '@/server/export/csv';
-import { buildCallCsv, buildSubmissionCsv, cellOf, type ExportRow } from '@/server/export/records';
+import {
+  buildCallCsv,
+  buildSubmissionCsv,
+  cellOf,
+  submissionColumnKeys,
+  type ExportRow,
+} from '@/server/export/records';
 import {
   ASSESSMENT_QUESTION_IDS,
   RESPONSES_PER_STUDENT,
@@ -120,6 +127,67 @@ const SCORED_RUN: ScoringRun = {
   band: 'A',
   result: {
     status: 'scored',
+    // 공통 루브릭 v12-2: 영역별 정수 1~4 또는 not_applicable. 100점 환산은 없다.
+    areas: {
+      object: { level: 3, evidence: '노란 세모 블록', missing: [], evidenceMissing: [] },
+      feature: {
+        level: 2,
+        evidence: '노란',
+        // 모델이 낸 문구가 수식 문자로 시작해도 CSV에서 무력화되어야 한다.
+        missing: ['=SUM(A1)', '블록의 크기'],
+        evidenceMissing: [],
+      },
+      relation: { level: 'not_applicable', evidence: null, missing: [], evidenceMissing: [] },
+    },
+    feedbackStatus: 'not_requested',
+  },
+  calls: [
+    {
+      callId: 'c1',
+      retryIndex: 0,
+      purpose: 'score',
+      levels: null,
+      failureReason: 'schema_error: 형식 오류 영역: feature.level',
+      servedModel: 'gemini-served-001',
+      startedAt: '2026-03-02T02:00:00.000Z',
+      finishedAt: '2026-03-02T02:00:01.000Z',
+      durationMs: 1000,
+    },
+    {
+      callId: 'c1',
+      retryIndex: 1,
+      purpose: 'score',
+      levels: { object: 3, feature: 2, relation: 'not_applicable' },
+      failureReason: null,
+      servedModel: 'gemini-served-001',
+      startedAt: '2026-03-02T02:00:01.000Z',
+      finishedAt: '2026-03-02T02:00:02.500Z',
+      durationMs: 1500,
+    },
+  ],
+  extraCall: false,
+  feedback: null,
+  modelId: 'fake-model',
+  servedModel: 'gemini-served-001',
+  modelConfig: { temperature: 0.2 },
+  rubricVersion: 'v12-2',
+  cueVersion: 'v7-candidate',
+  applicabilitySource: 'cue_pack',
+  focusArea: null,
+  // 채점에 실제로 보낸 이미지의 해시. 제출 기록의 imageHash와 따로 남긴다.
+  imageHash: 'f4734f7d',
+  promptHash: 'ph_1',
+  codeCommit: 'abc1234',
+  scoredAt: '2026-03-02T02:00:02.000Z',
+};
+
+/** 저장소에 남아 있는 옛 v7 채점 작업(축별 5수준·100점). 읽기만 한다. */
+const LEGACY_RUN: LegacyScoringRun = {
+  operationId: 'op_old',
+  repeatIndex: 1,
+  band: 'A',
+  result: {
+    status: 'scored',
     // A밴드의 맥락 축은 null이며 0이 아니다. 반수준을 유지한다.
     levels: { objectLevel: 2.5, specificityLevel: 4, contextLevel: null },
     score: 56.25,
@@ -148,33 +216,65 @@ const SCORED_RUN: ScoringRun = {
   ],
   extraCall: false,
   feedback: null,
-  modelId: 'fake-model',
+  modelId: 'old-model',
   modelConfig: { temperature: 0.2 },
   rubricVersion: 'v7-candidate',
   cueVersion: 'v7-candidate',
-  // 채점에 실제로 보낸 이미지의 해시. 제출 기록의 imageHash와 따로 남긴다.
   imageHash: 'f4734f7d',
-  promptHash: 'ph_1',
-  codeCommit: 'abc1234',
-  scoredAt: '2026-03-02T02:00:02.000Z',
+  promptHash: 'ph_old',
+  codeCommit: 'old1234',
+  scoredAt: '2026-03-01T02:00:02.000Z',
 };
+
+/** CSV 본문을 헤더와 값 줄로 나눈다(BOM 제외). */
+function parseCsv(csv: string): { header: string[]; rows: string[][] } {
+  const lines = csv.slice(CSV_BOM.length).trimEnd().split('\r\n');
+  return {
+    header: splitCsvLine(lines[0]).map((h) => h.replace(/"/g, '')),
+    rows: lines.slice(1).map(splitCsvLine),
+  };
+}
 
 test('내보내기 행이 기준 버전과 결측 구분을 그대로 담는다', () => {
   const scoredRow: ExportRow = { submission: BASE_SUBMISSION, run: SCORED_RUN };
 
-  // 기준 버전이 열로 나온다.
+  // 기준 버전이 열로 나온다. 수집 당시 버전과 실제 채점에 쓴 버전을 따로 낸다.
   assert.equal(cellOf(scoredRow, 'schema_version'), SCHEMA_VERSION);
   assert.equal(cellOf(scoredRow, 'cue_version'), 'v7-candidate');
   assert.equal(cellOf(scoredRow, 'rubric_version'), 'v7-candidate');
+  assert.equal(cellOf(scoredRow, 'scored_rubric_version'), 'v12-2');
   assert.equal(cellOf(scoredRow, 'code_commit'), 'abc1234');
   assert.equal(cellOf(scoredRow, 'prompt_hash'), 'ph_1');
+  // 설정한 모델과 실제로 답한 모델을 함께 낸다.
+  assert.equal(cellOf(scoredRow, 'model_id'), 'fake-model');
+  assert.equal(cellOf(scoredRow, 'served_model'), 'gemini-served-001');
+  assert.equal(cellOf(scoredRow, 'applicability_source'), 'cue_pack');
+  assert.equal(cellOf(scoredRow, 'legacy_rubric'), false);
 
-  // 반수준과 소수 점수를 그대로 낸다.
-  assert.equal(cellOf(scoredRow, 'object_level'), 2.5);
-  assert.equal(cellOf(scoredRow, 'total_score'), 56.25);
-  // A밴드의 맥락 축은 null이다.
-  assert.equal(cellOf(scoredRow, 'context_level'), null);
-  assert.equal(cellOf(scoredRow, 'context_score'), null);
+  // 영역별 수준. 해당 없음은 NA가 아니라 not_applicable로 구분한다.
+  assert.equal(cellOf(scoredRow, 'object_level'), 3);
+  assert.equal(cellOf(scoredRow, 'feature_level'), 2);
+  assert.equal(cellOf(scoredRow, 'relation_level'), 'not_applicable');
+  // 앱 종합 수준 = round_half_up((3+2)/2) = 3. 반올림 전 값 2.5를 그대로 낸다.
+  assert.equal(cellOf(scoredRow, 'app_level'), 3);
+  assert.equal(cellOf(scoredRow, 'app_level_raw'), 2.5);
+  // 근거는 학생 원문 그대로, 없으면 NA.
+  assert.equal(cellOf(scoredRow, 'object_evidence'), '노란 세모 블록');
+  assert.equal(cellOf(scoredRow, 'relation_evidence'), null);
+  // 빠진 정보는 ' | '로 잇는다. 빠진 것이 없으면 빈 문자열이다(결측 NA와 다르다).
+  assert.equal(cellOf(scoredRow, 'feature_missing'), '=SUM(A1) | 블록의 크기');
+  assert.equal(cellOf(scoredRow, 'object_missing'), '');
+  // 옛 v7 열은 새 작업에서 비어 있다.
+  assert.equal(cellOf(scoredRow, 'v7_object_level'), null);
+  assert.equal(cellOf(scoredRow, 'v7_total_score'), null);
+  // 100점 환산 열은 없다.
+  assert.equal(cellOf(scoredRow, 'total_score'), null);
+  assert.equal(submissionColumnKeys().includes('total_score'), false);
+  assert.equal(submissionColumnKeys().includes('specificity_level'), false);
+  // 형식 오류로 다시 부른 호출은 실패 호출로 센다.
+  assert.equal(cellOf(scoredRow, 'call_count'), 2);
+  assert.equal(cellOf(scoredRow, 'failed_call_count'), 1);
+  assert.equal(cellOf(scoredRow, 'extra_call'), false);
   // 검사는 차시 활동이 아니므로 lesson은 null이다.
   assert.equal(cellOf(scoredRow, 'lesson'), null);
 
@@ -190,45 +290,148 @@ test('내보내기 행이 기준 버전과 결측 구분을 그대로 담는다'
     },
     run: null,
   };
-  assert.equal(cellOf(missingRow, 'total_score'), null);
   assert.equal(cellOf(missingRow, 'object_level'), null);
+  assert.equal(cellOf(missingRow, 'app_level'), null);
+  assert.equal(cellOf(missingRow, 'object_missing'), null);
+  assert.equal(cellOf(missingRow, 'legacy_rubric'), null);
   assert.equal(cellOf(missingRow, 'missing_reason'), 'timeout_unsubmitted');
 
   const modelMissingRow: ExportRow = {
     submission: BASE_SUBMISSION,
     run: {
       ...SCORED_RUN,
-      result: { status: 'missing', levels: null, score: null, axisScores: null, reason: 'required_call_failed' },
+      servedModel: null,
+      result: { status: 'missing', areas: null, reason: 'required_call_failed' },
     },
   };
-  assert.equal(cellOf(modelMissingRow, 'total_score'), null);
+  // 운영 결측은 최저 수준이 아니다. 모든 영역·종합 수준이 NA다.
+  for (const key of ['object_level', 'feature_level', 'relation_level', 'app_level', 'app_level_raw']) {
+    assert.equal(cellOf(modelMissingRow, key), null, key);
+  }
   assert.equal(cellOf(modelMissingRow, 'model_missing_reason'), 'required_call_failed');
+  assert.equal(cellOf(modelMissingRow, 'served_model'), null);
 });
 
-test('제출·채점 CSV에 결측이 NA로, 반수준이 소수로 나온다', () => {
-  const csv = buildSubmissionCsv([{ submission: BASE_SUBMISSION, run: SCORED_RUN }]);
-  const lines = csv.slice(CSV_BOM.length).split('\r\n');
-  const header = lines[0].split(',').map((h) => h.replace(/"/g, ''));
-  const values = lines[1];
+test('옛 v7 채점 작업은 legacy_rubric=true와 v7 열로만 읽히고 영역 수준을 지어내지 않는다', () => {
+  const legacyRow: ExportRow = { submission: BASE_SUBMISSION, run: LEGACY_RUN };
+  assert.equal(cellOf(legacyRow, 'legacy_rubric'), true);
+  assert.equal(cellOf(legacyRow, 'scored_rubric_version'), 'v7-candidate');
+  // 반수준과 소수 점수를 그대로 낸다. A밴드의 맥락 축은 null이다.
+  assert.equal(cellOf(legacyRow, 'v7_object_level'), 2.5);
+  assert.equal(cellOf(legacyRow, 'v7_specificity_level'), 4);
+  assert.equal(cellOf(legacyRow, 'v7_context_level'), null);
+  assert.equal(cellOf(legacyRow, 'v7_total_score'), 56.25);
+  // 새 영역 열은 모두 NA다.
+  for (const key of [
+    'object_level',
+    'feature_level',
+    'relation_level',
+    'app_level',
+    'app_level_raw',
+    'object_evidence',
+    'object_missing',
+    'served_model',
+    'applicability_source',
+  ]) {
+    assert.equal(cellOf(legacyRow, key), null, key);
+  }
+  assert.equal(cellOf(legacyRow, 'failed_call_count'), 1);
 
-  assert.ok(header.includes('context_level'));
-  assert.ok(header.includes('rubric_version'));
-  assert.ok(values.includes('2.5'));
-  assert.ok(values.includes('56.25'));
-  // A밴드의 맥락 축이 NA로 나오고 0으로 바뀌지 않는다.
-  const contextIndex = header.indexOf('context_level');
-  const cells = splitCsvLine(values);
-  assert.equal(cells[contextIndex], CSV_NULL_TOKEN);
+  const legacyMissing: ExportRow = {
+    submission: BASE_SUBMISSION,
+    run: {
+      ...LEGACY_RUN,
+      result: { status: 'missing', levels: null, score: null, axisScores: null, reason: 'model_error' },
+    },
+  };
+  assert.equal(cellOf(legacyMissing, 'legacy_rubric'), true);
+  assert.equal(cellOf(legacyMissing, 'v7_total_score'), null);
+  assert.equal(cellOf(legacyMissing, 'model_missing_reason'), 'model_error');
 });
 
-test('호출 이력 CSV는 실패 호출의 수준을 1로 채우지 않는다', () => {
+test('제출·채점 CSV에 결측이 NA로, 해당 없음이 문자열로, 반올림 전 종합 수준이 소수로 나온다', () => {
+  const csv = buildSubmissionCsv([
+    { submission: BASE_SUBMISSION, run: SCORED_RUN },
+    { submission: { ...BASE_SUBMISSION, submissionId: 'sub_old' }, run: LEGACY_RUN },
+  ]);
+  const { header, rows } = parseCsv(csv);
+  const [v12, old] = rows;
+  const at = (row: string[], key: string) => row[header.indexOf(key)];
+
+  for (const key of [
+    'rubric_version',
+    'scored_rubric_version',
+    'object_level',
+    'feature_level',
+    'relation_level',
+    'app_level',
+    'app_level_raw',
+    'object_evidence',
+    'feature_evidence',
+    'relation_evidence',
+    'object_missing',
+    'feature_missing',
+    'relation_missing',
+    'served_model',
+    'legacy_rubric',
+    'v7_object_level',
+    'v7_specificity_level',
+    'v7_context_level',
+    'v7_total_score',
+    'feedback_status',
+    'feedback_text',
+  ]) {
+    assert.ok(header.includes(key), `${key} 열이 없다`);
+  }
+  assert.equal(new Set(header).size, header.length, '열 이름이 겹치면 안 된다');
+
+  assert.equal(at(v12, 'relation_level'), '"not_applicable"');
+  assert.equal(at(v12, 'app_level_raw'), '2.5');
+  assert.equal(at(v12, 'relation_evidence'), CSV_NULL_TOKEN);
+  assert.equal(at(v12, 'legacy_rubric'), 'false');
+  assert.equal(at(v12, 'v7_total_score'), CSV_NULL_TOKEN);
+  // 모델이 낸 문구도 수식 주입을 막는다(학생 원문과 같은 규칙).
+  assert.equal(at(v12, 'feature_missing'), `"'=SUM(A1) | 블록의 크기"`);
+
+  assert.equal(at(old, 'legacy_rubric'), 'true');
+  assert.equal(at(old, 'v7_object_level'), '2.5');
+  assert.equal(at(old, 'v7_total_score'), '56.25');
+  // A밴드의 옛 맥락 축이 NA로 나오고 0으로 바뀌지 않는다.
+  assert.equal(at(old, 'v7_context_level'), CSV_NULL_TOKEN);
+  assert.equal(at(old, 'object_level'), CSV_NULL_TOKEN);
+  assert.equal(at(old, 'app_level'), CSV_NULL_TOKEN);
+});
+
+test('호출 이력 CSV는 실패 호출의 수준을 1로 채우지 않고 실제 모델을 남긴다', () => {
   const csv = buildCallCsv([{ submission: BASE_SUBMISSION, run: SCORED_RUN }]);
-  const lines = csv.slice(CSV_BOM.length).trimEnd().split('\r\n');
-  assert.equal(lines.length, 3, '헤더 1줄 + 호출 2줄');
-  const header = splitCsvLine(lines[0]).map((h) => h.replace(/"/g, ''));
-  const failed = splitCsvLine(lines[2]);
-  assert.equal(failed[header.indexOf('object_level')], CSV_NULL_TOKEN);
-  assert.equal(failed[header.indexOf('failure_reason')], '"schema_error"');
+  const { header, rows } = parseCsv(csv);
+  assert.equal(rows.length, 2, '호출 2줄');
+  const at = (row: string[], key: string) => row[header.indexOf(key)];
+  const [failed, ok] = rows;
+  assert.equal(at(failed, 'object_level'), CSV_NULL_TOKEN);
+  assert.equal(at(failed, 'failure_reason'), '"schema_error: 형식 오류 영역: feature.level"');
+  assert.equal(at(failed, 'purpose'), '"score"');
+  assert.equal(at(failed, 'served_model'), '"gemini-served-001"');
+  assert.equal(at(ok, 'object_level'), '3');
+  assert.equal(at(ok, 'relation_level'), '"not_applicable"');
+  assert.equal(at(ok, 'legacy_rubric'), 'false');
+  assert.equal(at(ok, 'v7_object_level'), CSV_NULL_TOKEN);
+});
+
+test('옛 v7 작업의 호출 이력은 v7 열에만 수준이 있고 용도를 지어내지 않는다', () => {
+  const csv = buildCallCsv([{ submission: BASE_SUBMISSION, run: LEGACY_RUN }]);
+  const { header, rows } = parseCsv(csv);
+  const at = (row: string[], key: string) => row[header.indexOf(key)];
+  assert.equal(rows.length, 2);
+  const [first, failed] = rows;
+  assert.equal(at(first, 'legacy_rubric'), 'true');
+  assert.equal(at(first, 'v7_object_level'), '2');
+  assert.equal(at(first, 'v7_context_level'), CSV_NULL_TOKEN);
+  assert.equal(at(first, 'object_level'), CSV_NULL_TOKEN);
+  assert.equal(at(first, 'purpose'), CSV_NULL_TOKEN);
+  assert.equal(at(first, 'served_model'), CSV_NULL_TOKEN);
+  assert.equal(at(failed, 'v7_object_level'), CSV_NULL_TOKEN);
+  assert.equal(at(failed, 'failure_reason'), '"schema_error"');
 });
 
 test('학생 원문에 든 수식 문자가 CSV에서 무력화된다', () => {

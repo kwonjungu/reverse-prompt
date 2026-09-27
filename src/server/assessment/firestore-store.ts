@@ -27,7 +27,7 @@ import {
   type ResearchCollection,
 } from '@/server/firebase-admin';
 import { AuthError } from '@/server/auth/contract';
-import type { AssessmentSession, ScoringRun, SubmissionRecord } from '@/lib/research/types';
+import type { AssessmentSession, SubmissionRecord } from '@/lib/research/types';
 import { resolveSubmission, type SubmissionDecision } from './submission';
 import {
   DuplicateWriteError,
@@ -37,6 +37,7 @@ import {
   type ItemWindowPatch,
   type ItemWindowRecord,
   type ScoringBatchRecord,
+  type StoredScoringRun,
 } from './store';
 
 export class AssessmentStoreNotConfiguredError extends Error {
@@ -80,13 +81,24 @@ export interface FirestoreLike {
   collection(path: string): CollectionLike;
 }
 
-/** Firestore 문서에는 undefined를 넣을 수 없다. null은 그대로 둔다(결측 구분을 지킨다). */
-function stripUndefined<T extends Record<string, unknown>>(value: T): T {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value)) {
-    if (v !== undefined) out[k] = v;
+/**
+ * Firestore 문서에는 undefined를 넣을 수 없다. null은 그대로 둔다(결측 구분을 지킨다).
+ * 채점 작업은 영역 판정·피드백처럼 중첩된 객체를 담으므로 일반 객체·배열 안까지 훑는다.
+ */
+function stripUndefinedDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripUndefinedDeep);
+  if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v !== undefined) out[k] = stripUndefinedDeep(v);
+    }
+    return out;
   }
-  return out as T;
+  return value;
+}
+
+function stripUndefined<T extends Record<string, unknown>>(value: T): T {
+  return stripUndefinedDeep(value) as T;
 }
 
 /**
@@ -283,7 +295,8 @@ export function createFirestoreAssessmentStore(deps?: {
       const snap = await col(RESEARCH_COLLECTIONS.scoringRuns)
         .doc(assertComposedDocId(`${submissionId}__${repeatIndex}`, '채점 작업 식별자'))
         .get();
-      return snap.exists ? (snap.data() as unknown as ScoringRun) : null;
+      // 옛 v7 작업도 그대로 돌려준다. 모양을 바꾸지 않는다(읽는 쪽이 isLegacyScoringRun으로 가른다).
+      return snap.exists ? (snap.data() as unknown as StoredScoringRun) : null;
     },
     async putScoringRun(submissionId, run) {
       // 같은 (제출, 반복)의 결과는 덮어쓰지 않는다. 주 자료(repeatIndex 1)의 불변을 지킨다.

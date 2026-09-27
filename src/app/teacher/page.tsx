@@ -11,10 +11,13 @@
  * 별개로 서버가 다시 거부한다.
  *
  * 학생 현황(LMS): 관리자(/admin)가 만들어 배정한 반의 학생 진행을 번호별로 본다.
- * 일반 수업은 점수·최근 답안까지, 연구 수업은 블라인드 채점을 위해 진행 수만 보인다.
+ * 일반 수업은 영역별 수준(공통 루브릭 v12-2: 대상·특징·관계 1~4)·최근 답안까지,
+ * 연구 수업은 블라인드 채점을 위해 진행 수만 보인다. 100점 점수는 쓰지 않는다.
+ * 옛 v7 기록(100점)은 '옛 채점'으로만 따로 보이고 수준 평균에 섞지 않는다.
+ * 단계 이름은 src/lib/stages.ts 하나에서 가져온다.
  *
- * 차시 개방·폐쇄와 검사 세션 열기·닫기도 여기서 한다(설계서 §4·§5, 수용시험 6).
- * 점수나 완료 문항 수는 개방 조건이 아니다. 완료 수는 정보로만 보여 준다.
+ * 검사 세션 열기·닫기도 여기서 한다(설계서 §5, 수용시험 6). 단계는 관리 화면의 수업 시작이 한 번에 연다.
+ * 채점 수준이나 완료 문항 수는 개방 조건이 아니다. 완료 수는 정보로만 보여 준다.
  * 공통 루브릭은 사본을 만들지 않고 단일 버전 리소스(src/lib/rubric.ts)에서 그대로 낸다(설계서 §2).
  *
  * 대응 문서: 프로그램_수정_프롬프트설계서_v7 §2·§4·§5·§6, 수용시험 6·11
@@ -34,8 +37,8 @@ import {
   type ClassProgressView,
 } from '@/server/auth/class-data-actions';
 import { PRACTICE_QUESTIONS } from '@/lib/questions';
-import {
-} from '@/server/lessons/actions';
+import { STAGES, STAGE_TITLE } from '@/lib/stages';
+import type { ScoringView } from '@/server/lms/progress';
 import {
   openAssessmentSession,
   closeAssessmentSession,
@@ -43,7 +46,7 @@ import {
 } from '@/server/assessment/actions';
 import { renderForTeacher, RUBRIC_VERSION } from '@/lib/rubric';
 import { PII_NOTICE } from '@/server/privacy';
-import type { Band } from '@/lib/scoring';
+import { AREA_IDS, AREA_LABEL, type AreaLevels, type Band } from '@/lib/scoring';
 import type { AssessmentPhase } from '@/lib/research/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -64,7 +67,8 @@ type LessonRecords = Awaited<ReturnType<typeof loadLessonRecords>>;
 type ResearchRecords = Awaited<ReturnType<typeof loadResearchRecords>>;
 
 const PROGRESS_REFRESH_MS = 30_000;
-const LESSON_COLUMNS = [1, 2, 3, 4, 5, 6] as const;
+/** 학생 현황의 단계 열. 단계마다 문항 수가 분모다. */
+const LESSON_COLUMNS = STAGES.map((s) => ({ chasi: s.chasi, title: s.title, total: s.levels.length }));
 
 /** 'L03' → '3. 빨간 사과' 처럼 공개 문항 제목으로 바꾼다. 모르는 ID는 그대로 둔다. */
 function questionTitle(questionId: string): string {
@@ -72,6 +76,53 @@ function questionTitle(questionId: string): string {
   if (!m) return questionId;
   const q = PRACTICE_QUESTIONS.find((p) => p.level === Number(m[1]));
   return q ? `${q.level}. ${q.koreanTitle}` : questionId;
+}
+
+/** '2단계 · 대상과 수량'. 모르는 단계면 '-'. */
+function stageLabel(chasi: number | null | undefined): string {
+  if (chasi === null || chasi === undefined) return '-';
+  const title = STAGE_TITLE[chasi];
+  return title ? `${chasi}단계 · ${title}` : `${chasi}단계`;
+}
+
+/**
+ * 영역별 네 칸(대상 ●●●○). 해당 없음 영역은 보이지 않는다.
+ * 결측을 1수준으로 채우지 않는다 — 수준이 없으면 이 표시를 쓰지 않는다.
+ */
+function AreaLevelDots({ levels, compact = false }: { levels: AreaLevels; compact?: boolean }) {
+  const shown = AREA_IDS.filter((a) => typeof levels[a] === 'number');
+  return (
+    <span className={`inline-flex flex-wrap items-center ${compact ? 'gap-x-2 text-xs' : 'gap-x-3 text-sm'}`}>
+      {shown.map((a) => {
+        const level = levels[a] as number;
+        return (
+          <span key={a} className="inline-flex items-center gap-1 whitespace-nowrap" title={`${AREA_LABEL[a]} ${level}수준`}>
+            <span className="font-medium text-foreground">{AREA_LABEL[a]}</span>
+            <span aria-hidden="true" className="tracking-[0.1em]">
+              <span className="text-primary">{'●'.repeat(level)}</span>
+              <span className="text-muted-foreground/50">{'○'.repeat(4 - level)}</span>
+            </span>
+            <span className="sr-only">{level}수준</span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+/** 저장된 채점 결과 한 건. v12-2는 영역 칸, 옛 기록은 '옛 채점', 결측은 결측으로만 보인다. */
+function ScoringCell({ view, compact = false }: { view: ScoringView | null | undefined; compact?: boolean }) {
+  if (!view || view.kind === 'missing') {
+    return <span className="text-xs text-muted-foreground">채점 결측</span>;
+  }
+  if (view.kind === 'legacy') {
+    return (
+      <span className="whitespace-nowrap text-xs text-muted-foreground" title="옛 기준(v7·100점)으로 채점된 기록입니다. 수준 평균에 넣지 않습니다.">
+        옛 채점 {view.score === null ? '· 결측' : `${view.score}점`}
+      </span>
+    );
+  }
+  return <AreaLevelDots levels={view.levels} compact={compact} />;
 }
 
 function shortTime(iso: string | null | undefined): string {
@@ -88,7 +139,10 @@ type PracticeAttempt = {
   questionLevel?: number;
   questionTitle?: string;
   studentPrompt?: string;
+  /** 옛 연습 기록의 100점 점수. 화면은 scoringView를 쓴다. */
   score?: number | null;
+  /** 서버가 덧붙인 채점 결과(loadLessonRecords). */
+  scoringView?: ScoringView;
   createdAt?: string | null;
 };
 
@@ -564,11 +618,11 @@ export default function TeacherPage() {
                         { label: '학생', value: `${progress.totals.students}명` },
                         { label: '제출', value: `${progress.totals.submissions}건` },
                         {
-                          label: '평균 점수',
+                          label: '평균 종합 수준',
                           value: progress.detailVisible
-                            ? progress.totals.averageScore === null
+                            ? progress.totals.averageLevel === null
                               ? '-'
-                              : `${progress.totals.averageScore}점`
+                              : `${progress.totals.averageLevel.toFixed(1)} / 4`
                             : '표시 안 함',
                         },
                       ].map((tile) => (
@@ -581,13 +635,22 @@ export default function TeacherPage() {
                     {progress.notice && <p className="mt-3 text-sm text-amber-700">{progress.notice}</p>}
                     {!progress.detailVisible && (
                       <p className="mt-3 text-sm text-muted-foreground">
-                        연구 수업은 교사 블라인드 채점을 흐리지 않도록 AI 점수·답안·제출 시각을 이 화면에
+                        연구 수업은 교사 블라인드 채점을 흐리지 않도록 AI 채점 결과·답안·제출 시각을 이 화면에
                         보여 주지 않습니다. 참가자별 진행 수만 봅니다.
                       </p>
                     )}
+                    {progress.detailVisible && (
+                      <p className="mt-3 text-sm text-muted-foreground">
+                        AI는 대상·특징·관계 세 영역을 각각 1~4수준으로 봅니다(●가 찬 칸 수). 해당 없는 영역은
+                        보이지 않습니다. 종합 수준은 해당 영역 수준의 평균을 반올림한 1~4이고, 평균은 문항마다
+                        마지막 종합 수준의 평균입니다. 학생 화면에는 종합 수준도 점수도 보이지 않습니다.
+                        {progress.totals.legacySubmissions > 0 &&
+                          ` 옛 기준(100점)으로 채점된 기록 ${progress.totals.legacySubmissions}건은 '옛 채점'으로 따로 보이며 평균에 넣지 않았습니다.`}
+                      </p>
+                    )}
                     <p className="mt-2 text-xs text-muted-foreground">
-                      {shortTime(progress.loadedAt)} 기준 · 30초마다 새로 읽습니다. 학생은 1번부터 순서대로 풀며
-                      앞 문항을 내야 다음 문항이 열립니다. 점수가 없는 칸은 0점이 아니라 채점 결측입니다.
+                      {shortTime(progress.loadedAt)} 기준 · 30초마다 새로 읽습니다. 학생은 1단계 첫 문항부터 순서대로 풀며
+                      앞 문항을 내야 다음 문항이 열립니다. 수준이 비어 있는 칸은 1수준이 아니라 채점 결측입니다.
                     </p>
                   </CardContent>
                 </Card>
@@ -604,12 +667,15 @@ export default function TeacherPage() {
                           <TableRow>
                             <TableHead className="w-[120px]">학생</TableHead>
                             <TableHead className="w-[80px]">상태</TableHead>
-                            {LESSON_COLUMNS.map((n) => (
-                              <TableHead key={n} className="text-center">{n}차시</TableHead>
+                            {LESSON_COLUMNS.map((c) => (
+                              <TableHead key={c.chasi} className="text-center" title={stageLabel(c.chasi)}>
+                                {c.chasi}단계
+                                <span className="block text-[10px] font-normal text-muted-foreground">{c.title}</span>
+                              </TableHead>
                             ))}
                             <TableHead className="text-right">제출</TableHead>
-                            {progress.detailVisible && <TableHead className="text-right">평균</TableHead>}
-                            {progress.detailVisible && <TableHead className="text-right">최근</TableHead>}
+                            {progress.detailVisible && <TableHead className="text-right">평균 수준</TableHead>}
+                            {progress.detailVisible && <TableHead>최근 채점</TableHead>}
                             {progress.detailVisible && <TableHead>마지막 활동</TableHead>}
                           </TableRow>
                         </TableHeader>
@@ -641,12 +707,14 @@ export default function TeacherPage() {
                                       <span className="text-xs text-muted-foreground">나감</span>
                                     )}
                                   </TableCell>
-                                  {LESSON_COLUMNS.map((n) => {
-                                    const done = st.attemptedByLesson[n] ?? 0;
+                                  {LESSON_COLUMNS.map((c) => {
+                                    const done = st.attemptedByLesson[c.chasi] ?? 0;
                                     return (
-                                      <TableCell key={n} className="text-center tabular-nums">
+                                      <TableCell key={c.chasi} className="text-center tabular-nums">
                                         {done ? (
-                                          <span className={done >= 6 ? 'font-bold text-emerald-700' : ''}>{done}/6</span>
+                                          <span className={done >= c.total ? 'font-bold text-emerald-700' : ''}>
+                                            {done}/{c.total}
+                                          </span>
                                         ) : (
                                           <span className="text-muted-foreground">·</span>
                                         )}
@@ -655,11 +723,17 @@ export default function TeacherPage() {
                                   })}
                                   <TableCell className="text-right tabular-nums">{st.submissions}</TableCell>
                                   {progress.detailVisible && (
-                                    <TableCell className="text-right tabular-nums">{st.averageScore ?? '-'}</TableCell>
+                                    <TableCell className="text-right tabular-nums">
+                                      {st.averageLevel === null ? '-' : st.averageLevel.toFixed(1)}
+                                    </TableCell>
                                   )}
                                   {progress.detailVisible && (
-                                    <TableCell className="text-right font-bold tabular-nums text-primary">
-                                      {st.latestScore ?? '-'}
+                                    <TableCell>
+                                      {st.latestLevels ? (
+                                        <AreaLevelDots levels={st.latestLevels} compact />
+                                      ) : (
+                                        <span className="text-muted-foreground">-</span>
+                                      )}
                                     </TableCell>
                                   )}
                                   {progress.detailVisible && (
@@ -674,11 +748,20 @@ export default function TeacherPage() {
                                           <div key={i} className="rounded-lg border bg-background p-3">
                                             <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                                               <span className="font-medium text-foreground">{questionTitle(a.questionId)}</span>
+                                              {a.lesson !== null && <span>{stageLabel(a.lesson)}</span>}
                                               {a.attemptNo ? <span>{a.attemptNo}번째</span> : null}
                                               <span>{shortTime(a.submittedAt)}</span>
                                               {a.reviewed && <Badge variant="outline">피드백 검토함</Badge>}
-                                              <span className="ml-auto font-bold text-primary">
-                                                {a.score === null ? '채점 결측' : `${a.score}점`}
+                                              <span className="ml-auto">
+                                                <ScoringCell
+                                                  view={
+                                                    a.levels
+                                                      ? { kind: 'areas', levels: a.levels, overallLevel: a.overallLevel }
+                                                      : a.legacy
+                                                        ? { kind: 'legacy', score: a.legacyScore }
+                                                        : { kind: 'missing' }
+                                                  }
+                                                />
                                               </span>
                                             </div>
                                             <p className="whitespace-pre-wrap text-sm">{a.text}</p>
@@ -801,7 +884,7 @@ export default function TeacherPage() {
                   <CardHeader>
                     <CardTitle className="text-lg">제출 문항 수 (정보)</CardTitle>
                     <CardDescription>
-                      개방 조건이 아닙니다. 이 수가 적어도 다음 차시에 들어갈 수 있습니다.
+                      개방 조건이 아닙니다. 이 수가 적어도 다음 단계에 들어갈 수 있습니다.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -839,8 +922,9 @@ export default function TeacherPage() {
               <CardHeader>
                 <CardTitle className="text-lg">공통 루브릭 {RUBRIC_VERSION}</CardTitle>
                 <CardDescription>
-                  AI 채점 지시문·이 화면·내보내기 문서가 모두 같은 원본에서 나옵니다. 문항별 단서와
-                  수준 경계는 문항 명세를 함께 적용합니다.
+                  대상·특징·관계 세 영역을 모든 밴드에서 각각 1~4수준으로 판정합니다. 과제가 요구하지 않는
+                  영역은 해당 없음입니다. 점수로 바꾸거나 더하지 않습니다. AI 채점 지시문·이 화면·내보내기
+                  문서가 모두 같은 원본에서 나오며, 문항별 필수 정보는 문항 명세(비공개)를 함께 적용합니다.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -851,9 +935,9 @@ export default function TeacherPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="A">A밴드 (Lv.1~12)</SelectItem>
-                      <SelectItem value="B">B밴드 (Lv.13~24)</SelectItem>
-                      <SelectItem value="C">C밴드 (Lv.25~36)</SelectItem>
+                      <SelectItem value="A">A밴드 (L01~L12 · 관계 = 공간 관계)</SelectItem>
+                      <SelectItem value="B">B밴드 (L13~L24 · 관계 = 장소·행동)</SelectItem>
+                      <SelectItem value="C">C밴드 (L25~L36 · 관계 = 장소·행동)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -902,7 +986,7 @@ export default function TeacherPage() {
                                 <TableRow>
                                   <TableHead className="w-[80px] font-bold">차수</TableHead>
                                   <TableHead className="font-bold">학생 응답</TableHead>
-                                  <TableHead className="w-[90px] text-right font-bold">점수</TableHead>
+                                  <TableHead className="w-[220px] text-right font-bold">채점</TableHead>
                                   <TableHead className="w-[40px] no-print"></TableHead>
                                 </TableRow>
                               </TableHeader>
@@ -913,9 +997,16 @@ export default function TeacherPage() {
                                     <TableCell className="whitespace-pre-wrap py-3 leading-relaxed">
                                       {att.studentPrompt ?? ''}
                                     </TableCell>
-                                    {/* 결측은 0점이 아니다. 점수가 없으면 '기록 없음'으로 둔다. */}
-                                    <TableCell className="text-right font-black text-primary text-lg">
-                                      {typeof att.score === 'number' ? att.score : '기록 없음'}
+                                    {/* 결측은 0점·1수준이 아니다. 옛 100점 기록은 '옛 채점'으로만 둔다. */}
+                                    <TableCell className="text-right">
+                                      <ScoringCell
+                                        view={
+                                          att.scoringView ??
+                                          (typeof att.score === 'number'
+                                            ? { kind: 'legacy', score: att.score }
+                                            : { kind: 'missing' })
+                                        }
+                                      />
                                     </TableCell>
                                     <TableCell className="no-print">
                                       <Button
@@ -998,10 +1089,65 @@ export default function TeacherPage() {
               </Card>
             ) : (
               <Card className="rounded-2xl">
-                <CardContent className="p-5 overflow-x-auto">
-                  <pre className="text-xs whitespace-pre-wrap">
-                    {JSON.stringify(research.records, null, 2)}
-                  </pre>
+                <CardContent className="space-y-4 p-5 overflow-x-auto">
+                  {!research.blind && (
+                    <p className="text-xs text-muted-foreground">
+                      공통 루브릭 v12-2의 영역별 수준입니다(해당 없음 영역은 숨김). 옛 기준(v7·100점)으로
+                      채점된 기록은 영역 수준이 없어 &lsquo;옛 채점&rsquo;으로 따로 표시합니다.
+                    </p>
+                  )}
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>참가자(연구ID)</TableHead>
+                        <TableHead>문항</TableHead>
+                        <TableHead>단계</TableHead>
+                        <TableHead className="text-right">시도</TableHead>
+                        <TableHead>상태</TableHead>
+                        <TableHead>기준</TableHead>
+                        {!research.blind && <TableHead>채점</TableHead>}
+                        {!research.blind && <TableHead>피드백</TableHead>}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {research.rows.map((row, i) => (
+                        <TableRow key={row.id || i}>
+                          <TableCell className="font-mono text-xs">{row.researchId ?? '-'}</TableCell>
+                          <TableCell className="text-xs">{row.questionId ? questionTitle(row.questionId) : '-'}</TableCell>
+                          <TableCell className="whitespace-nowrap text-xs">{stageLabel(row.stage)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{row.attemptNo ?? '-'}</TableCell>
+                          <TableCell className="text-xs">
+                            {row.responseStatus === 'submitted' ? '제출' : row.responseStatus ?? '-'}
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {row.legacy ? (
+                              <Badge variant="outline">옛 기준 {row.rubricVersion ?? ''}</Badge>
+                            ) : (
+                              row.rubricVersion ?? '-'
+                            )}
+                          </TableCell>
+                          {!research.blind && (
+                            <TableCell>
+                              {row.responseStatus && row.responseStatus !== 'submitted' ? (
+                                <span className="text-xs text-muted-foreground">미제출</span>
+                              ) : (
+                                <ScoringCell view={row.scoring} compact />
+                              )}
+                            </TableCell>
+                          )}
+                          {!research.blind && (
+                            <TableCell className="text-xs text-muted-foreground">{row.feedbackStatus ?? '-'}</TableCell>
+                          )}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                  <details>
+                    <summary className="cursor-pointer text-sm font-medium no-print">비식별 원문 보기</summary>
+                    <pre className="mt-3 text-xs whitespace-pre-wrap">
+                      {JSON.stringify(research.records, null, 2)}
+                    </pre>
+                  </details>
                 </CardContent>
               </Card>
             )}

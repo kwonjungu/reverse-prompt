@@ -38,10 +38,18 @@ export const FORBIDDEN_GRADER_FIELDS = [
   'studentName',
   'schoolCode',
   'schoolName',
+  // 자동 채점 결과 — 옛 v7(점수·축 수준)과 v12-2(영역 판정·종합 수준·근거·누락) 모두
   'score',
   'levels',
   'axisScores',
   'autoScore',
+  'areas',
+  'overallLevel',
+  'appLevel',
+  'appLevelRaw',
+  'evidence',
+  'missing',
+  'evidenceMissing',
   'submissionId',
 ] as const;
 
@@ -371,13 +379,14 @@ export async function runScoringJob(
 /**
  * 주 자료를 고른다. repeatIndex 1의 결과만 쓴다.
  * 세 반복의 평균을 만들지 않는다. 평균이 필요한 신뢰도 분석은 분석 단계에서 따로 한다.
+ * 옛 v7 작업(StoredScoringRun)도 같은 규칙으로 고른다.
  */
-export function primaryRun(runs: readonly ScoringRun[]): ScoringRun | null {
+export function primaryRun<R extends { repeatIndex: number }>(runs: readonly R[]): R | null {
   return runs.find((r) => r.repeatIndex === PRIMARY_REPEAT_INDEX) ?? null;
 }
 
 /** 신뢰도 분석용 반복만 고른다. */
-export function reliabilityRuns(runs: readonly ScoringRun[]): ScoringRun[] {
+export function reliabilityRuns<R extends { repeatIndex: number }>(runs: readonly R[]): R[] {
   return runs
     .filter((r) => (RELIABILITY_REPEAT_INDICES as readonly number[]).includes(r.repeatIndex))
     .sort((a, b) => a.repeatIndex - b.repeatIndex);

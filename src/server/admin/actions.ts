@@ -36,6 +36,7 @@ import {
 import { getLessonStore } from '@/server/lessons/store';
 import { registry } from '@/server/registry';
 import type { SessionType } from '@/lib/research/types';
+import { parseCreatableSessionType } from '@/lib/research/session-modes';
 
 import {
   ADMIN_ACTOR,
@@ -336,7 +337,12 @@ export async function createClassAction(input: {
     const label = normalizeClassLabel(input.label);
     if (!label) throw new AdminInputError('반 이름을 적어 주세요.');
 
-    const sessionType = toSessionType(input.sessionType);
+    // 연구 세션은 연습 모드만 연다(논문 v12). 사전·사후 검사가 열리는 연구 검사 반과
+    // 모르는 값은 체험으로 바꾸지 않고 거절한다.
+    const sessionType = parseCreatableSessionType(input.sessionType);
+    if (sessionType === null) {
+      throw new AdminInputError('만들 수 없는 반 성격입니다. 일반 수업 또는 연구 수업을 골라 주세요.');
+    }
     if (sessionType !== 'experience') {
       // 연구 성격의 반은 연구 시작 조건이 모두 갖춰졌을 때만 만든다.
       const readiness = registry.readiness();

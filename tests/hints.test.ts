@@ -184,19 +184,25 @@ test('withoutAreas는 그 영역의 질문만 뺀다', () => {
 
 test('예전 초안 문구는 학생 번들 파일(practice-hints.ts)에 남지 않는다', () => {
   const src = readFileSync(path.join(process.cwd(), 'src', 'lib', 'practice-hints.ts'), 'utf8');
-  const legacyFragments = [
-    '살펴봐요',
-    '그림 속 물건이 무엇이고 몇 개인지 써 봐요',
-    '위쪽에 붙은 작은 부분',
-    '가운데를 꿰맨 줄',
-    '분위기를 쓴다면 무엇을 보고 그렇게 느꼈는지도 써요.',
-    '하늘 색을 보고',
-    '창으로 들어오는 빛',
-  ];
-  for (const f of legacyFragments) assert.equal(src.includes(f), false, `practice-hints.ts에 예전 문구 "${f}"가 남아 있다`);
-  // 예전 초안은 검수표 스크립트에만 참고용으로 남는다.
+  assert.equal(src.includes('살펴봐요'), false, 'practice-hints.ts에 예전 초안의 "살펴봐요"가 남아 있다');
+
+  // 예전 초안 36개는 검수표 스크립트에만 참고용으로 남는다. 그 문장이 하나도 학생 번들 파일에 없어야 한다.
   const script = readFileSync(path.join(process.cwd(), 'scripts', 'print-practice-hints.mjs'), 'utf8');
-  assert.ok(script.includes('위쪽에 붙은 작은 부분도 살펴봐요'), '검수표 스크립트에 예전 초안이 없다');
+  const mood = /const LEGACY_MOOD = '([^']+)';/.exec(script)?.[1];
+  assert.ok(mood, '검수표 스크립트에 LEGACY_MOOD가 없다');
+  const block = /const LEGACY_DRAFTS = \{\n([\s\S]*?)\n\};/.exec(script)?.[1];
+  assert.ok(block, '검수표 스크립트에 LEGACY_DRAFTS가 없다');
+  const drafts = [...block.matchAll(/^\s*(L\d{2}): [`'](.+)[`'],$/gm)].map(([, id, body]) => ({
+    id,
+    text: body.replace('${LEGACY_MOOD}', mood),
+  }));
+  assert.deepEqual(drafts.map((d) => d.id), IDS, '검수표 스크립트의 예전 초안이 36개가 아니다');
+  for (const d of drafts) {
+    for (const sentence of d.text.split(/(?<=\.)\s+/)) {
+      assert.equal(src.includes(sentence), false, `practice-hints.ts에 ${d.id} 예전 문장이 남아 있다: ${sentence}`);
+    }
+  }
+  assert.ok(drafts[0].text.includes('살펴봐요'));
 });
 
 test('검수표 문서가 원본 힌트와 어긋나지 않는다', () => {

@@ -11,15 +11,27 @@
  */
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { modeForPath } from '@/server/lessons/mode-policy';
+import { isLectureBlockedFor, isLecturePath, modeForPath } from '@/server/lessons/mode-policy';
 import { isModeAllowed } from '@/lib/research/session-modes';
 import { SESSION_HINT_COOKIE, parseSessionHint } from '@/server/lessons/session-cookie';
 
 export function middleware(request: NextRequest) {
+  const hint = parseSessionHint(request.cookies.get(SESSION_HINT_COOKIE)?.value);
+
+  // 연수 체험판은 세션 없이 들어오는 경로라 힌트가 없으면 통과시킨다.
+  // 연구 세션 힌트가 있으면 막는다(연구 참가 학생이 연구 밖에서 AI 채점 연습을 받지 않게).
+  // 연수 server action도 같은 판정을 다시 한다.
+  if (isLecturePath(request.nextUrl.pathname)) {
+    if (!isLectureBlockedFor(hint?.sessionType)) return NextResponse.next();
+    const url = request.nextUrl.clone();
+    url.pathname = '/';
+    url.search = '';
+    url.searchParams.set('blocked', 'lecture');
+    return NextResponse.redirect(url);
+  }
+
   const mode = modeForPath(request.nextUrl.pathname);
   if (!mode) return NextResponse.next();
-
-  const hint = parseSessionHint(request.cookies.get(SESSION_HINT_COOKIE)?.value);
 
   // 힌트가 없으면 어떤 세션인지 확인할 수 없다. 확인 실패를 허용으로 바꾸지 않는다.
   // 입장하면 /api/auth/session이 힌트를 심으므로, 여기서 막히는 것은 아직 입장하지 않은 요청뿐이다.
@@ -49,5 +61,12 @@ export const config = {
     '/guide/:path*',
     '/api/audit/:path*',
     '/api/generate/:path*',
+    // 검사 학생용 API(연구자 내려받기 /api/assessment/export는 넣지 않는다).
+    '/api/assessment/state/:path*',
+    '/api/assessment/start/:path*',
+    '/api/assessment/submit/:path*',
+    '/api/assessment/failure/:path*',
+    // 연수 체험판. 힌트가 없으면 통과하고 연구 세션 힌트만 막는다(위 isLecturePath 분기).
+    '/lecture/:path*',
   ],
 };
