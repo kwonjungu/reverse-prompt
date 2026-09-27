@@ -45,7 +45,15 @@ import { evaluateResearchCollection } from '../src/server/auth/access';
 import { isResearchConsentActive } from '../src/lib/research/types';
 
 const ROOT = process.cwd();
-const readSource = (relative: string) => readFileSync(path.join(ROOT, relative), 'utf8');
+/** 줄바꿈을 \n으로 맞춘다(윈도우에서 CRLF로 체크아웃해도 '\n}\n' 같은 찾기가 같게 동작하도록, 99-1 C2). */
+const normalizeNewlines = (text: string) => text.replace(/\r\n?/g, '\n');
+const readSource = (relative: string) => normalizeNewlines(readFileSync(path.join(ROOT, relative), 'utf8'));
+
+/** 함수 머리부터 그 함수를 닫는 줄('\n}\n')까지. 줄바꿈을 정규화한 소스에서 찾는다. */
+function functionBody(src: string, head: string): string {
+  const start = src.indexOf(head);
+  return src.slice(start, src.indexOf('\n}\n', start));
+}
 
 const PEPPER = 'test-pepper';
 const VERSION = 'consent-2026-1';
@@ -372,8 +380,7 @@ test('목록 한 줄에는 참가코드·해시·이름·번호가 없다', () =
 test('참가자 배선: 목록은 해시를 돌려주지 않고, 기록에 참가코드를 남기지 않는다', () => {
   const src = readSource('src/server/admin/participant-actions.ts');
   // 목록을 만드는 부분은 codeHash를 읽지 않는다.
-  const rowsStart = src.indexOf('async function readRows(');
-  const rowsBody = src.slice(rowsStart, src.indexOf('\n}\n', rowsStart));
+  const rowsBody = functionBody(src, 'async function readRows(');
   assert.equal(/codeHash/.test(rowsBody), false);
   // 조작 기록에는 참가코드·해시가 없다.
   for (const m of src.matchAll(/recordAdminEvent\(([\s\S]*?)\);/g)) {
@@ -406,3 +413,14 @@ test('참가자 server action은 모두 관리자 세션을 먼저 확인하고 
     assert.match(body, /return run\(async \(\) => \{\s*await requireAdmin\(\);/, `${file}의 ${name}`);
   }
 });
+
+test('99-1 C2: CRLF로 체크아웃한 소스에서도 함수 몸통 찾기가 같다', () => {
+  const src = readSource('src/server/admin/participant-actions.ts');
+  const crlf = src.replace(/\n/g, '\r\n');
+  const body = functionBody(src, 'async function readRows(');
+  assert.ok(body.length > 50 && !body.includes('codeHash'));
+  assert.equal(functionBody(normalizeNewlines(crlf), 'async function readRows('), body);
+  // 정규화하지 않으면 닫는 줄('\n}\n')이 없어 함수 끝을 못 찾는다 — 정규화가 필요한 까닭
+  assert.equal(crlf.indexOf('\n}\n'), -1);
+});
+

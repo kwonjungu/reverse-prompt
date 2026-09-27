@@ -15,7 +15,9 @@ import { test } from 'node:test';
 import { PRACTICE_QUESTIONS } from '@/lib/questions';
 
 const ROOT = process.cwd();
-const DOC = readFileSync(path.join(ROOT, 'docs/practice-image-audit.md'), 'utf8');
+/** 줄바꿈을 \n으로 맞춘다(윈도우 CRLF 체크아웃에서도 문서 구간 찾기가 같게, 99-1 C2). */
+const normalizeNewlines = (text: string) => text.replace(/\r\n?/g, '\n');
+const DOC = normalizeNewlines(readFileSync(path.join(ROOT, 'docs/practice-image-audit.md'), 'utf8'));
 const REMADE_IDS = ['L03', 'L08', 'L12', 'L15', 'L17', 'L25', 'L27', 'L28', 'L30', 'L31', 'L33', 'L36'];
 const idOf = (level: number) => `L${String(level).padStart(2, '0')}`;
 
@@ -33,8 +35,8 @@ async function sourcePrompts() {
   return import('@/server/registry/practice-source-prompts');
 }
 
-function docBlock(label: string): string {
-  const m = new RegExp(`\\*\\*${label}\\*\\*[^\\n]*\\n\`\`\`\\n([\\s\\S]*?)\\n\`\`\``).exec(DOC);
+function docBlock(label: string, doc: string = DOC): string {
+  const m = new RegExp(`\\*\\*${label}\\*\\*[^\\n]*\\n\`\`\`\\n([\\s\\S]*?)\\n\`\`\``).exec(doc);
   assert.ok(m, `문서에 ${label} 프롬프트가 없다`);
   return m[1].trim();
 }
@@ -102,3 +104,9 @@ test('교체표의 새 제목이 문항 제목과 같다', () => {
     assert.equal(title, named, id);
   }
 });
+
+test('99-1 C2: CRLF로 체크아웃한 문서에서도 프롬프트 구간을 똑같이 찾는다', () => {
+  const crlf = DOC.replace(/\n/g, '\r\n');
+  for (const id of REMADE_IDS) assert.equal(docBlock(id, normalizeNewlines(crlf)), docBlock(id), id);
+});
+

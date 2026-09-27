@@ -1,9 +1,9 @@
 /**
- * 논문 v12-2 운영 규칙(K01–K07)과 피드백 규칙의 경계 사례 시험.
+ * 논문 v12-2 운영 규칙(K01–K06)과 피드백 규칙의 경계 사례 시험.
  *
  * 규칙 대부분은 의미 판정이라 코드가 모델 대신 판정할 수 없다. 그래서 두 가지를 본다.
  *   1. 지시문: 모든 밴드의 실제 전송 지시문에 규칙 문장이 그대로 들어간다(K01·K02·K03·K05·K06·맞춤법).
- *      K07(정보가 1~2개인 과제의 정보별 판정)은 채점자 기록 규칙이라 지시문에 없다.
+ *      K07은 논문 v12-2에서 삭제된 규칙이다. 지시문에 넣지 않는다(아래 부재 확인 시험은 그대로 둔다).
  *   2. 코드: 구조로 지킬 수 있는 부분은 코드가 막는다.
  *      - K02  단서 팩이 요구하지 않는 정보(예: 시간대·분위기)는 다음 행동으로 요구하지 못한다(next_target_unverified)
  *      - K05  증거 부족(evidence_missing)은 목록으로 따로 남고 수준 값에 섞이지 않는다
@@ -15,6 +15,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 
 import { OPERATING_RULES, renderForModel } from '../src/lib/rubric';
 import { buildEvaluationPrompt, buildFeedbackPrompt } from '../src/lib/evaluation-prompt';
@@ -57,7 +58,7 @@ test('K01·K02·K03·K05·K06·맞춤법·관계 범위가 모든 밴드의 실�
   assert.equal(OPERATING_RULES.length, 8);
 });
 
-test('K07(정보별 판정)은 지시문에 없고, 모델은 모든 과제에 영역별 수준을 준다', () => {
+test('K07(논문 v12-2에서 삭제된 규칙)은 지시문에 없고, 모델은 모든 과제에 영역별 수준을 준다', () => {
   for (const band of BANDS) {
     const prompt = buildEvaluationPrompt({ band, studentPrompt: '학생 글', cues: null, noCuePolicy: 'common_only' });
     for (const word of ['정확히 표현함', '부정확하게 표현함', '표현하지 않음', 'K07', '정보별 판정']) {
@@ -219,4 +220,15 @@ test('피드백 지시문도 쉬운 말·짧은 문장·한 가지를 요구한�
   });
   assert.match(p, /쉬운 말로 짧게 쓴다/);
   assert.match(p, /다음 행동은 한 가지만 말한다/);
+});
+
+test('99-1 C1: K07은 삭제된 규칙으로만 적고, 머리말은 K01–K06이다', () => {
+  const rubric = readFileSync('src/lib/rubric.ts', 'utf8');
+  assert.match(rubric, /K07은 논문 v12-2에서 삭제된 규칙이다\. 지시문에 넣지 않는다\./);
+  assert.doesNotMatch(rubric, /K07\(필수 정보가 1~2개인/);
+  const doc = readFileSync('CLAUDE.md', 'utf8');
+  assert.match(doc, /K07은 논문 v12-2에서 삭제된 규칙이다\. 지시문에 넣지 않는다/);
+  assert.doesNotMatch(doc, /채점자 기록 규칙이라/);
+  const self = readFileSync('tests/k-rules.test.ts', 'utf8');
+  assert.match(self.split('\n')[1], /K01–K06/);
 });
