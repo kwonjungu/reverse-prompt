@@ -122,6 +122,15 @@ export function cueTargetsOf(cues: QuestionCues | null): Record<AreaId, string[]
   };
 }
 
+/**
+ * 정답 누설 검사에 쓰는 단서 팩 값: 핵심 대상 이름(개수 포함)과 필수 속성(논문 v12-2 99-1 A1).
+ * 3·4문장이 학생 글에 없는 이 값을 말하면 피드백을 다시 만든다. 단서 팩이 없으면 null(검사하지 않음).
+ */
+export function answerValuesOf(cues: QuestionCues | null): string[] | null {
+  if (!cues) return null;
+  return [...(cues.coreObjects ?? []), ...(cues.requiredAttributes ?? [])];
+}
+
 /** 판정은 그대로 두고, 빠진 정보 목록만 단서 팩으로 확인되는 항목으로 줄인 사본. 단서 팩이 없으면 원본. */
 function withVerifiedMissing(areas: AreaJudgments, cueTargets: Record<AreaId, string[]> | null): AreaJudgments {
   if (!cueTargets) return areas;
@@ -378,6 +387,7 @@ export function createGrading(deps: GradingDeps): GradingApi {
           },
           requiredNextArea,
           cueTargets,
+          answerValues: answerValuesOf(cues),
         },
         generate: async (attempt): Promise<FeedbackDraft | null> => {
           if (attempt === 0) return extractFeedbackDraft(success.raw);

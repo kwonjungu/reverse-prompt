@@ -181,8 +181,9 @@ function validOutput(over: Record<string, unknown> = {}) {
 const GOOD_FEEDBACK = {
   feedbackLine1: '이 그림을 못 본 친구가 똑같이 떠올릴 수 있게 쓰는 것이 이번 목표예요.',
   feedbackLine2: '관계 영역에서 공원에서 걷고 있다라고 어디에서 무엇을 하는지 썼어요.',
-  feedbackLine3: '장화의 색도 써 보세요.',
-  feedbackLine4: '장화가 무슨 색인지 그림을 다시 볼까요?',
+  // 빠진 값(장화)을 말하지 않고 무엇을 다시 볼지만 안내한다(99-1 A1 — 학생 글에 없는 단서 값은 누설).
+  feedbackLine3: '아이의 신발을 그림에서 다시 살펴보세요.',
+  feedbackLine4: '신발이 어떤 색인지 그림을 다시 볼까요?',
   quote: '공원에서 걷고 있다',
   strengthArea: 'relation',
   nextArea: 'feature',
@@ -575,7 +576,7 @@ test('다음 행동 영역은 코드가 정한다 — 가장 낮은 영역이 �
 });
 
 test('피드백이 탈락하면 피드백만 1회 다시 만든다(purpose=feedback) — 판정은 바뀌지 않는다', async () => {
-  const badFeedback = { ...GOOD_FEEDBACK, feedbackLine4: '장화를 볼까요? 다시 써 봐요.' };
+  const badFeedback = { ...GOOD_FEEDBACK, feedbackLine4: '신발을 볼까요? 다시 써 봐요.' };
   // 재생성 호출이 영역 판정을 섞어 보내도 무시한다.
   const regenerated = { ...GOOD_FEEDBACK, object: area(1, null, ['아이']) };
   const h = harness({ script: [ok({ ...validOutput(), ...badFeedback }, 'served-score'), ok(regenerated, 'served-fb')] });
@@ -696,7 +697,7 @@ test('피드백 호출의 출력이 형식에 맞지 않으면 schema_error로 �
 
 test('피드백 문구에 자격정보가 섞이면 판정은 그대로 두고 문구만 고정 안내로 바꾼다', async () => {
   const leaked = 'AIzaSyA1234567890abcdefghijklmnopqrstuvw';
-  const fb = { ...GOOD_FEEDBACK, feedbackLine4: `장화 색을 확인해 볼까요 ${leaked}` };
+  const fb = { ...GOOD_FEEDBACK, feedbackLine4: `신발 색을 확인해 볼까요 ${leaked}` };
   const h = harness({ script: [ok({ ...validOutput(), ...fb })], assertNoSecrets: realPrivacy.assertNoSecrets });
   const r = await run(h, { wantFeedback: true });
   const res = scored(r);
@@ -728,4 +729,33 @@ test('온도 설정이 쓸 수 없는 값이면 기본값 0.2로 되돌린다', 
   assert.equal(resolveModelConfig({ temperature: -1 }).temperature, 0.2);
   assert.equal(resolveModelConfig({ temperature: 3 }).temperature, 0.2);
   assert.equal(resolveModelConfig({}).temperature, 0.2);
+});
+
+test('99-1 A1: 3·4문장이 학생 글에 없는 단서 값(장화)을 말하면 피드백만 다시 만들고, 그래도면 3·4문장만 중립 문장', async () => {
+  const leaky = { ...GOOD_FEEDBACK, feedbackLine3: '장화의 색도 써 보세요.', feedbackLine4: '장화가 무슨 색인지 그림을 다시 볼까요?' };
+  const h = harness({ script: [ok({ ...validOutput(), ...leaky }), ok(leaky, 'served-fb')] });
+  const r = await run(h, { wantFeedback: true });
+  assert.equal(h.inputs.length, 2, '피드백만 1회 다시 만든다');
+  assert.equal(h.inputs[1].purpose, 'feedback');
+  assert.ok(h.inputs[1].prompt.includes('그 값(이름·색·개수·장소)을 3·4문장에 그대로 쓰지 않는다'));
+  const res = scored(r);
+  assert.equal(res.feedbackStatus, 'neutralized');
+  assert.equal(res.areas.feature.level, 2, '판정은 그대로');
+  assert.deepEqual(r.feedback?.rejections, ['answer_leak', 'answer_leak']);
+  const lines = (r.feedback?.text ?? '').split('\n');
+  assert.equal(lines.length, 4);
+  assert.ok(lines[1].startsWith('[관계] '), '1·2문장은 모델 문장 그대로');
+  assert.equal(lines[2], '[특징] 그림과 내 글을 다시 견주어 보세요.');
+  assert.ok(!r.feedback?.text.includes('장화'));
+});
+
+test('99-1 A1: 단서 팩 없이 채점하는 일반 체험(공통 문언만)은 누설 검사를 하지 않는다', async () => {
+  const leaky = { ...GOOD_FEEDBACK, feedbackLine3: '장화의 색도 써 보세요.', feedbackLine4: '장화가 무슨 색인지 그림을 다시 볼까요?' };
+  const h = harness({
+    script: [ok({ ...validOutput({ feature: area(2, '노란 우산', ['장화의 색']) }), ...leaky })],
+    entry: practiceEntry({ cuesLoaded: false }),
+  });
+  const r = await run(h, { wantFeedback: true, sessionType: 'experience' });
+  assert.equal(h.inputs.length, 1);
+  assert.equal(r.feedback?.status, 'verified');
 });

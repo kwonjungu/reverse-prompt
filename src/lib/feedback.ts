@@ -3,9 +3,9 @@
  *
  * 네 문장, 한 줄에 한 문장.
  *   1문장 이번 목표(단계 초점)
- *   2문장 잘 쓴 점 — 어느 영역인지 밝히고 학생 글의 표현을 그대로 넣는다
- *   3문장 다음 행동 한 가지 — 가장 낮은 영역(같으면 단계 초점 영역)에서 하나만
- *   4문장 쓸 수 있는 표현 제안 또는 스스로 확인할 질문
+ *   2문장 잘 쓴 점 — 어느 영역인지 밝히고 학생 글의 표현을 그대로 넣는다(개수·수량 표현은 대상 영역, K01)
+ *   3문장 다음 행동 한 가지 — 가장 낮은 영역(같으면 단계 초점 영역)에서 하나만. 빠진 값은 말하지 않고 무엇을 다시 볼지만
+ *   4문장 스스로 확인할 질문. 학생 대신 고쳐 쓴 문장이나 넣을 낱말을 주지 않는다
  * 네 문장과 제안 수는 아동의 처리 부담을 고려한 설계 선택이며 효과가 검증된 최적값이 아니다.
  *
  * 코드가 확인하는 것(형식)
@@ -17,8 +17,13 @@
  *     같아야 한다 — 모델이 missing에 지어낸 정보를 3문장이 요구하지 못하게 한다.
  *     단서 팩이 없으면(일반 체험) 모델이 낸 missing 목록 안인지만 본다(구조 점검).
  *   - 칭찬·비교·점수 언급이 없다. 2문장의 학생 인용 부분은 학생 글이므로 이 점검과 문장 수 세기에서 뺀다.
+ *   - 2문장이 특징 영역이라며 수량 표현만 인용했으면 대상 영역으로 고친다(K01, 탈락시키지 않는다).
+ *   - 정답 누설: 단서 팩이 있으면 3·4문장에 단서 팩의 핵심 대상 이름·필수 속성 값(개수 포함)이 들어 있는지 본다.
+ *     학생 글에 이미 있는 값은 누설로 보지 않는다(학생이 쓴 '공'을 다시 부르는 것은 정답을 알려 주는 것이 아니다).
+ *     걸리면 피드백만 1회 다시 만들고, 그래도 걸리면 3·4문장만 고정 중립 문장으로 바꾼다(status='neutralized').
+ *     단서 팩이 없는 문항은 이 검사를 건너뛴다. 낱말 대조라 바꿔 말한 값(예: '노랑'과 '노란색')은 놓칠 수 있다.
  * 코드가 확인하지 않는 것
- *   - 문장의 뜻. 3문장이 nextTarget을 실제로 요구하는지, 4문장(표현 제안·확인 질문)이 그림에 있는
+ *   - 문장의 뜻. 3문장이 nextTarget을 실제로 요구하는지, 4문장(확인 질문)이 그림에 있는
  *     정보만 다루는지는 검사하지 않는다. 지시문으로만 요구한다.
  * 다시 만들어도 통과하지 못하면 고정 안내를 쓰고 status='fallback'으로 남긴다. 점수는 그대로다.
  * 형식 검사를 통과한 것이 그림 부합이나 내용 정확성을 뜻하지 않는다.
@@ -45,6 +50,13 @@ export const FEEDBACK_FALLBACK_TEXT = '표현을 선생님과 함께 확인해 �
  * 그림과 견주어 보게 한다. 모델이 만든 문장이 아니라 화면이 붙이는 문장이다.
  */
 export const FEEDBACK_CAUTION = '피드백이 틀릴 수 있어요. 그림과 견주어 보고, 이상하면 선생님께 물어봐요.';
+
+/**
+ * 3·4문장이 정답 값을 알려 줘 다시 만들어도 그대로일 때 3·4문장 대신 쓰는 고정 중립 문장(논문 v12-2 99-1 A1).
+ * 3문장 앞에는 다른 경우처럼 코드가 영역 이름을 붙인다.
+ */
+export const NEUTRAL_LINE3 = '그림과 내 글을 다시 견주어 보세요.';
+export const NEUTRAL_LINE4 = '내 글만 읽고도 그림을 똑같이 떠올릴 수 있을까요?';
 
 /** 화면에 보여 줄 문장 수. 한 줄에 한 문장이다. */
 export const FEEDBACK_LINE_COUNT = 4;
@@ -77,6 +89,11 @@ export interface FeedbackContext {
    * 단서 팩이 없으면(일반 체험) null — missing 목록 안인지만 본다. 서버 안에서만 쓰고 화면에 보내지 않는다.
    */
   cueTargets?: Record<AreaId, string[]> | null;
+  /**
+   * 정답 누설 검사에 쓰는 단서 팩 값(핵심 대상 이름·필수 속성). 3·4문장에 이 값이 학생 글에 없는데 들어 있으면
+   * 누설이다. 단서 팩이 없으면 null — 검사를 건너뛴다. 서버 안에서만 쓰고 화면에 보내지 않는다.
+   */
+  answerValues?: readonly string[] | null;
 }
 
 export type FeedbackRejectReason =
@@ -91,18 +108,29 @@ export type FeedbackRejectReason =
   | 'strength_area'
   | 'next_area'
   | 'next_target'
-  | 'next_target_unverified';
+  | 'next_target_unverified'
+  | 'answer_leak';
+
+interface ValidFeedback {
+  ok: true;
+  text: string;
+  quote: string | null;
+  strengthArea: AreaId | null;
+  nextArea: AreaId | null;
+  nextTarget: string | null;
+}
 
 export type FeedbackValidation =
+  | ValidFeedback
   | {
-      ok: true;
-      text: string;
-      quote: string | null;
-      strengthArea: AreaId | null;
-      nextArea: AreaId | null;
-      nextTarget: string | null;
+      ok: false;
+      reason: 'answer_leak';
+      /** 누설한 값(학생 글에 없는 단서 팩 값). 기록에는 남기지 않는다(단서 본문이다). */
+      leaked: string[];
+      /** 3·4문장만 중립 문장으로 바꾼 결과. 다시 만들어도 누설이면 이것을 쓴다. */
+      neutralized: ValidFeedback;
     }
-  | { ok: false; reason: FeedbackRejectReason };
+  | { ok: false; reason: Exclude<FeedbackRejectReason, 'answer_leak'> };
 
 /** 줄머리 기호·영역 표시·여분 공백을 정리한다. 문장 내용은 바꾸지 않는다. */
 function normalizeLine(line: string): string {
@@ -185,6 +213,118 @@ function maskQuoteInLine(line: string, quote: string): string | null {
   return line.slice(0, m.index) + QUOTE_MASK + line.slice(m.index + m[0].length);
 }
 
+/* ─────────────── 수량 표현(K01)과 정답 누설 — 낱말 대조 ─────────────── */
+
+const NUMERAL_WORDS: Record<string, number> = {
+  하나: 1, 한: 1, 둘: 2, 두: 2, 셋: 3, 세: 3, 넷: 4, 네: 4,
+  다섯: 5, 여섯: 6, 일곱: 7, 여덟: 8, 아홉: 9, 열: 10,
+};
+/** 수 낱말. 긴 것부터 둔다(하나가 한보다 먼저). */
+const NUMERAL = '(?:\\d+|하나|다섯|여섯|일곱|여덟|아홉|한|둘|두|셋|세|넷|네|열|여러|몇)';
+/** 개수를 세는 단위. '가지'는 넣지 않는다('한 가지'는 피드백의 일반 말이다). */
+const COUNTER = '(?:개|마리|명|그루|송이|장|권|대|쌍|켤레|채|척|알|조각|자루|병|잔|벌)';
+const HANGUL_OR_ALNUM = '[가-힣A-Za-z0-9]';
+
+/**
+ * 인용이 수량 표현뿐인가(예: '하나', '세 개', '두 마리가'). 끝의 조사·서술어는 떼고 본다.
+ * 수량은 대상 영역이다(K01) — 2문장이 특징 영역이라며 이것만 인용하면 대상 영역으로 고친다.
+ */
+export function isQuantityOnly(quote: string): boolean {
+  let q = quote.replace(/[\s.,!?。…~"'“”‘’]/g, '');
+  for (let i = 0; i < 2; i++) q = q.replace(/(?:이라고|라고|입니다|이에요|예요|이다|이야|뿐|만|이|가|을|를|은|는|도|의)$/, '');
+  return q.length > 0 && new RegExp(`^(?:${NUMERAL}${COUNTER}?)+$`).test(q);
+}
+
+/**
+ * 누설 검사에서 값으로 보지 않는 일반 낱말. 무엇을 다시 볼지 가리키는 말(색·모양·무늬·크기·위치 등)과
+ * 대상의 부류를 말하는 말(물건·동물·사람·아이)이다. 지시문의 모범 문장('공의 색과 무늬를 그림에서
+ * 다시 살펴보세요', '그림 속 물건의 이름이 맞는지 확인해 보세요')이 걸리지 않게 한다.
+ */
+const GENERIC_TERMS = new Set([
+  '색', '색깔', '빛깔', '빛', '모양', '무늬', '크기', '개수', '수', '수량', '길이', '높이', '굵기', '두께',
+  '질감', '겉모습', '겉', '표면', '위치', '방향', '자세', '상태', '부분', '전체', '그림', '것', '곳', '장소',
+  '모습', '배경', '이름', '있음', '있다', '있는', '없음', '함께', '각각', '모두', '가운데', '위', '아래', '옆',
+  '안', '밖', '앞', '뒤', '왼쪽', '오른쪽', '사이', '주변', '근처', '물건', '사물', '대상', '동물', '사람', '아이',
+]);
+
+/**
+ * 단서 값의 낱말 끝 조사를 뗀다. 명사가 조사 글자로 끝나는 경우(고양이·사과)를 깨지 않도록
+ * '이·가'는 떼지 않고, 한 글자 조사는 남는 말이 두 글자 이상일 때만 뗀다.
+ */
+function stripTermParticle(token: string): string {
+  const multi = /(?:에서|으로|처럼|하고|이랑|까지|부터)$/;
+  if (multi.test(token) && token.replace(multi, '').length >= 1) return token.replace(multi, '');
+  const single = /[과와을를은는의도에로만]$/;
+  if (single.test(token) && [...token].length >= 3) return token.slice(0, -1);
+  return token;
+}
+
+const escapeTerm = (term: string) => [...term].map(escapeRe).join('\\s*');
+
+/** 한 글자 낱말 뒤에 와도 되는 말(조사·서술어). '새로', '공원'처럼 붙어 다른 낱말이 된 것은 세지 않는다. */
+const SINGLE_FOLLOW = '(?:이|가|을|를|은|는|의|와|과|도|만|랑|인지|인가|이다|이에요|예요|이야|일까|이라고|라고|처럼|하고|에서)';
+
+function termInLine(line: string, term: string): boolean {
+  const start = `(?:^|[^가-힣A-Za-z0-9])`;
+  const body = escapeTerm(term);
+  const re = [...term].length === 1
+    ? new RegExp(`${start}${body}(?=$|[^가-힣A-Za-z0-9]|${SINGLE_FOLLOW}(?:$|[^가-힣A-Za-z0-9]))`)
+    : new RegExp(`${start}${body}`);
+  return re.test(line);
+}
+
+/** 글에 나온 개수(숫자 + 단위). 단서 값은 '하나·둘'처럼 단위 없이 쓴 수도 센다. */
+function countsIn(text: string, allowBare: boolean): Set<number> {
+  const out = new Set<number>();
+  const re = new RegExp(`(?:^|[^가-힣A-Za-z0-9])(${NUMERAL})\\s*(${COUNTER})?`, 'g');
+  for (const m of text.matchAll(re)) {
+    const word = m[1];
+    if (!m[2] && !(allowBare && /^(?:\d+|하나|둘|셋|넷|다섯|여섯|일곱|여덟|아홉|열)$/.test(word))) continue;
+    const n = /^\d+$/.test(word) ? Number(word) : NUMERAL_WORDS[word];
+    if (typeof n === 'number' && Number.isFinite(n)) out.add(n);
+  }
+  return out;
+}
+
+/** 단서 값에서 누설 검사에 쓸 낱말과 개수를 뽑는다. */
+export function answerTermsOf(values: readonly string[]): { terms: string[]; counts: number[] } {
+  const terms = new Set<string>();
+  const counts = new Set<number>();
+  const countOnly = new RegExp(`^(?:${NUMERAL}${COUNTER}?|${COUNTER})$`);
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    for (const n of countsIn(value, true)) counts.add(n);
+    for (const raw of value.split(/[\s,·/()[\]{}:;'"“”‘’.!?~\-]+/)) {
+      const token = stripTermParticle(raw.trim());
+      if (!token || !new RegExp(HANGUL_OR_ALNUM).test(token)) continue;
+      if (countOnly.test(token) || GENERIC_TERMS.has(token)) continue;
+      terms.add(token);
+    }
+  }
+  return { terms: [...terms], counts: [...counts] };
+}
+
+/**
+ * 3·4문장이 알려 준 정답 값. 단서 팩 값의 낱말·개수 가운데 학생 글에 없는데 문장에 있는 것이다.
+ * 학생 글에 이미 있는 값을 다시 부르는 것은 누설이 아니다. 낱말 대조이므로 바꿔 말한 값은 놓칠 수 있다.
+ */
+export function findAnswerLeaks(lines: readonly string[], studentText: string, values: readonly string[]): string[] {
+  const { terms, counts } = answerTermsOf(values);
+  const student = studentText.replace(/\s+/g, '');
+  const studentCounts = countsIn(studentText, true);
+  const leaked = new Set<string>();
+  for (const line of lines) {
+    for (const term of terms) {
+      if (student.includes(term.replace(/\s+/g, ''))) continue;
+      if (termInLine(line, term)) leaked.add(term);
+    }
+    for (const n of countsIn(line, false)) {
+      if (counts.includes(n) && !studentCounts.has(n)) leaked.add(`${n}개`);
+    }
+  }
+  return [...leaked];
+}
+
 /** 판정한 영역(해당 없음이 아닌 영역)인가 */
 function isJudged(levels: AreaLevels, area: AreaId): boolean {
   return levels[area] !== NOT_APPLICABLE;
@@ -209,7 +349,13 @@ export function validateFeedback(draft: FeedbackDraft, ctx: FeedbackContext): Fe
   if (checked.some(hasForbiddenExpression)) return { ok: false, reason: 'forbidden_expression' };
 
   // 2문장 — 영역과 인용
-  const strengthArea = draft.strengthArea;
+  // 수량 표현만 인용하고 특징 영역이라고 한 경우는 대상 영역으로 고친다(K01). 탈락시키지 않는다.
+  let strengthArea = draft.strengthArea;
+  let line2 = lines[1];
+  if (strengthArea === 'feature' && quote !== null && isQuantityOnly(quote)) {
+    strengthArea = 'object';
+    line2 = line2.replace(/특징\s*영역/g, '대상 영역');
+  }
   if (strengthArea !== null && (!isAreaId(strengthArea) || !isJudged(ctx.levels, strengthArea))) {
     return { ok: false, reason: 'strength_area' };
   }
@@ -248,13 +394,35 @@ export function validateFeedback(draft: FeedbackDraft, ctx: FeedbackContext): Fe
     return { ok: false, reason: 'next_target' };
   }
 
-  const text = [
-    lines[0],
-    strengthArea ? `[${AREA_LABEL[strengthArea]}] ${lines[1]}` : lines[1],
-    ctx.requiredNextArea ? `[${AREA_LABEL[ctx.requiredNextArea]}] ${lines[2]}` : lines[2],
-    lines[3],
-  ].join('\n');
-  return { ok: true, text, quote, strengthArea, nextArea: ctx.requiredNextArea, nextTarget };
+  const compose = (line3: string, line4: string) =>
+    [
+      lines[0],
+      strengthArea ? `[${AREA_LABEL[strengthArea]}] ${line2}` : line2,
+      ctx.requiredNextArea ? `[${AREA_LABEL[ctx.requiredNextArea]}] ${line3}` : line3,
+      line4,
+    ].join('\n');
+  const valid: ValidFeedback = {
+    ok: true,
+    text: compose(lines[2], lines[3]),
+    quote,
+    strengthArea,
+    nextArea: ctx.requiredNextArea,
+    nextTarget,
+  };
+
+  // 정답 누설 — 단서 팩이 있을 때만 본다. 3·4문장이 학생 글에 없는 단서 값을 말하면 탈락이다.
+  if (ctx.answerValues?.length) {
+    const leaked = findAnswerLeaks([lines[2], lines[3]], ctx.studentText, ctx.answerValues);
+    if (leaked.length) {
+      return {
+        ok: false,
+        reason: 'answer_leak',
+        leaked,
+        neutralized: { ...valid, text: compose(NEUTRAL_LINE3, NEUTRAL_LINE4) },
+      };
+    }
+  }
+  return valid;
 }
 
 /** 모델 원 출력에서 피드백 초안만 뽑는다. 네 줄이 모두 비어 있으면 null. */
@@ -297,6 +465,8 @@ export function feedbackNotRequested(): FeedbackPresentation {
 /**
  * 피드백 초안을 받아 검증하고, 실패하면 피드백만 1회 다시 만든다.
  * 다시 만들어도 통과하지 못하면 고정 안내를 쓰고 status를 fallback으로 남긴다.
+ * 정답 누설만 걸린 초안이 있으면(다시 만들어도 누설이거나, 다시 만든 초안이 다른 형식 오류로 탈락) 고정 안내 대신
+ * 그 초안의 3·4문장만 중립 문장으로 바꿔 쓰고 status를 neutralized로 남긴다.
  * 점수는 이 함수의 결과와 무관하게 이미 확정된 값을 그대로 둔다.
  */
 export async function produceFeedback(params: {
@@ -305,6 +475,7 @@ export async function produceFeedback(params: {
   generate: (attempt: number) => Promise<FeedbackDraft | null>;
 }): Promise<FeedbackPresentation> {
   const rejections: string[] = [];
+  let neutral: ValidFeedback | null = null;
   for (let attempt = 0; attempt <= 1; attempt++) {
     let draft: FeedbackDraft | null = null;
     try {
@@ -330,6 +501,19 @@ export async function produceFeedback(params: {
       };
     }
     rejections.push(v.reason);
+    if (v.reason === 'answer_leak') neutral = v.neutralized;
+  }
+  if (neutral) {
+    return {
+      status: 'neutralized',
+      text: neutral.text,
+      quote: neutral.quote,
+      regenerated: true,
+      strengthArea: neutral.strengthArea,
+      nextArea: neutral.nextArea,
+      nextTarget: neutral.nextTarget,
+      rejections,
+    };
   }
   return {
     status: 'fallback',

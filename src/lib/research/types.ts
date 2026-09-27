@@ -38,7 +38,13 @@ export type AppMode = 'guide' | 'practice' | 'assessment' | 'game' | 'time-attac
 
 /* ────────────────────────── 채점 결과(공통 루브릭 v12-2) ────────────────────────── */
 
-export type FeedbackStatus = 'verified' | 'fallback' | 'not_requested';
+/**
+ * verified     형식 검사를 통과한 모델 문장(다시 만들어 통과한 것 포함)
+ * neutralized  3·4문장이 정답 값(단서 팩의 대상 이름·속성 값)을 알려 줘 다시 만들어도 그대로여서,
+ *              1·2문장은 모델 문장을 두고 3·4문장만 고정 중립 문장으로 바꾼 것
+ * fallback     다시 만들어도 형식을 지키지 못해 고정 안내 한 줄로 바꾼 것
+ */
+export type FeedbackStatus = 'verified' | 'neutralized' | 'fallback' | 'not_requested';
 
 export type MissingReasonModel = 'model_error' | 'schema_error' | 'required_call_failed';
 

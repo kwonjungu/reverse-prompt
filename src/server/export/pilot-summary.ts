@@ -44,10 +44,14 @@ export interface PilotRow {
   run: ScoringRun;
 }
 
-/** 피드백 상태를 예비 점검 보고용으로 줄인다: 통과(ok, 다시 만들어 통과한 것 포함) / 고정 안내(fallback) / 없음 */
-export function feedbackOutcome(run: ScoringRun): 'ok' | 'fallback' | 'none' {
+/**
+ * 피드백 상태를 예비 점검 보고용으로 줄인다: 통과(ok, 다시 만들어 통과한 것 포함) / 3·4문장 중립 대체(neutralized,
+ * 정답 누설) / 고정 안내(fallback) / 없음
+ */
+export function feedbackOutcome(run: ScoringRun): 'ok' | 'neutralized' | 'fallback' | 'none' {
   const status = run.feedback?.status ?? null;
   if (status === 'verified') return 'ok';
+  if (status === 'neutralized') return 'neutralized';
   if (status === 'fallback') return 'fallback';
   return 'none';
 }
@@ -93,6 +97,9 @@ export interface PilotSummary {
   /** 피드백을 만든 사례(채점된 사례) 가운데 고정 안내로 끝난 비율 */
   fallback: number;
   fallbackRate: number | null;
+  /** 정답 누설로 3·4문장을 중립 문장으로 바꾼 사례 수와 비율(피드백을 만든 사례 가운데) */
+  neutralized: number;
+  neutralizedRate: number | null;
   /** 피드백 검증에서 탈락한 사유별 수(재생성 전·후 모두) */
   rejectionReasons: Record<string, number>;
   /** 형식 오류·호출 실패로 다시 부른 사례 수 */
@@ -104,6 +111,7 @@ export function summarizePilot(rows: readonly PilotRow[]): PilotSummary {
   const rejectionReasons: Record<string, number> = {};
   let scored = 0;
   let fallback = 0;
+  let neutralized = 0;
   let withFeedback = 0;
   let retried = 0;
   for (const { run } of rows) {
@@ -112,6 +120,7 @@ export function summarizePilot(rows: readonly PilotRow[]): PilotSummary {
     const outcome = feedbackOutcome(run);
     if (outcome !== 'none') withFeedback += 1;
     if (outcome === 'fallback') fallback += 1;
+    if (outcome === 'neutralized') neutralized += 1;
     for (const r of run.feedback?.rejections ?? []) rejectionReasons[r] = (rejectionReasons[r] ?? 0) + 1;
     if (run.calls.some((c) => c.purpose !== 'feedback' && c.retryIndex > 0)) retried += 1;
   }
@@ -124,6 +133,8 @@ export function summarizePilot(rows: readonly PilotRow[]): PilotSummary {
     missingReasons,
     fallback,
     fallbackRate: withFeedback ? fallback / withFeedback : null,
+    neutralized,
+    neutralizedRate: withFeedback ? neutralized / withFeedback : null,
     rejectionReasons,
     retried,
   };
