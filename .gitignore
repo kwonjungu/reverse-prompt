@@ -58,3 +58,6 @@ research-manifest.json
 # 연구 자료 내보내기(관리 화면 CSV)와 명단은 커밋하지 않는다.
 rp_*.csv
 /exports/
+
+# 작업 도구가 만드는 임시 작업 사본(커밋하지 않는다)
+/.claude/worktrees/
