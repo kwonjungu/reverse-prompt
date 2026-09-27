@@ -40,6 +40,12 @@ export interface LessonOpenState
   extends Pick<LessonSession, 'sessionType' | 'currentLesson' | 'allowedLessons' | 'closedAt'> {
   /** 서버가 학생 세션을 검증했는가. false면 어떤 차시도 열지 않는다. */
   sessionVerified: boolean;
+  /**
+   * 학급 기록이 '교사가 연 차시만'으로 정해져 있는가(관리 화면에서 만든 반).
+   * 일반 체험 학급도 이 값이 true면 연구 세션처럼 연 차시만 들어간다.
+   * 판정을 **더 엄격하게만** 바꾼다. 연구 세션을 자율 진행으로 풀지는 못한다.
+   */
+  teacherPaced?: boolean;
 }
 
 export type LessonDenyReason =
@@ -71,6 +77,15 @@ export function isValidLessonNumber(lesson: unknown): lesson is number {
 /** 이 세션이 교사 일정 통제를 받는가. 받지 않으면 자율 진행이다. */
 export function isScheduleControlled(sessionType: SessionType): boolean {
   return SCHEDULE_CONTROLLED_SESSION_TYPES.includes(sessionType);
+}
+
+/**
+ * 이 상태가 교사 일정 통제를 받는가.
+ * 세션 성격이 통제 대상이거나, 학급 기록이 교사 진행(teacherPaced)으로 정해져 있을 때다.
+ * teacherPaced는 통제를 더할 수만 있고 뺄 수는 없다.
+ */
+export function isStateScheduleControlled(state: LessonOpenState): boolean {
+  return isScheduleControlled(state.sessionType) || state.teacherPaced === true;
 }
 
 function isClosed(state: LessonOpenState): boolean {
@@ -109,7 +124,8 @@ export function decideLessonAccess(
   // 일반 체험은 자율 진행이다. 기존 의도를 그대로 둔다.
   // 다만 위에서 sessionVerified를 먼저 확인하므로, '명시적으로 체험으로 들어온'
   // 세션에만 해당한다. 세션 없는 요청은 여기에 오지 못한다.
-  if (!isScheduleControlled(state.sessionType)) {
+  // 관리 화면에서 만든 반(teacherPaced)은 체험이어도 아래 통제 판정을 탄다.
+  if (!isStateScheduleControlled(state)) {
     return { allowed: true };
   }
 
@@ -135,7 +151,7 @@ export function decideLessonAccess(
 /** 화면의 단계 선택에 표시할 차시. 자율 진행이면 전부, 연구 세션이면 서버가 연 것만. */
 export function visibleLessons(state: LessonOpenState): number[] {
   if (!state.sessionVerified) return [];
-  if (!isScheduleControlled(state.sessionType)) {
+  if (!isStateScheduleControlled(state)) {
     return [...LESSON_NUMBERS];
   }
   if (isClosed(state)) return [];

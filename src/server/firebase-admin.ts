@@ -97,6 +97,10 @@ export const COLLECTIONS = {
   auditApprovals: 'audit_approvals',
   /** 비연구 수업 기록(기존 구조 유지) */
   classes: 'classes',
+  /** 통합 관리 화면 설정. 관리자 비밀번호는 scrypt 해시로만 둔다. */
+  adminConfig: 'admin_config',
+  /** 통합 관리 화면의 조작 기록(반 개설·차시·교사 계정). 비밀번호 원문은 남기지 않는다. */
+  adminEvents: 'admin_events',
 } as const;
 
 /** research/{schemaVersion} 아래의 연구 자료 컬렉션 이름 */
@@ -110,6 +114,10 @@ export const RESEARCH_COLLECTIONS = {
   scoringRuns: 'scoring_runs',
   scoringBatches: 'scoring_batches',
   teacherBlindScores: 'teacher_blind_scores',
+  /** 연구용 추출에서 뺀 학생 × 문항 행과 그 사유(논문 v12). 지우지 않고 해제 기록을 남긴다. */
+  extractionExclusions: 'extraction_exclusions',
+  /** 층화 무작위 추출 결과. 시드·후보·제외 목록을 함께 남겨 다시 만들 수 있게 한다. */
+  extractionSamples: 'extraction_samples',
 } as const;
 
 export type ResearchCollection =

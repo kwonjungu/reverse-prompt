@@ -42,7 +42,8 @@ export const config = {
   matcher: [
     '/game/:path*',
     '/time-attack/:path*',
-    '/admin/:path*',
+    // /admin(통합 관리 화면)은 관리자 비밀번호 세션으로 막는다. 여기서는 감수 화면만 잡는다.
+    '/admin/audit/:path*',
     '/assessment/:path*',
     '/practice/:path*',
     '/guide/:path*',

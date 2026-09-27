@@ -23,6 +23,12 @@ export async function POST(request: Request) {
     const participantCode =
       typeof body.participantCode === 'string' ? body.participantCode.trim() : null;
     const classCode = typeof body.classCode === 'string' ? body.classCode.trim() : null;
+    // 반 입장 비밀번호는 다듬지 않고 그대로 대조한다(해시 대조는 서버가 한다).
+    const entryPassword = typeof body.entryPassword === 'string' ? body.entryPassword : null;
+    const studentNumber =
+      typeof body.studentNumber === 'string' || typeof body.studentNumber === 'number'
+        ? body.studentNumber
+        : null;
 
     if (!classResearchId) {
       return NextResponse.json({ error: 'invalid_request' }, { status: 400 });
@@ -32,6 +38,8 @@ export async function POST(request: Request) {
       classResearchId,
       participantCode: participantCode || null,
       classCode: classCode || null,
+      entryPassword: entryPassword || null,
+      studentNumber,
     });
 
     // 응답 본문에는 토큰을 넣지 않는다. 다음 화면을 고르는 데 필요한 값만 준다.
@@ -40,6 +48,9 @@ export async function POST(request: Request) {
       route: issued.route,
       researchCollectionEnabled: issued.claims.researchId !== null,
       expiresAt: new Date(issued.claims.exp).toISOString(),
+      // 화면 머리 표시용. 신원이 아니다.
+      classLabel: issued.classLabel,
+      studentNumber: issued.studentNumber,
     });
     response.cookies.set(SESSION_TOKEN_COOKIE, issued.token, issued.cookieOptions);
     response.cookies.set(SESSION_HINT_COOKIE, issued.hint, {

@@ -15,6 +15,7 @@ npm run build         # 프로덕션 빌드
 npm run typecheck     # tsc --noEmit
 npm test              # node --import tsx --test "tests/**/*.test.ts" (순수 함수·모의 모델)
 npm run manifest      # 연구용 manifest 생성 (scripts/research-manifest.mjs)
+npm run hints:table   # 문항별 힌트 검수표 docs/practice-hints-review.md 다시 만들기
 npm run genkit:dev    # Genkit 플로우 격리 실행 (선택)
 ```
 
@@ -57,11 +58,12 @@ Firebase Emulator 권한 시험(`tests/rules/`)은 에뮬레이터가 없으면 
 | `EVALUATION_MODEL_VERIFIED` | 운영자가 모델 접근·출력 스키마를 확인함 | `true`가 아니면 연구 시작 차단 |
 | `RESEARCH_ASSET_DIR` | 비공개 연구 자산 경로 | 검사 이미지 + `cue-pack.json` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | 서버 Admin SDK 자격 | 없으면 서버 인증이 우회 없이 실패 |
-| `STUDENT_SESSION_SECRET` | 학생 세션 토큰 서명 키 | |
+| `STUDENT_SESSION_SECRET` | 학생·관리자 세션 토큰 서명 키 | **선택.** 비우면 `FIREBASE_SERVICE_ACCOUNT_JSON`의 비공개 키에서 만든다. 서비스 계정 키를 바꾸면 세션이 끊긴다 |
 | `PARTICIPANT_CODE_PEPPER` | 참가자 코드 pepper | |
 | `CONSENT_VERSION` | 유효한 동의서 버전 | 비면 연구 동의 불가 |
 | `IRB_APPROVAL` | IRB 승인 번호 | 비면 연구 시작 차단 |
 | `LECTURE_CODE` | 연수 모드 입장 번호 | 비우면 `1111`. 인증이 아니다 |
+| `ADMIN_PASSWORD` | 통합 관리 화면(`/admin`) 첫 비밀번호 | **10자 이상**이어야 쓰인다. 화면에서 바꾸면 그 뒤로는 저장된 해시만 통한다 |
 
 ## 아키텍처
 
@@ -75,14 +77,16 @@ Firebase Emulator 권한 시험(`tests/rules/`)은 에뮬레이터가 없으면 
 ```
 src/
   app/
-    page.tsx                    # 입장. 서버가 허용한 모드만 보여 준다
+    page.tsx                    # 입장(수업 번호 + 반 비밀번호 + 번호). 서버가 허용한 모드만 보여 준다
     guide/page.tsx              # 설명 모드
     practice/page.tsx           # 연습 모드 (처치)
     lecture/page.tsx            # 연수 체험판 (세션 없이 고정 20문항, 저장 안 함)
     assessment/page.tsx         # 사전·사후 검사 수집 (AI 호출 없음)
     game/, time-attack/         # 일반 체험 전용. 연구 세션에서는 진입 거부
-    teacher/page.tsx            # 교사 대시보드 (로그인 + 배정 학급만)
-    admin/page.tsx              # 감수 (연구자 역할 + 명시적 승인 필요)
+    teacher/page.tsx            # 교사 대시보드 (로그인 + 배정 학급만). 학생 현황(LMS) 탭
+    admin/page.tsx              # 통합 관리 (관리자 비밀번호): 반·차시·수업 시작/종료·교사 계정
+    admin/research-panel.tsx    # 통합 관리의 '연구 자료' 탭(요약·CSV·제외 표시·층화 추출)
+    admin/audit/page.tsx        # 감수 (연구자 역할 + 명시적 승인 필요). 옛 /admin
     api/
       auth/{session,refresh,staff}      # 세션 토큰 발급·갱신·교직원 로그인
       lessons/{,open,close,mode}        # 차시 개방·폐쇄·모드 판정
@@ -99,8 +103,11 @@ src/
     scoring.ts                  # 밴드·배점·환산·결합. 엄격 검증
     feedback.ts                 # 피드백 형식·인용 검증 (점수와 분리)
     questions.ts                # 연습 36문항의 공개 정보만
+    practice-hints.ts           # 문항별 힌트 초안(공개 문구). 검수(reviewed)를 마친 것만 화면에 나간다
     research/                   # 공통 도메인 타입, 세션별 허용 모드
   server/                       # 서버 전용. 클라이언트 번들에 실리지 않는다
+    admin/                      # 통합 관리: core(해시·토큰 순수) · auth(관리자 세션) · actions · research-actions
+    lms/                        # 교사 학생 현황 집계(순수)
     lecture/                    # 연수 체험판 배선. 연구 저장소를 열지 않는다
     config.ts                   # 모델 ID·자산 경로·동의 버전 등 단일 지점
     auth/                       # 역할·학급 범위·동의·세션 토큰·비식별
@@ -109,7 +116,7 @@ src/
     grading/                    # 운영 채점 1회(2+1 호출)
     lessons/                    # 차시 개방 판정·저장
     assessment/                 # 검사 세션·제출·사후 일괄 채점
-    export/                     # CSV 내보내기, 중복·완전성 점검
+    export/                     # CSV 내보내기, 중복·완전성 점검, practice-summary(v12 요약·추출, 순수)
 research-assets/                # 형식과 절차만. 실제 단서·이미지는 커밋하지 않는다
 firestore.rules                 # 기본 거부
 ```
@@ -184,7 +191,102 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   `src/lib/research/session-modes.ts`를 근거로 **middleware·화면 가드·server action·API 네 층**에서 이루어진다.
   edge middleware는 힌트 쿠키만 읽으므로 나머지 세 층이 `@/server/auth`로 다시 판정한다.
 - 연구 세션에서는 게임·타임어택·감수·임의 이미지 생성의 직접 경로와 관련 서버 액션을 모두 거부한다.
-- 적어도 한 문항에서 피드백 검토 → 수정 또는 **수정하지 않은 이유**를 남길 수 있다.
+  감수 화면은 `/admin/audit`로 옮겼고 middleware가 그 경로를 잡는다. `/admin` 자체는 관리자 비밀번호로 막는다.
+- 관리 화면에서 만든 반(`pacing:'teacher'`)은 일반 수업이어도 연 차시만 열린다(위 "통합 관리 화면" 참고).
+- **연구 세션에서는 고치지 않은 이유를 묻지 않는다(논문 v12).** 입력칸을 숨기고 서버도 `kept`를 받지 않는다.
+  수정 과정은 제출할 때마다 남는 시도 기록으로만 본다. '고쳐서 다시 쓰기'의 `revised` 연결만 남고 글은 저장하지 않는다.
+  일반 체험은 예전처럼 까닭을 남길 수 있다.
+
+## 통합 관리 화면 (`/admin`) — 반을 여는 쪽
+
+역할을 셋으로 나눈다. **관리자**가 반을 만들어 열고 닫고, **학생**은 그 반에만 들어가고,
+**교사**는 교사 화면(LMS)에서 배정된 반을 추적 관찰한다.
+
+| 누가 | 어디서 | 무엇을 |
+|---|---|---|
+| 관리자 | `/admin` (관리자 비밀번호) | 반 만들기·반 비밀번호·수업 시작/종료·차시 열고 닫기·교사 계정 발급과 반 배정 |
+| 교사 | `/teacher` (관리자가 만든 Firebase 계정) | 배정된 반의 학생 현황(번호별 차시 진행·점수·최근 답안), 차시 열고 닫기 |
+| 학생 | `/` (수업 번호 + 반 비밀번호 + 번호) | 그 반에서 교사가 연 차시만 |
+
+### 비밀번호는 원문을 저장하지 않는다
+- **관리자 비밀번호**: 처음에는 `ADMIN_PASSWORD`(10자 이상)로 들어온다. 설정 탭에서 바꾸면
+  `admin_config/console.passwordHash`에 **scrypt 해시**만 남고, 그 뒤로는 env 값이 통하지 않는다.
+  저장된 값이 깨져 있으면 env로 내려가지 않고 막는다. 잊으면 Firebase 콘솔에서 그 문서를 지우고 env로 들어온다.
+- **반 입장 비밀번호**: `research_classes/{id}.entryPassword`에 scrypt 해시로만 둔다(4자 이상, 선택).
+  학생 입장(`issueStudentSession`)이 해시로 대조한다. 없는 반·닫힌 반·틀린 비밀번호는 **같은 문구**로 막는다.
+- **교사 비밀번호**: Firebase Authentication이 보관한다. 관리자는 새로 정할 수만 있고(기존 로그인 즉시 끊김) 볼 수는 없다.
+- 해시는 `src/server/admin/core.ts`의 `hashPassword/verifyPassword`(scrypt N=2^14, 무작위 salt) 하나에서 만든다.
+
+### 관리자 세션
+- HttpOnly·SameSite=Strict 쿠키 `rp_admin`, 8시간. 서명 키 = 서버 서명 비밀키 + 용도 문자열 + **자격 지문**.
+  서버 서명 비밀키는 `STUDENT_SESSION_SECRET`, 없으면 서비스 계정 비공개 키에서 만든 값이다(`deriveServerSessionSecret`).
+  비밀번호를 바꾸면 지문이 바뀌어 **다른 기기의 관리자 세션이 모두 끊긴다.**
+- `FIREBASE_SERVICE_ACCOUNT_JSON`과 관리자 비밀번호 가운데 하나라도 없으면 우회 없이 실패한다.
+- 로그인하면 **Firebase 설정 점검**을 한다(`src/server/admin/firebase-setup.ts`).
+  서비스 계정과 `NEXT_PUBLIC_FIREBASE_PROJECT_ID`가 다른 프로젝트면 경고한다. 교사 로그인(이메일/비밀번호)은
+  없는 계정으로 로그인을 시도해 오류 코드로 판정하며, 꺼져 있으면 **지금 켜기** 단추가
+  서비스 계정 권한으로 Identity Toolkit 설정(`signIn.email`)만 바꾼다. 실패하면 콘솔 링크를 안내한다.
+  확인하지 못한 경우(키 제한 등)는 문제로 단정하지 않고 아무것도 띄우지 않는다.
+- 모든 조작 action은 첫 줄에서 `requireAdmin()`을 부른다(`tests/admin.test.ts`가 정적으로 확인).
+- 교사·연구자 계정(`users` 역할)과 별개다. 수업 운영·교사 계정 탭은 학생 답안·점수를 읽지 않는다.
+  **예외는 '연구 자료' 탭**(아래 v12 절)이다. 연구 책임자가 관리 화면을 함께 운영하는 현재 구성에 맞춰
+  연구ID 단위의 연습 기록을 읽으며, 조회·내보내기·제외·추출을 모두 `admin_events`에 남긴다.
+- 조작은 `admin_events`에 남는다. 비밀번호 원문·해시·학생 답안은 담지 않는다.
+
+### 반과 차시
+- 반을 만들면 **여섯 자리 수업 번호**(첫 자리 1~9)를 서버가 무작위로 정하고 `active:false`로 닫아 둔다.
+  `classCode`=수업 번호, `requireStudentNumber`(일반 수업만), `managedBy:'admin_console'`을 함께 쓴다.
+- 반의 성격은 만들 때 한 번 정하고 바꾸지 않는다. **연구 수업·연구 검사 반은 `registry.readiness()`가 통과할 때만** 만든다.
+- 관리 화면에서 만든 반은 차시 기록에 `pacing:'teacher'`가 붙는다. 이 표시가 있으면 **일반 수업이어도 연 차시만** 열린다
+  (`policy.ts`의 `teacherPaced`). 통제를 더할 수만 있고 연구 세션을 자율 진행으로 풀지는 못한다.
+  이 표시가 없는 옛 체험 학급은 그대로 자율 진행이다.
+- **수업 시작** = 입장 열기 + 그 차시 열기(닫혀 있던 기록도 다시 연다). **수업 끝내기** = 입장 닫기 + 차시 기록 전체 닫기
+  (+ 선택하면 그 반의 학생 세션 폐기). 제출·점수는 지우지 않는다.
+- 학생 입장 시 학급 키(`classCode`)는 **반 기록의 값만** 쓴다. 학생이 보낸 값으로 다른 반 기록 트리에 쓰지 못한다.
+- 번호(출석 번호)는 일반 수업에서만 받아 `student_sessions`에 둔다. **토큰에는 넣지 않고**, 연구 수업에서는 받지 않는다.
+
+### 교사 학생 현황 (LMS)
+- `loadClassProgress`(교사, 배정된 반만)가 반 기록·차시 기록·학생 세션·제출을 다시 읽어 `src/server/lms/progress.ts`로 묶는다.
+  다시 들어와 세션이 바뀌어도 같은 번호면 한 줄이다. 30초마다 새로 읽는다.
+- 일반 수업은 점수·최근 답안까지 보인다. 결측 점수는 0점이 아니며 평균에 넣지 않는다.
+- **연구 수업은 교사 블라인드 채점을 흐리지 않도록 AI 점수·답안·시각을 보여 주지 않는다.** 참가자별 진행 수만 보인다.
+
+## 논문 v12 반영 — 시도 기록·문항별 힌트·연구 추출
+
+연구 흐름: 학생이 연습 36문항에 쓰고 피드백을 보고 다시 쓴다 → 연구자가 A·B·C에서 대표 문항 셋을 고른다 →
+부적절한 행을 제외하고 앱 AI 5수준별로 문항마다 4개씩(60개) 뽑는다 → AI 평가 에이전트와 전문가 3명이 따로 채점한다.
+
+### 시도별 저장 (이미 있던 것 + 보완)
+- 연구 세션 연습은 제출마다 `research/v7.0/practice_submissions`에 새 문서로 남고 덮어쓰지 않는다(submit-core).
+  researchId·classResearchId·questionId·questionLevel(=level)·lesson(=chasi)·band·attemptNo, 개인정보 점검을 거친 text,
+  scoring.feedback(text·status), scoring.result(축별 수준·총점), rubricVersion·cueVersion·modelId·promptHash·imageHash,
+  startedAt·submittedAt·durationMs, responseStatus·missingReason·persistStatus.
+- 연습 문항은 레지스트리에 이미지 해시가 없어 예전에는 `imageHash`가 null이었다. 이제 채점 때 실제로 읽은 해시를 남긴다
+  (채점 전에 끝난 결측이면 여전히 null — 지어내지 않는다).
+- **`SCHEMA_VERSION`(v7.0)은 올리지 않았다.** 이 값이 저장 경로 `research/{SCHEMA_VERSION}`에도 쓰여, 올리면 열린 차시·검사 자료가
+  새 경로로 갈라진다. 기존 문서에 필드를 더하지 않았고, 새 기록(제외·추출)에는 `schemaVersion: 'v12-extraction-1'`을 따로 붙인다.
+
+### 문항별 힌트
+- `src/lib/practice-hints.ts`에 36문항 초안이 있다. 실제 그림을 보고 썼고 정답 값(색 이름·개수·대상 이름)은 적지 않는다
+  (`tests/hints.test.ts`가 색·개수 낱말과 숫자를 막는다). C밴드는 분위기를 근거와 함께 쓰라고 안내한다.
+- **`reviewed: true`인 힌트만 학생 화면에 나간다.** 검수 전에는 차시 공통 안내(`GUIDE`)가 그대로 나간다.
+  검수표: `docs/practice-hints-review.md`(`npm run hints:table`). 검수 메모는 학생 번들에 싣지 않으려고 스크립트에만 둔다.
+- 연습 화면만 문항 힌트를 쓴다. 게임·시간 제한·연수 화면은 `rubric`(차시 공통 안내)을 그대로 쓴다.
+
+### 요약·연구 추출 (`/admin` → 연구 자료)
+- 계산은 `src/server/export/practice-summary.ts`(순수), 배선은 `src/server/admin/research-actions.ts`.
+- 연구 연습 제출만 읽고, **지금 기준으로 동의가 유효한 학생만** 셈한다(철회자는 제출 뒤라도 빠진다).
+- 앱 AI 5수준 = `round_half_up(1 + 4 × 총점/100)`(축 수준의 가중 평균). 반올림 전 값도 함께 낸다. **이 규칙은 코드가 정한 것이다.
+  논문에 다른 정의가 있으면 `appLevelOf` 하나만 바꾸면 된다.** 결측은 분포·평균에 넣지 않고 따로 센다.
+- 학생 × 문항 요약: 시도 수, 첫·최종 프롬프트와 점수·수준, 피드백 목록(시도 순, ` | `), 첫·최종 제출 시각, 결측 여부.
+  문항 요약: 36문항 모두, 학생 수, 평균 시도 수(반올림 안 함), 최종 5수준 분포, 결측 수.
+- 제외 표시(무관한 내용 / 개인정보 포함)는 `research/v7.0/extraction_exclusions`에 남고, 해제해도 지우지 않고 `active:false`와 이력을 남긴다.
+  최종 프롬프트가 개인정보 점검에 걸리면 '개인정보 의심'으로 표시만 한다(자동 제외 아님).
+- 추출: 문항(최대 3) × 5수준으로 층을 나눠 층마다 n개(기본 4, 1~9)를 뽑는다. 층마다 `${seed}|${문항}|${수준}` 난수로 섞어
+  문항을 고른 순서와 무관하게 같은 결과가 나온다. 모자란 층은 채우지 않고 shortfall로 남긴다.
+  사례 ID `{문항번호}-{수준}{순번}`(예: 01-31). 시드·후보·제외 목록·결과를 `research/v7.0/extraction_samples`에 저장한다.
+  **사례 ID에 앱 AI 수준이 들어 있다.** 전문가에게 수준을 가리려면 case_id·app_level 열을 빼고 다른 번호를 붙인다.
+- CSV는 브라우저로만 내려간다(BOM은 브라우저에서 다시 붙인다). `rp_*.csv`·`/exports/`는 `.gitignore`에 있다.
 
 ## 연수 모드 (`/lecture`) — 연구 경로가 아니다
 
@@ -247,8 +349,11 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
 경로는 `src/server/firebase-admin.ts` 한 곳에서만 정한다. 어떤 모듈도 컬렉션 이름을 직접 적지 않는다.
 
 ```
-users                       # 계정과 역할
+users                       # 계정과 역할 (관리 화면이 만든 교사: email·displayName·createdBy 포함)
 research_classes            # 무작위 수업ID (실명 대응표는 저장소 밖)
+                            #   + label·entryPassword(해시)·classCode·requireStudentNumber·managedBy
+admin_config/console        # 관리자 비밀번호 scrypt 해시
+admin_events                # 관리 화면 조작 기록
 consents / consent_events   # 동의·승낙과 그 변경 이력
 student_sessions            # 학생 세션 토큰 폐기 목록
 audit_approvals             # 실데이터 감수 승인 기록
@@ -258,6 +363,7 @@ research/v7.0/
   assessment_sessions  assessment_windows  assessment_submissions
   assessment_rejections  practice_submissions  lesson_sessions
   scoring_runs  scoring_batches  teacher_blind_scores
+  extraction_exclusions  extraction_samples      # v12 연구 추출(제외 표시·추출 결과)
 ```
 
 클라이언트가 보낸 문자열을 문서 ID나 경로에 쓰기 전에는 `assertSafeDocId`를 지난다.
@@ -303,7 +409,21 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 - 검사 단서 노출 점검은 비공개 단서 팩이 있을 때만 실제 문장으로 훑는다. 팩이 없으면 건너뛴다.
 - edge middleware는 힌트 쿠키만 읽는다(힌트가 없으면 열지 않는다). 실제 판정은 server action·API가 다시 한다.
 - 교사 블라인드·연구자 화면이 아직 연습 제출만 읽는다. 검사 6응답은 내보내기 경로로 받아야 한다.
-- 교사 화면은 방금 누른 결과만 보여 준다. 현재 차시 상태를 조회하는 액션이 아직 없다.
+- 관리자 로그인은 실패마다 지연을 두고 10자 이상을 요구할 뿐, 서버 전체에서 시도 횟수를 세어 잠그지는 않는다.
+  반 입장 비밀번호(4자 이상) 대조에도 시도 횟수 제한이 없다. 교실 입장 문턱이지 강한 자격이 아니며,
+  수업이 끝나면 **수업 끝내기**로 입장을 닫아 두는 것이 실제 방어다.
+- 통합 관리 흐름(관리자 로그인 → 반 만들기 → 수업 시작 → 학생 입장 → 교사 현황 → 수업 종료 → 관리자 비밀번호 변경)은
+  **로컬 Firebase 에뮬레이터(Firestore·Auth)로 브라우저에서 한 번 돌려 확인했다.** 실제 운영 프로젝트·Vercel에서는 돌리지 않았다.
+  학생 제출은 모델을 부르지 않고 문서를 직접 넣어 흉내 냈다.
+- 관리 화면에서 만들지 않은 옛 체험 학급은 `pacing`이 없어 차시를 열고 닫아도 학생 화면에 모든 차시가 보인다(화면에 표시).
+- 검사(사전·사후) 세션 열기·닫기는 아직 교사 화면에만 있다. 관리 화면에는 없다.
+- **연구 반을 만들 수 없는 상태다.** `registry.readiness()`가 v12에서 쓰지 않는 사전·사후 검사 문항(T1~T3)의 확정·이미지·단서까지
+  요구한다. 이 조건을 v12에 맞게 줄일지는 연구 설계 결정이라 코드를 바꾸지 않았다.
+- 참가 번호(`research_classes/{id}/participants/{researchId}.codeHash`)와 동의 기록(`consents/{researchId}`)을 만드는 화면이 없다.
+- 연구 세션 채점은 비공개 단서 팩을 `RESEARCH_ASSET_DIR` 파일에서 읽는다. Vercel에는 저장소 밖 파일을 둘 자리가 없어 운영 방식을 정해야 한다.
+- v12 연구 추출 흐름(요약·제외·추출·CSV·연구 세션 학생 화면)은 로컬 에뮬레이터에서 가짜 연구 자료로 한 번 확인했다. 실제 연구 자료로는 돌리지 않았다.
+- **지금 켜기**(교사 로그인 방식 자동 설정)는 실제 Google API에 대고 시험하지 않았다. 에뮬레이터는 설정 없이 모든
+  로그인을 받아 주므로 이 호출을 건너뛴다. 실패하면 화면이 콘솔 링크를 안내한다.
 - 게임·시간 제한 모드의 결과는 **어디에도 저장되지 않는다.** 화면에도 그렇게 표시한다.
 - `npm run lint`가 동작하지 않는다(위 참고).
 - **`.firebaserc`(`promptgrader-jun`)와 이 문서의 프로젝트명(`promptgrader`)이 다르다. 배포 전에 어느 쪽이 맞는지 확인할 것.**
@@ -330,7 +450,12 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 | 보안 규칙 | `firestore.rules` (경로 이름은 `src/server/firebase-admin.ts`와 맞출 것) |
 | 컬렉션 경로 | `src/server/firebase-admin.ts`의 `COLLECTIONS`·`RESEARCH_COLLECTIONS` |
 | 개인정보 점검 규칙 | `src/server/privacy/index.ts` (오탐·미탐 사례는 `tests/privacy.test.ts`에 고정) |
-| 교사 차시 개방·루브릭 화면 | `src/app/teacher/page.tsx` |
+| 교사 차시 개방·루브릭·학생 현황 화면 | `src/app/teacher/page.tsx` |
+| 통합 관리 화면 | `src/app/admin/page.tsx` · `src/server/admin/actions.ts` |
+| 비밀번호 규칙·해시·관리자 토큰 | `src/server/admin/core.ts` |
+| 학생 현황 집계(보이는 범위) | `src/server/lms/progress.ts` |
+| 문항별 힌트·검수 상태 | `src/lib/practice-hints.ts` (고친 뒤 `npm run hints:table`) |
+| 앱 AI 5수준·요약·층화 추출 규칙 | `src/server/export/practice-summary.ts` |
 | 모델 교체 | `src/server/config.ts`의 `EVALUATION_MODEL_ID` |
 
 ## 복구 기록

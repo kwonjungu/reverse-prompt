@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { DEFAULT_LECTURE_CODE } from '@/server/lecture/core';
+import { deriveServerSessionSecret } from '@/server/auth/session-token';
 
 /**
  * 서버 전용 운영 설정의 단일 지점.
@@ -51,3 +52,19 @@ export const LECTURE_CODE = process.env.LECTURE_CODE?.trim() || DEFAULT_LECTURE_
 
 /** 서버 Firebase Admin 자격. 없으면 서버 권한 검증을 할 수 없다. */
 export const FIREBASE_ADMIN_CREDENTIAL = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim() || '';
+
+/**
+ * 통합 관리 화면(/admin)의 첫 비밀번호. 10자 이상이어야 쓰인다.
+ * 관리 화면에서 비밀번호를 바꾸면 Firestore(admin_config)에 scrypt 해시가 남고,
+ * 그때부터는 이 값이 아니라 저장된 해시만 통한다. 원문을 저장하지 않는다.
+ */
+export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD?.trim() || '';
+
+/**
+ * 서버 서명 비밀키. 학생 세션 토큰과 관리자 세션 토큰이 용도 문자열로 갈라 함께 쓴다.
+ * STUDENT_SESSION_SECRET이 없으면 서버 자격증명의 비공개 키에서 만든다(session-token.ts).
+ */
+export const SERVER_SESSION_SECRET = deriveServerSessionSecret(
+  process.env.STUDENT_SESSION_SECRET,
+  FIREBASE_ADMIN_CREDENTIAL
+);

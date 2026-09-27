@@ -27,17 +27,49 @@ import {
   researchPath,
 } from '@/server/firebase-admin';
 import type { QueryDocumentSnapshot } from 'firebase-admin/firestore';
+import { experienceSubmissionsPath, getLessonStore } from '@/server/lessons/store';
+import {
+  summarizeClassProgress,
+  toProgressSession,
+  toProgressSubmission,
+  type ClassProgress,
+  type ProgressSubmission,
+} from '@/server/lms/progress';
+import type { SessionType } from '@/lib/research/types';
 
 /** 로그인한 운영 계정의 역할과 배정된 학급. 학교 실명 대응표는 담지 않는다. */
 export async function loadStaffContext(): Promise<{
   role: string;
   classCodes: string[];
   classResearchIds: string[];
+  /** 배정된 반의 표시 이름(관리 화면에서 정한 값). 없으면 비어 있다. */
+  classLabels: Record<string, string>;
 }> {
   const principal = await auth.requireRole('teacher', 'researcher');
   const db = getAdminFirestore();
   const snap = await db.collection(COLLECTIONS.users).doc(principal.uid).get();
   const data = snap.exists ? snap.data() ?? {} : {};
+
+  // 배정된 반의 이름만 읽는다. 다른 반의 이름은 읽지 않는다.
+  const classLabels: Record<string, string> = {};
+  const refs = principal.classResearchIds
+    .filter((id) => {
+      try {
+        assertSafeDocId(id, '학급');
+        return true;
+      } catch {
+        return false;
+      }
+    })
+    .map((id) => db.collection(COLLECTIONS.researchClasses).doc(id));
+  if (refs.length) {
+    const docs = await db.getAll(...refs);
+    for (const d of docs) {
+      const label = d.exists ? d.data()?.label : null;
+      if (typeof label === 'string' && label) classLabels[d.id] = label;
+    }
+  }
+
   return {
     role: principal.role,
     // 연구자는 수업 기록(비연구 저장소)에 접근하지 않는다.
@@ -46,6 +78,7 @@ export async function loadStaffContext(): Promise<{
         ? (data.classCodes as string[])
         : [],
     classResearchIds: principal.classResearchIds,
+    classLabels,
   };
 }
 
@@ -196,4 +229,89 @@ export async function requestResearchDataDisposition(
     dataDisposition: 'pending_approved_procedure',
   });
   return { recorded: true };
+}
+
+/* ────────────────────────── 학생 현황(LMS) ────────────────────────── */
+
+export interface ClassProgressView extends ClassProgress {
+  classResearchId: string;
+  label: string | null;
+  sessionType: SessionType;
+  /** 학생이 새로 들어올 수 있는가 */
+  active: boolean;
+  /** 서버에 저장된 차시 상태. 방금 누른 결과가 아니라 지금 기록을 다시 읽은 값이다. */
+  lesson: {
+    allowedLessons: number[];
+    currentLesson: number | null;
+    closedAt: string | null;
+    teacherPaced: boolean;
+  } | null;
+  /** 제출 기록을 찾을 학급 키가 없는 옛 반이면 안내 문구 */
+  notice: string | null;
+  loadedAt: string;
+}
+
+/**
+ * 담당 교사가 보는 반의 학생 진행.
+ *
+ * 배정된 반만 연다(requireClassAccess). 일반 수업은 번호별 점수·최근 답안까지 보여 주고,
+ * 연구 수업은 블라인드 채점을 위해 점수·답안·시각을 빼고 진행 수만 보여 준다.
+ * 학생 입장 세션 문서는 번호를 잇는 데만 쓰고 그대로 내보내지 않는다.
+ */
+export async function loadClassProgress(classResearchId: string): Promise<ClassProgressView> {
+  await auth.requireClassAccess(classResearchId, { action: 'read' }, 'teacher');
+  const db = getAdminFirestore();
+  const id = assertSafeDocId(classResearchId, '학급');
+  const classSnap = await db.collection(COLLECTIONS.researchClasses).doc(id).get();
+  if (!classSnap.exists) throw new AuthError('등록된 수업이 아닙니다.', 'forbidden');
+  const classData = classSnap.data() ?? {};
+  const sessionType: SessionType =
+    classData.sessionType === 'research_practice' || classData.sessionType === 'research_assessment'
+      ? classData.sessionType
+      : 'experience';
+  const classCode =
+    typeof classData.classCode === 'string' && classData.classCode ? classData.classCode : null;
+
+  const submissionsQuery =
+    sessionType === 'experience'
+      ? classCode
+        ? db.collection(experienceSubmissionsPath(classCode)).get()
+        : null
+      : db
+          .collection(researchPath(RESEARCH_COLLECTIONS.practiceSubmissions))
+          .where('classResearchId', '==', id)
+          .get();
+
+  const [lesson, sessionsSnap, submissionsSnap] = await Promise.all([
+    getLessonStore().readLessonSession(id),
+    db.collection(COLLECTIONS.studentSessions).where('classResearchId', '==', id).get(),
+    submissionsQuery,
+  ]);
+
+  const submissions = (submissionsSnap?.docs ?? [])
+    .map((d) => toProgressSubmission(d.data()))
+    .filter((v): v is ProgressSubmission => v !== null);
+  const sessions = sessionsSnap.docs.map((d) => toProgressSession(d.id, d.data()));
+  const now = new Date().toISOString();
+
+  return {
+    ...summarizeClassProgress({ sessionType, submissions, sessions, now }),
+    classResearchId: id,
+    label: typeof classData.label === 'string' && classData.label ? classData.label : null,
+    sessionType,
+    active: classData.active === true,
+    lesson: lesson
+      ? {
+          allowedLessons: [...(lesson.allowedLessons ?? [])].sort((a, b) => a - b),
+          currentLesson: lesson.currentLesson ?? null,
+          closedAt: lesson.closedAt ?? null,
+          teacherPaced: lesson.pacing === 'teacher',
+        }
+      : null,
+    notice:
+      sessionType === 'experience' && !classCode
+        ? '이 반은 관리 화면에서 만든 반이 아니라 제출 기록 위치를 알 수 없습니다. 입장 현황만 보입니다.'
+        : null,
+    loadedAt: now,
+  };
 }

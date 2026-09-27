@@ -29,10 +29,18 @@ import {
 
 /* ────────────────────────── 기록 형 ────────────────────────── */
 
+/**
+ * 차시 진행 방식. 'teacher'면 세션 성격과 무관하게 교사(관리자)가 연 차시만 열린다.
+ * 값이 없으면 세션 성격의 기본 규칙(연구는 통제, 체험은 자율)을 따른다.
+ */
+export type LessonPacing = 'teacher';
+
 /** LessonSession에 저장 관리용 필드만 덧붙인다. */
 export interface LessonSessionRecord extends LessonSession {
   schemaVersion: string;
   updatedAt: string;
+  /** 관리 화면에서 만든 반은 'teacher'. 옛 기록에는 없다. */
+  pacing?: LessonPacing | null;
 }
 
 export interface PracticeScoringRecord {
@@ -194,6 +202,13 @@ export interface OpenLessonInput {
   reason: string | null;
 }
 
+export interface EnsureLessonInput {
+  classResearchId: string;
+  /** 서버가 확정한 학급의 세션 성격. */
+  sessionType: SessionType;
+  pacing: LessonPacing;
+}
+
 export interface CloseLessonInput {
   classResearchId: string;
   /** 특정 차시만 닫으려면 지정한다. 없으면 세션 전체를 닫는다. */
@@ -206,6 +221,13 @@ export interface LessonStore {
   /** 재시작해도 남는 저장소인가. 연구 자료는 false면 성공으로 보고하지 않는다. */
   readonly durable: boolean;
   readLessonSession(classResearchId: string): Promise<LessonSessionRecord | null>;
+  /**
+   * 차시 기록이 없으면 빈 기록을 만들고, 있으면 진행 방식만 정한다.
+   * 연 차시·닫힘 시각은 바꾸지 않는다. 관리 화면이 반을 만들 때 쓴다.
+   */
+  ensureLessonSession(
+    input: EnsureLessonInput
+  ): Promise<{ session: LessonSessionRecord; durable: boolean }>;
   openLessonSession(
     input: OpenLessonInput
   ): Promise<{ session: LessonSessionRecord; durable: boolean }>;
@@ -270,6 +292,8 @@ export function toOpenState(
     allowedLessons: session?.allowedLessons ?? [],
     closedAt: session?.closedAt ?? null,
     sessionVerified,
+    // 학급 기록은 통제를 더할 수만 있다. 세션 성격을 바꾸지는 않는다.
+    teacherPaced: session?.pacing === 'teacher',
   };
 }
 
@@ -313,6 +337,26 @@ export function createLessonStore(deps: LessonStoreDeps): LessonStore {
     async readLessonSession(classResearchId) {
       safeDocId(classResearchId, '학급');
       return backend.get<LessonSessionRecord>(paths.lessonSessions, classResearchId);
+    },
+
+    async ensureLessonSession(input) {
+      safeDocId(input.classResearchId, '학급');
+      const now = new Date().toISOString();
+      const prev = await backend.get<LessonSessionRecord>(
+        paths.lessonSessions,
+        input.classResearchId
+      );
+      const session: LessonSessionRecord = {
+        ...(prev ?? emptyLessonSession(input.classResearchId, input.sessionType, now)),
+        pacing: input.pacing,
+        updatedAt: now,
+      };
+      try {
+        await backend.set(paths.lessonSessions, input.classResearchId, session);
+        return { session, durable: backend.durable };
+      } catch {
+        return { session, durable: false };
+      }
     },
 
     async openLessonSession(input) {

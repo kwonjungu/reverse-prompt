@@ -40,7 +40,8 @@ import {
   SESSION_TOKEN_COOKIE,
   serializeSessionHint,
 } from '@/server/lessons/session-cookie';
-import { CONSENT_VERSION } from '@/server/config';
+import { CONSENT_VERSION, SERVER_SESSION_SECRET } from '@/server/config';
+import { parseStudentNumber, verifyPassword } from '@/server/admin/core';
 import {
   COLLECTIONS,
   assertSafeDocId,
@@ -60,8 +61,9 @@ export const STAFF_COOKIE = 'rp_staff';
 
 const STAFF_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
+/** STUDENT_SESSION_SECRET, 없으면 서버 자격증명에서 만든 값(config.ts). */
 function sessionSecret(): string {
-  return process.env.STUDENT_SESSION_SECRET?.trim() || '';
+  return SERVER_SESSION_SECRET;
 }
 
 function isProduction(): boolean {
@@ -314,6 +316,10 @@ export interface IssuedSession {
   cookieOptions: ReturnType<typeof sessionCookieOptions>;
   /** 연구 수집이 불가한 학생을 어디로 보낼지. */
   route: 'research' | 'lesson_record_only' | 'offline_alternative';
+  /** 학생 화면 머리에 보일 반 이름. 관리 화면에서 정한 값이며 신원이 아니다. */
+  classLabel: string | null;
+  /** 일반 수업의 번호. 연구 수업이면 null(연구 신원은 참가 번호로만 정한다). */
+  studentNumber: number | null;
 }
 
 export interface IssueSessionInput {
@@ -321,9 +327,24 @@ export interface IssueSessionInput {
   classResearchId: string;
   /** 학생별 참가코드(선택). 없으면 연구 수집 없는 세션이 된다. */
   participantCode?: string | null;
-  /** 비연구 수업 기록에 쓰는 기존 학급 코드(선택). */
+  /**
+   * 비연구 수업 기록에 쓰는 기존 학급 코드(선택).
+   * 반 기록에 classCode가 있으면(관리 화면에서 만든 반) 이 값은 쓰지 않는다.
+   */
   classCode?: string | null;
+  /** 반 입장 비밀번호. 반 기록에 해시가 있으면 반드시 맞아야 한다. */
+  entryPassword?: string | null;
+  /** 일반 수업의 출석 번호(1~99). 교사 학생 현황에서 학생을 구분하는 데만 쓴다. */
+  studentNumber?: unknown;
 }
+
+/**
+ * 반에 들어가지 못했을 때 학생 화면에 그대로 보여 줄 문구.
+ * 수업이 없는 경우·닫힌 경우·비밀번호가 틀린 경우를 가르지 않는다.
+ * 어느 수업 번호가 실제로 있는지 드러내지 않기 위해서다.
+ */
+export const CLASS_ENTRY_DENIED_MESSAGE = '열려 있는 수업이 아니거나 비밀번호가 맞지 않아요.';
+export const STUDENT_NUMBER_REQUIRED_MESSAGE = '번호(출석 번호)를 1~99 사이로 적어 주세요.';
 
 /**
  * 학생 세션 토큰을 발급한다.
@@ -344,14 +365,37 @@ async function issueStudentSession(input: IssueSessionInput): Promise<IssuedSess
     .doc(input.classResearchId)
     .get();
   if (!classSnap.exists || classSnap.data()?.active !== true) {
-    throw new AuthError('열려 있는 수업이 아닙니다.', 'forbidden');
+    throw new AuthError(CLASS_ENTRY_DENIED_MESSAGE, 'forbidden');
   }
   const classData = classSnap.data() ?? {};
+
+  // 반 입장 비밀번호. 저장소에는 scrypt 해시만 있고 원문과 대조하지 않는다.
+  if (typeof classData.entryPassword === 'string' && classData.entryPassword) {
+    const passed = await verifyPassword(input.entryPassword ?? '', classData.entryPassword);
+    if (!passed) throw new AuthError(CLASS_ENTRY_DENIED_MESSAGE, 'forbidden');
+  }
+
   const sessionType: SessionType =
     classData.sessionType === 'research_practice' ||
     classData.sessionType === 'research_assessment'
       ? classData.sessionType
       : 'experience';
+
+  // 학급 키는 반 기록의 값을 쓴다. 학생이 보낸 값으로 다른 반의 기록 트리에 쓰지 못하게 한다.
+  const classCode =
+    typeof classData.classCode === 'string' && classData.classCode
+      ? classData.classCode
+      : input.classCode ?? null;
+
+  // 번호는 일반 수업에서만 받는다. 연구 수업의 신원은 참가 번호와 동의 기록으로만 정하며
+  // 출석 번호를 연구 세션에 남기지 않는다. 토큰에도 넣지 않는다(서버 세션 문서에만 둔다).
+  let studentNumber: number | null = null;
+  if (sessionType === 'experience') {
+    studentNumber = parseStudentNumber(input.studentNumber);
+    if (classData.requireStudentNumber === true && studentNumber === null) {
+      throw new AuthError(STUDENT_NUMBER_REQUIRED_MESSAGE, 'forbidden');
+    }
+  }
 
   let researchId: string | null = null;
   if (input.participantCode) {
@@ -382,7 +426,7 @@ async function issueStudentSession(input: IssueSessionInput): Promise<IssuedSess
     sid,
     researchId,
     classResearchId: input.classResearchId,
-    classCode: input.classCode ?? null,
+    classCode,
     sessionType,
     role: 'student',
     iat: now,
@@ -395,6 +439,8 @@ async function issueStudentSession(input: IssueSessionInput): Promise<IssuedSess
     classResearchId: input.classResearchId,
     researchId,
     sessionType,
+    // 일반 수업에서만 채운다. 교사 학생 현황이 제출(ownerKey=session:sid)과 번호를 잇는 데 쓴다.
+    studentNumber,
     issuedAt: new Date(now).toISOString(),
     expiresAt: new Date(claims.exp).toISOString(),
     revokedAt: null,
@@ -411,6 +457,8 @@ async function issueStudentSession(input: IssueSessionInput): Promise<IssuedSess
     claims,
     cookieOptions: sessionCookieOptions(SESSION_TTL_MS, isProduction()),
     route,
+    classLabel: typeof classData.label === 'string' && classData.label ? classData.label : null,
+    studentNumber,
   };
 }
 
@@ -468,6 +516,8 @@ async function refreshStudentSession(): Promise<IssuedSession> {
     claims,
     cookieOptions: sessionCookieOptions(SESSION_TTL_MS, isProduction()),
     route: researchId ? 'research' : 'lesson_record_only',
+    classLabel: null,
+    studentNumber: typeof snap.data()?.studentNumber === 'number' ? snap.data()?.studentNumber : null,
   };
 }
 

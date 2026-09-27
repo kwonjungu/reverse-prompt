@@ -11,7 +11,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"tests/**/*.test.ts\"",
-    "manifest": "node scripts/research-manifest.mjs"
+    "manifest": "node scripts/research-manifest.mjs",
+    "hints:table": "node --import tsx scripts/print-practice-hints.mjs"
   },
   "dependencies": {
     "@genkit-ai/google-genai": "^1.27.0",

@@ -70,7 +70,8 @@ export function assertModeAllowed(sessionType: SessionType, mode: AppMode): void
 export const ROUTE_MODES: { prefix: string; mode: AppMode }[] = [
   { prefix: '/game', mode: 'game' },
   { prefix: '/time-attack', mode: 'time-attack' },
-  { prefix: '/admin', mode: 'audit' },
+  // 감수 화면. /admin 자체는 통합 관리 화면이며 학생 활동이 아니라 관리자 비밀번호로 막는다.
+  { prefix: '/admin/audit', mode: 'audit' },
   { prefix: '/api/audit', mode: 'audit' },
   { prefix: '/api/generate', mode: 'generate' },
   { prefix: '/assessment', mode: 'assessment' },
