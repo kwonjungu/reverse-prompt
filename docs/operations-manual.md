@@ -9,7 +9,7 @@
 ### 1-1. 어느 Firebase 프로젝트인지 확인
 - Vercel → 프로젝트 → **Settings → Environment Variables** → `NEXT_PUBLIC_FIREBASE_PROJECT_ID` 값을 눌러 본다.
 - 이 값이 앱이 쓰는 Firebase 프로젝트다. 아래 모든 Firebase 작업은 **이 프로젝트**에서 한다.
-- 저장소에는 두 이름(`.firebaserc`의 `promptgrader-jun`, 문서 링크의 `promptgrader`)이 섞여 있으니 이 값으로 판단한다.
+- 운영 프로젝트는 `promptgrader`다(2026-09-28 연구자 확인, `.firebaserc`도 같은 이름). 이 값이 다르면 Vercel 설정을 먼저 바로잡는다.
 
 ### 1-2. 서버 키 넣기 (`FIREBASE_SERVICE_ACCOUNT_JSON`) — 꼭 필요
 1. Firebase 콘솔 → 1-1의 프로젝트 → 톱니바퀴 **프로젝트 설정 → 서비스 계정 → 새 비공개 키 생성**.

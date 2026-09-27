@@ -9,12 +9,13 @@
  *   4. 힌트는 정답 값(숫자·색 이름·개수·그림 제목의 낱말)과 특정 부위를 적지 않는다 — 36문항 전수(A6)
  *   5. 검수를 마치지 않은 힌트는 학생 화면(PRACTICE_QUESTIONS.hint)에 나가지 않는다(A1)
  *   6. withoutAreas는 그 영역의 질문만 뺀다
- *   7. 예전 초안 문구(그림의 부위를 짚는 문장)는 학생 번들 파일에 남지 않는다
+ *   7. 예전 초안 문구(그림의 부위를 짚는 문장)는 학생 번들 파일에도, 공개 저장소의 검수 스크립트·검수표에도 남지 않는다
+ *      (예전 초안은 연구자 비공개 hint-review-notes.json에만 있다. RESEARCH_ASSET_DIR에 그 파일이 있으면 문장 단위로 대조한다)
  *   8. 검수표 문서가 원본과 어긋나지 않고, 맨 위에 문항 ID를 넣는 방법이 있다
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 
@@ -324,27 +325,31 @@ test('withoutAreas는 그 영역의 질문만 뺀다', () => {
   assert.deepEqual(PRACTICE_HINTS.L31.checks.map((x) => x.area), ['object', 'feature', 'relation', null]);
 });
 
-test('예전 초안 문구는 학생 번들 파일(practice-hints.ts)에 남지 않는다', () => {
-  const src = readFileSync(path.join(process.cwd(), 'src', 'lib', 'practice-hints.ts'), 'utf8').replace(/\r\n/g, '\n');
-  assert.equal(src.includes('살펴봐요'), false, 'practice-hints.ts에 예전 초안의 "살펴봐요"가 남아 있다');
+test('예전 초안 문구는 학생 번들 파일(practice-hints.ts)과 공개 검수 자료에 남지 않는다', () => {
+  const read = (...p: string[]) => readFileSync(path.join(process.cwd(), ...p), 'utf8').replace(/\r\n/g, '\n');
+  const src = read('src', 'lib', 'practice-hints.ts');
+  const script = read('scripts', 'print-practice-hints.mjs');
+  const doc = read('docs', 'practice-hints-review.md');
+  for (const [where, text] of [['practice-hints.ts', src], ['print-practice-hints.mjs', script], ['practice-hints-review.md', doc]]) {
+    assert.equal(text.includes('살펴봐요'), false, `${where}에 예전 초안의 "살펴봐요"가 남아 있다`);
+  }
+  // 그림 묘사 자료는 공개 스크립트에 상수로 두지 않는다(비공개 hint-review-notes.json에서만 읽는다).
+  assert.doesNotMatch(script, /const (LEGACY_DRAFTS|NOTES|LEGACY_MOOD) =/, '검수 스크립트에 그림 묘사 자료가 남아 있다');
+  assert.equal(doc.includes('예전 초안(참고)'), false, '공개 검수표에 예전 초안 열이 남아 있다');
 
-  // 예전 초안 36개는 검수표 스크립트에만 참고용으로 남는다. 그 문장이 하나도 학생 번들 파일에 없어야 한다.
-  const script = readFileSync(path.join(process.cwd(), 'scripts', 'print-practice-hints.mjs'), 'utf8').replace(/\r\n/g, '\n');
-  const mood = /const LEGACY_MOOD = '([^']+)';/.exec(script)?.[1];
-  assert.ok(mood, '검수표 스크립트에 LEGACY_MOOD가 없다');
-  const block = /const LEGACY_DRAFTS = \{\n([\s\S]*?)\n\};/.exec(script)?.[1];
-  assert.ok(block, '검수표 스크립트에 LEGACY_DRAFTS가 없다');
-  const drafts = [...block.matchAll(/^\s*(L\d{2}): [`'](.+)[`'],$/gm)].map(([, id, body]) => ({
-    id,
-    text: body.replace('${LEGACY_MOOD}', mood),
-  }));
-  assert.deepEqual(drafts.map((d) => d.id), IDS, '검수표 스크립트의 예전 초안이 36개가 아니다');
-  for (const d of drafts) {
-    for (const sentence of d.text.split(/(?<=\.)\s+/)) {
-      assert.equal(src.includes(sentence), false, `practice-hints.ts에 ${d.id} 예전 문장이 남아 있다: ${sentence}`);
+  // 연구자 컴퓨터에 비공개 자료가 있으면 예전 초안 36개의 문장이 공개 파일 어디에도 없는지 대조한다.
+  const dir = process.env.RESEARCH_ASSET_DIR?.trim();
+  const file = dir ? path.join(dir, 'hint-review-notes.json') : '';
+  if (!file || !existsSync(file)) return;
+  const legacy: Record<string, string> = JSON.parse(readFileSync(file, 'utf8')).legacy ?? {};
+  assert.deepEqual(Object.keys(legacy), IDS, '비공개 예전 초안이 36개가 아니다');
+  for (const [id, body] of Object.entries(legacy)) {
+    for (const sentence of body.split(/(?<=\.)\s+/)) {
+      for (const [where, text] of [['practice-hints.ts', src], ['print-practice-hints.mjs', script], ['practice-hints-review.md', doc]]) {
+        assert.equal(text.includes(sentence), false, `${where}에 ${id} 예전 문장이 남아 있다: ${sentence}`);
+      }
     }
   }
-  assert.ok(drafts[0].text.includes('살펴봐요'));
 });
 
 test('검수표 문서가 원본 힌트와 어긋나지 않는다', () => {

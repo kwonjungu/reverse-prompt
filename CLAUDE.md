@@ -40,7 +40,7 @@ Firebase Emulator 권한 시험(`tests/rules/`)은 에뮬레이터가 없으면 
 
 - **호스팅**: Vercel (자동 배포 — `main` 푸시하면 빌드)
 - **GitHub**: https://github.com/kwonjungu/reverse-prompt
-- **Firebase 프로젝트**: CLAUDE.md는 `promptgrader`를, `.firebaserc`는 `promptgrader-jun`을 가리킨다. **서로 다르다 — 배포 전에 확인할 것.**
+- **Firebase 프로젝트**: `promptgrader`(2026-09-28 연구자 확인). `.firebaserc`도 이 이름으로 맞췄다.
 - **Firestore 리전**: asia-northeast3 (서울). 리전만으로 모든 처리가 국내라고 문서화하지 않는다.
   처리 리전·로그·백업·재위탁·학습 사용 여부는 **실제 계약과 콘솔 설정으로 확인할 항목**이다.
 - **Firestore 규칙**: `firestore.rules`가 저장소에 있다(기본 거부). **콘솔에 실제로 배포했는지는 별도 확인이 필요하다.**
@@ -441,8 +441,9 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   **2026-09-27에 36문항 모두 넣었다**(연구자가 판단을 맡김 — 99-1 C4 '손대지 않음'을 뒤집음). 논문 v12-2의 힌트 서술(목표 + M02 쉬운 말 확인 질문,
   정답 값 없음, 그림이 요구하지 않는 영역 제외, 단계 초점)과 새 그림 12장의 관계 질문 종류를 확인했다. 근거는 `REVIEWED_QUESTIONS` 주석,
   문구 고정은 `tests/hints.test.ts`('논문과 글자까지 같다').
-  검수표: `docs/practice-hints-review.md`(`npm run hints:table`). 예전 문항별 초안 문구는 지우지 않고 검수표의 참고 열로 남겼다
-  (그림의 부위를 짚는 문구라 학생 번들에 싣지 않고 `scripts/print-practice-hints.mjs`에만 둔다).
+  검수표: `docs/practice-hints-review.md`(`npm run hints:table`). 예전 문항별 초안·A밴드 관계 판단의 까닭·그림 확인 메모는
+  그림을 묘사해 정답 단서가 될 수 있어 **공개 저장소에서 뺐다**(2026-09-28). 연구자 비공개 `hint-review-notes.json`에만 있고,
+  `node --import tsx scripts/print-practice-hints.mjs --private <그 폴더>`가 참고 열이 붙은 비공개 검수표를 그 폴더에 따로 쓴다. git 이력에는 남아 있다.
 - 연습 화면만 문항 힌트를 쓴다. 게임·시간 제한·연수 화면은 `rubric`(단계 공통 안내)을 그대로 쓴다.
 
 ### 요약·연구 추출 (`/admin` → 연구 자료)
@@ -669,7 +670,6 @@ CSV 내보내기는 **null을 유지**하고 수준의 소수를 유지하며 �
 - 교사 화면의 사전·사후 검사 열기·닫기 단추는 남아 있지만, 그 대상인 연구 검사 반을 더는 만들 수 없다.
 - 영역 점(●●●○)이 찍힌 채점 결과 화면은 실제 모델로 채점된 적이 없어 브라우저에서 확인하지 못했다(로컬은 모델 키가 없어 결측 화면만 확인).
 - `npm run lint`가 동작하지 않는다(위 참고).
-- **`.firebaserc`(`promptgrader-jun`)와 이 문서의 프로젝트명(`promptgrader`)이 다르다. 배포 전에 어느 쪽이 맞는지 확인할 것.**
 - NEIS API는 가끔 한국 외 리전에서 응답 느림.
 - `package-lock.json` 커밋됨 — npm 사용 가정.
 
