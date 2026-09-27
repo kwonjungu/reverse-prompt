@@ -188,7 +188,11 @@ type OperationalResult =
 
 호출마다 `callId`·`retryIndex`·`purpose('score'|'feedback')`·검증된 levels·`failureReason`·**`servedModel`**(모델 API가
 응답에 밝힌 실제 모델, Gemini `modelVersion`)·시각을 남긴다. 실행 단위에는 설정한 `modelId`와 점수를 낸 호출의 `servedModel`이 함께 남는다.
-호출 기록에 학생 개인정보·비밀키·원시 인증토큰·학생 글 인용을 남기지 않는다.
+호출 기록에 학생 개인정보·비밀키·원시 인증토큰·학생 글 인용을 남기지 않는다. **예외: 연구 세션 채점(제출 채점·반복 채점)은 호출마다
+모델 원응답을 `rawOutput`(JSON 문자열, 검증 전 그대로)으로 남긴다**(99-1 B2 — 형식 오류 호출도 포함, 모델이 실제로 낸 근거를 다시 확인할 수 있게).
+모델이 낸 인용이 들어 있으므로 제출 문서·반복 채점 문서 안에만 두고 교사 블라인드 레코드·전문가 CSV·어떤 CSV 열에도 싣지 않는다.
+호출마다 `privacy.assertNoSecrets`를 거쳐 걸리면 그 원응답만 비우고 `rawOutputWithheld`, 2만 자를 넘으면 자르고 `rawOutputTruncated`.
+일반 체험·연수는 이 필드를 만들지 않는다.
 
 ### 문항별 단서
 채점에는 실제 이미지와 그 문항의 필수 정보(핵심 대상·필수 속성·필수 관계·앵커)를 함께 쓴다. 단서는 **비공개 자산**이며

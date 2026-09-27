@@ -65,7 +65,10 @@ export type OperationalResult =
       reason: MissingReasonModel;
     };
 
-/** 모델 호출 1회의 기록. 원문 프롬프트·개인정보·학생 글 인용은 넣지 않는다. */
+/**
+ * 모델 호출 1회의 기록. 원문 프롬프트·개인정보는 넣지 않는다.
+ * 예외: 연구 세션 채점의 rawOutput(모델 원응답)에는 학생 글 인용(evidence·quote)이 들어 있다 — 아래 설명.
+ */
 export interface CallRecord {
   callId: string;
   retryIndex: number;
@@ -79,6 +82,16 @@ export interface CallRecord {
   startedAt: string;
   finishedAt: string;
   durationMs: number;
+  /**
+   * 모델 원응답(JSON 문자열, 검증 전 그대로). **연구 세션 채점(제출 채점·반복 채점)에서만** 남긴다(99-1 B2 —
+   * 출력을 같은 조건에서 다시 확인할 수 있게 보관). 일반 체험·연수에는 이 필드가 없다. 호출이 예외로 끝나 받은 것이
+   * 없으면 null. 학생 글 인용이 들어 있으므로 제출 문서 안에만 두고 교사 블라인드 레코드·전문가 CSV에는 싣지 않는다.
+   */
+  rawOutput?: string | null;
+  /** 비밀값 점검(privacy.assertNoSecrets)에 걸려 rawOutput을 비웠다 */
+  rawOutputWithheld?: boolean;
+  /** 너무 길어 앞부분만 남겼다(RAW_OUTPUT_MAX_CHARS) */
+  rawOutputTruncated?: boolean;
 }
 
 /** 채점 작업 1건(=운영 1회)의 전체 기록 */

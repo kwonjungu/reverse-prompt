@@ -469,12 +469,19 @@ test('개인정보 점검이 hold_for_teacher이면 모델을 부르지 않고 �
   assert.equal(r.feedback, null);
 });
 
-test('호출 기록에 학생 원문을 남기지 않는다', async () => {
+test('호출 기록에 학생 원문을 남기지 않는다 — 연구 세션의 모델 원응답(rawOutput, 99-1 B2)만 예외', async () => {
   const text = '노란 우산을 쓴 아이가 공원에서 걷고 있다 비밀문장칠칠칠';
-  const h = harness({ script: [ok(validOutput({ object: area(3, '비밀문장칠칠칠 아님') })), fail()] });
-  const r = await run(h, { studentText: text });
-  assert.ok(!JSON.stringify(r.calls).includes('비밀문장칠칠칠'));
-  assert.ok(!JSON.stringify(r.calls).includes('노란 우산'));
+  // 일반 체험: 호출 기록 어디에도 없다.
+  const exp = harness({ script: [ok(validOutput({ object: area(3, '비밀문장칠칠칠 아님') })), fail()] });
+  const r1 = await run(exp, { studentText: text, sessionType: 'experience' });
+  assert.ok(!JSON.stringify(r1.calls).includes('비밀문장칠칠칠'));
+  assert.ok(!JSON.stringify(r1.calls).includes('노란 우산'));
+  // 연구 세션: 원응답 필드 밖에는 없다(원응답은 모델이 낸 인용을 그대로 담는다).
+  const res = harness({ script: [ok(validOutput({ object: area(3, '비밀문장칠칠칠 아님') })), fail()] });
+  const r2 = await run(res, { studentText: text });
+  const withoutRaw = r2.calls.map(({ rawOutput: _raw, ...rest }) => rest);
+  assert.ok(!JSON.stringify(withoutRaw).includes('비밀문장칠칠칠'));
+  assert.ok(!JSON.stringify(withoutRaw).includes('노란 우산'));
 });
 
 /* ───────────────────────── 단계 초점 영역 ───────────────────────── */
@@ -758,4 +765,56 @@ test('99-1 A1: 단서 팩 없이 채점하는 일반 체험(공통 문언만)은
   const r = await run(h, { wantFeedback: true, sessionType: 'experience' });
   assert.equal(h.inputs.length, 1);
   assert.equal(r.feedback?.status, 'verified');
+});
+
+/* ───────────────────────── 99-1 B2 모델 원응답 보관 ───────────────────────── */
+
+test('99-1 B2: 연구 세션 채점은 호출마다 모델 원응답(JSON 문자열)을 rawOutput으로 남긴다 — 형식 오류 호출 포함', async () => {
+  const bad = validOutput({ feature: area(2, '학생 글에 없는 근거', ['장화의 색']) });
+  const leaky = { ...GOOD_FEEDBACK, feedbackLine3: '장화의 색도 써 보세요.' };
+  const good = { ...validOutput(), ...leaky };
+  const h = harness({ script: [ok(bad), ok(good), ok(GOOD_FEEDBACK, 'served-fb')] });
+  const r = await run(h, { wantFeedback: true, sessionType: 'research_practice' });
+  assert.equal(r.calls.length, 3);
+  // 1회차: 형식 오류(근거가 원문에 없음) — 모델이 실제로 낸 근거를 그대로 볼 수 있다
+  assert.equal(r.calls[0].rawOutput, JSON.stringify(bad));
+  assert.ok(r.calls[0].rawOutput?.includes('학생 글에 없는 근거'));
+  assert.equal(r.calls[1].rawOutput, JSON.stringify(good));
+  assert.equal(r.calls[2].purpose, 'feedback');
+  assert.equal(r.calls[2].rawOutput, JSON.stringify(GOOD_FEEDBACK));
+  assert.equal(r.calls[0].rawOutputWithheld, undefined);
+});
+
+test('99-1 B2: 반복 채점과 같은 연구 경로(research_practice)도 남기고, 호출이 예외로 끝나면 null', async () => {
+  const h = harness({ script: [fail(), ok(validOutput())] });
+  const r = await run(h, { repeatIndex: 2 });
+  assert.equal(r.calls[0].rawOutput, null);
+  assert.equal(r.calls[1].rawOutput, JSON.stringify(validOutput()));
+});
+
+test('99-1 B2: 일반 체험(연수 포함)은 원응답을 남기지 않는다 — 필드 자체가 없다', async () => {
+  const h = harness({ script: [ok({ ...validOutput(), ...GOOD_FEEDBACK })] });
+  const r = await run(h, { wantFeedback: true, sessionType: 'experience' });
+  for (const c of r.calls) assert.equal('rawOutput' in c, false);
+  assert.doesNotMatch(JSON.stringify(r), /rawOutput/);
+});
+
+test('99-1 B2: 원응답에 비밀값처럼 보이는 것이 있으면 그 원응답만 비우고 표시한다(판정은 그대로)', async () => {
+  const secret = 'AIzaSyA1234567890abcdefghijklmnopqrstuvw';
+  const out = { ...validOutput(), extra: `모델이 덧붙인 말 ${secret}` };
+  const h = harness({ script: [ok(out)], assertNoSecrets: realPrivacy.assertNoSecrets });
+  const r = await run(h);
+  assert.equal(r.calls[0].rawOutput, null);
+  assert.equal(r.calls[0].rawOutputWithheld, true);
+  assert.equal(scored(r).areas.feature.level, 2);
+  assert.ok(!JSON.stringify(r).includes(secret));
+});
+
+test('99-1 B2: 원응답은 교사 블라인드 레코드와 전문가 CSV에 실리지 않는다', async () => {
+  const { toTeacherBlindRecord, toTeacherResearchProgressRecord } = await import('@/server/auth/deidentify');
+  const { EXPERT_SAMPLE_COLUMNS } = await import('@/server/export/practice-summary');
+  const doc = { researchId: 'P-1', questionId: 'L13', text: '글', scoring: { calls: [{ rawOutput: '{"object":1}' }] } };
+  assert.doesNotMatch(JSON.stringify(toTeacherBlindRecord(doc)), /rawOutput/);
+  assert.doesNotMatch(JSON.stringify(toTeacherResearchProgressRecord(doc)), /rawOutput/);
+  assert.deepEqual(EXPERT_SAMPLE_COLUMNS.map((c) => c.key), ['expert_case_id', 'question_id', 'student_text']);
 });

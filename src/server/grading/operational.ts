@@ -89,6 +89,27 @@ interface Attempt {
   failureKind: FailureKind | null;
 }
 
+/** 모델 원응답(rawOutput)으로 남길 최대 글자 수. 보통 2~4천 자다. 넘으면 앞부분만 남기고 표시한다. */
+export const RAW_OUTPUT_MAX_CHARS = 20000;
+
+/**
+ * 연구 세션 채점이면 모델 원응답을 JSON 문자열로 남길 필드를 만든다(99-1 B2). 일반 체험·연수는 빈 객체 —
+ * 필드 자체를 만들지 않는다(Firestore에 undefined를 쓰지 않게).
+ */
+function rawFields(keep: boolean, output: unknown): Pick<CallRecord, 'rawOutput' | 'rawOutputTruncated'> {
+  if (!keep) return {};
+  let raw: string | null;
+  try {
+    raw = output === undefined ? null : JSON.stringify(output);
+  } catch {
+    raw = null;
+  }
+  if (raw !== null && raw.length > RAW_OUTPUT_MAX_CHARS) {
+    return { rawOutput: raw.slice(0, RAW_OUTPUT_MAX_CHARS), rawOutputTruncated: true };
+  }
+  return { rawOutput: raw ?? null };
+}
+
 /** 기록에 학생 원문·비밀값이 섞이지 않도록 유형과 짧은 사유만 남긴다. */
 function safeFailureReason(kind: FailureKind, detail: string): string {
   return `${kind}: ${detail.replace(/\s+/g, ' ').slice(0, 160)}`;
@@ -152,7 +173,8 @@ export function createGrading(deps: GradingDeps): GradingApi {
     callId: string,
     retryIndex: number,
     input: ModelCallInput,
-    validate: { studentText: string; applicability: AreaApplicability }
+    validate: { studentText: string; applicability: AreaApplicability },
+    keepRaw: boolean
   ): Promise<Attempt> {
     const startedAt = now();
     let out: ModelCallOutput;
@@ -176,6 +198,7 @@ export function createGrading(deps: GradingDeps): GradingApi {
           startedAt: startedAt.toISOString(),
           finishedAt: finishedAt.toISOString(),
           durationMs: finishedAt.getTime() - startedAt.getTime(),
+          ...(keepRaw ? { rawOutput: null } : {}),
         },
       };
     }
@@ -188,6 +211,7 @@ export function createGrading(deps: GradingDeps): GradingApi {
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
       durationMs: finishedAt.getTime() - startedAt.getTime(),
+      ...rawFields(keepRaw, out.output),
     };
     const validated = validateAreaCall(out.output, validate);
     if (isAreaSchemaError(validated)) {
@@ -216,6 +240,8 @@ export function createGrading(deps: GradingDeps): GradingApi {
       // 연구 세션은 단서 없이 채점하지 않는다(getCues가 cues_missing으로 거부).
       // 일반 체험은 사전 확정 단서가 없으면 공통 문언만으로 채점하고 연구 자료로 쓰지 않는다.
       const commonOnly = req.sessionType === 'experience' && !entry.cuesLoaded;
+      // 연구 세션 채점만 모델 원응답을 남긴다(99-1 B2). 일반 체험·연수는 남기지 않는다.
+      const keepRaw = req.sessionType !== 'experience';
       const band: Band = entry.band;
       const focusArea = entry.kind === 'practice' ? stageFocusArea(entry.lesson) : null;
 
@@ -250,11 +276,22 @@ export function createGrading(deps: GradingDeps): GradingApi {
         feedback: FeedbackPresentation | null,
         servedModel: string | null
       ): ScoringRun => {
-        let safeCalls = calls;
+        // 원응답은 호출마다 따로 점검한다. 비밀값처럼 보이는 것이 있으면 그 원응답만 비우고 표시한다.
+        let safeCalls = calls.map((c) => {
+          if (typeof c.rawOutput !== 'string') return c;
+          try {
+            deps.privacy.assertNoSecrets({ rawOutput: c.rawOutput });
+            return c;
+          } catch {
+            const { rawOutputTruncated: _t, ...rest } = c;
+            void _t;
+            return { ...rest, rawOutput: null, rawOutputWithheld: true };
+          }
+        });
         try {
-          deps.privacy.assertNoSecrets(calls);
+          deps.privacy.assertNoSecrets(safeCalls);
         } catch {
-          safeCalls = calls.map((c) => ({ ...c, failureReason: c.failureReason ? 'redacted' : null }));
+          safeCalls = safeCalls.map((c) => ({ ...c, failureReason: c.failureReason ? 'redacted' : null }));
         }
         // 피드백 문구도 점검한다. 걸리면 판정은 그대로 두고 문구만 고정 안내로 바꾼다.
         let safeFeedback = feedback;
@@ -354,9 +391,9 @@ export function createGrading(deps: GradingDeps): GradingApi {
 
       // 1. 모델 1회. 실패·형식 오류일 때만 1회 다시 부른다.
       const callId = `${req.operationId}:c1`;
-      const first = await attemptOnce(callId, 0, input, validate);
+      const first = await attemptOnce(callId, 0, input, validate, keepRaw);
       const attempts = [first];
-      if (!first.areas) attempts.push(await attemptOnce(callId, 1, input, validate));
+      if (!first.areas) attempts.push(await attemptOnce(callId, 1, input, validate, keepRaw));
       const calls = attempts.map((a) => a.record);
       const success = attempts.find((a) => a.areas) ?? null;
       if (!success || !success.areas) {
@@ -403,6 +440,7 @@ export function createGrading(deps: GradingDeps): GradingApi {
             startedAt: startedAt.toISOString(),
             finishedAt: startedAt.toISOString(),
             durationMs: 0,
+            ...(keepRaw ? { rawOutput: null } : {}),
           };
           calls.push(record);
           try {
@@ -418,6 +456,7 @@ export function createGrading(deps: GradingDeps): GradingApi {
               }),
             });
             record.servedModel = out.servedModel ?? null;
+            Object.assign(record, rawFields(keepRaw, out.output));
             const draft = extractFeedbackDraft(out.output);
             if (!draft) record.failureReason = 'schema_error: 피드백 형식 오류';
             return draft;
