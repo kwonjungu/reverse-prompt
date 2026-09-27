@@ -103,6 +103,12 @@ export const COLLECTIONS = {
   adminEvents: 'admin_events',
 } as const;
 
+/**
+ * research_classes/{수업ID} 아래의 참가자 하위 컬렉션. 문서 ID가 연구ID이고
+ * 참가코드는 해시(codeHash)로만 둔다. 이름·출석 번호는 두지 않는다.
+ */
+export const PARTICIPANTS_SUBCOLLECTION = 'participants';
+
 /** research/{schemaVersion} 아래의 연구 자료 컬렉션 이름 */
 export const RESEARCH_COLLECTIONS = {
   assessmentSessions: 'assessment_sessions',
