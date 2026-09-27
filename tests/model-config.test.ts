@@ -35,7 +35,7 @@ test('문서가 적은 기본 모델이 config.ts의 기본값과 같다', () =>
   const m = /\|\|\s*'([^']+)'/.exec(read('src/server/config.ts').split('EVALUATION_MODEL_ID =')[1] ?? '');
   assert.ok(m, 'config.ts에서 기본 모델을 찾지 못했다');
   const defaultModel = m[1];
-  assert.equal(defaultModel, 'googleai/gemini-2.5-flash');
+  assert.equal(defaultModel, 'googleai/gemini-3.8-flash');
   for (const doc of ['README.md', 'CLAUDE.md']) {
     const text = read(doc);
     const named = [...text.matchAll(/googleai\/gemini-[\w.-]+/g)].map((x) => x[0]);

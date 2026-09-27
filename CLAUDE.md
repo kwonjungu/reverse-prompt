@@ -55,7 +55,7 @@ Firebase Emulator 권한 시험(`tests/rules/`)은 에뮬레이터가 없으면 
 | `GOOGLE_GENAI_API_KEY` | Genkit Gemini 호출 (서버) | 누락 시 `genkit.ts`에서 throw |
 | `NEXT_PUBLIC_FIREBASE_*` 6개 | Firebase 클라이언트 SDK | |
 | `NEIS_API_KEY` | 학교 검색 호출 한도 ↑ | 선택 |
-| `EVALUATION_MODEL_ID` | 채점 모델 | 비우면 기본 `googleai/gemini-2.5-flash`(`src/server/config.ts`). 실제로 답한 모델은 채점 기록의 `servedModel` |
+| `EVALUATION_MODEL_ID` | 채점 모델 | 비우면 기본 `googleai/gemini-3.8-flash`(`src/server/config.ts`). 실제로 답한 모델은 채점 기록의 `servedModel` |
 | `EVALUATION_TEMPERATURE` | 채점 온도 | 기본 0.2 |
 | `EVALUATION_MODEL_VERIFIED` | 운영자가 모델 접근·출력 스키마를 확인함 | `true`가 아니면 연구 시작 차단 |
 | `RESEARCH_ASSET_DIR` | 비공개 연구 자산 경로 | **선택(로컬·개발).** 검사 이미지 + `cue-pack.json`. 여기 `cue-pack.json`이 있으면 단서 팩은 이 파일이 우선한다. 비우면(Vercel) 관리 화면에서 올린 Firestore 사본(`admin_config/cue_pack`)을 읽는다 |
