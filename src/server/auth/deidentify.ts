@@ -108,6 +108,30 @@ export function toTeacherBlindRecord(record: Record<string, unknown>): Record<st
   return out;
 }
 
+/**
+ * 연구 수업의 교사 화면('연구 자료' 탭 — loadResearchRecords)에 주는 필드. 진행을 셀 것만 남긴다(99-1 A3).
+ * 학생 원문(text, 옛 문서의 prompt·finalPrompt 등)·feedbackReview(학생이 적은 까닭 note 포함)·AI 판정·시각을
+ * 모두 뺀다. 빼는 목록이 아니라 **남기는 목록**이라, 문서에 다른 이름의 원문 필드가 있어도 새어 나가지 않는다.
+ * 교사 블라인드 채점 화면(loadTeacherBlindRecords → toTeacherBlindRecord)은 채점을 하는 곳이라 원문을 그대로 둔다.
+ */
+export const TEACHER_RESEARCH_PROGRESS_FIELDS = [
+  'id',
+  'researchId',
+  'classResearchId',
+  'questionId',
+  'responseStatus',
+  'attemptNo',
+] as const;
+
+/** 연구 수업 교사용 진행 레코드: 연구ID·문항·제출 상태·시도 번호만. 원본을 바꾸지 않는다. */
+export function toTeacherResearchProgressRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of TEACHER_RESEARCH_PROGRESS_FIELDS) {
+    if (key in record) out[key] = record[key];
+  }
+  return out;
+}
+
 /** 남아 있는 식별 필드 이름 목록. 비어 있어야 정상이다. */
 export function remainingIdentifiers(record: Record<string, unknown>): string[] {
   return Object.keys(record).filter((k) =>

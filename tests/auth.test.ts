@@ -27,8 +27,11 @@ import {
   remainingIdentifiers,
   toResearcherView,
   toTeacherBlindRecord,
+  toTeacherResearchProgressRecord,
+  TEACHER_RESEARCH_PROGRESS_FIELDS,
   buildModelPayload,
 } from '@/server/auth/deidentify';
+import { readFileSync } from 'node:fs';
 
 const teacher: ServerPrincipal = {
   uid: 'teacher-1',
@@ -433,3 +436,57 @@ test('requireClassAccess가 행위를 판정에 넘긴다', () => {
   );
   assert.ok(/\{ scope: 'research', classResearchId \},\s*action/.test(body));
 });
+
+/* ─────────────── 99-1 A3: 연구 수업 교사 화면에는 학생 원문이 없다 ─────────────── */
+
+/** 연구 연습 제출 문서의 모양(옛 v7 문서의 다른 이름 원문 필드까지 섞었다) */
+function researchPracticeDoc(): Record<string, unknown> {
+  return {
+    id: 'ps_abc',
+    schemaVersion: 'v12.2-practice-submission',
+    researchId: 'P-ABCDEFGHJKLM',
+    classResearchId: 'CLS-AAA',
+    sessionType: 'research_practice',
+    questionId: 'L19',
+    questionLevel: 19,
+    lesson: 3,
+    band: 'B',
+    attemptNo: 2,
+    text: '흰 고양이가 방석 위에서 자고 있다.',
+    prompt: '옛 문서의 원문 필드',
+    finalPrompt: '옛 요약의 원문 필드',
+    studentText: '다른 이름의 원문',
+    responseStatus: 'submitted',
+    persistStatus: 'stored',
+    missingReason: null,
+    scoring: { result: { status: 'scored', areas: {} }, feedback: { text: '피드백', status: 'verified' } },
+    feedbackReview: { kind: 'kept', note: '학생이 예전에 적은 까닭', revisedSubmissionId: null },
+    startedAt: '2026-09-01T01:00:00.000Z',
+    submittedAt: '2026-09-01T01:02:00.000Z',
+    schoolName: '어느 학교',
+  };
+}
+
+test('A3 연구 수업 교사 레코드: 연구ID·문항·제출 상태·시도 번호만 남고 학생 원문·까닭·AI 판정·시각이 없다', () => {
+  const view = toTeacherResearchProgressRecord(researchPracticeDoc());
+  assert.deepEqual(Object.keys(view).sort(), ['attemptNo', 'classResearchId', 'id', 'questionId', 'researchId', 'responseStatus']);
+  assert.deepEqual([...TEACHER_RESEARCH_PROGRESS_FIELDS].sort(), Object.keys(view).sort());
+  const json = JSON.stringify(view);
+  for (const leaked of ['흰 고양이', '옛 문서의 원문', '옛 요약의 원문', '다른 이름의 원문', '학생이 예전에 적은 까닭', '피드백', '2026-09-01', '어느 학교']) {
+    assert.equal(json.includes(leaked), false, `${leaked}가 교사에게 가면 안 된다`);
+  }
+});
+
+test('A3 두 경로 구분: 연구 자료 탭(loadResearchRecords)은 진행 레코드, 블라인드 채점(loadTeacherBlindRecords)은 원문 유지', () => {
+  const src = readFileSync('src/server/auth/class-data-actions.ts', 'utf8');
+  const research = src.slice(src.indexOf('export async function loadResearchRecords'), src.indexOf('export async function loadTeacherBlindRecords'));
+  const blindGrading = src.slice(src.indexOf('export async function loadTeacherBlindRecords'), src.indexOf('export async function requestResearchDataDisposition'));
+  assert.match(research, /blind \? toTeacherResearchProgressRecord\(r\) : toResearcherView\(r\)/);
+  assert.doesNotMatch(research, /toTeacherBlindRecord\(/);
+  assert.match(blindGrading, /toTeacherBlindRecord\(/);
+  // 블라인드 채점 레코드는 채점할 학생 글을 그대로 둔다(AI 판정·시각만 뺀다).
+  const blind = toTeacherBlindRecord(researchPracticeDoc());
+  assert.equal(blind.text, '흰 고양이가 방석 위에서 자고 있다.');
+  assert.equal('scoring' in blind, false);
+});
+

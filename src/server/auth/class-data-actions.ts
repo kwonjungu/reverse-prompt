@@ -18,7 +18,12 @@
 import { auth } from '@/server/auth';
 import { AuthError } from '@/server/auth/contract';
 import { evaluateAccess } from '@/server/auth/access';
-import { stripIdentifiers, toResearcherView, toTeacherBlindRecord } from '@/server/auth/deidentify';
+import {
+  stripIdentifiers,
+  toResearcherView,
+  toTeacherBlindRecord,
+  toTeacherResearchProgressRecord,
+} from '@/server/auth/deidentify';
 import {
   COLLECTIONS,
   RESEARCH_COLLECTIONS,
@@ -170,8 +175,9 @@ export async function deleteLessonRecord(
  * 학교 실명 대응표·출석번호·학교명은 여기서 걸러 낸다.
  *
  * 연구자는 비식별 문서 전체(공통 루브릭 v12-2 영역별 수준·근거·피드백 포함)를 본다.
- * 교사는 학생 현황과 같은 규칙으로 AI 채점 결과·피드백·제출 시각을 보지 않는다
- * (교사 블라인드 채점 보호, toTeacherBlindRecord). 진행 수를 셀 연구ID·문항·제출 상태만 남는다.
+ * 교사는 연구ID·문항·제출 상태·시도 번호만 받는다(99-1 A3, toTeacherResearchProgressRecord — 남기는 목록 방식).
+ * 학생 원문·학생이 적은 까닭(feedbackReview.note)·AI 채점 결과·피드백·시각은 교사에게 가지 않는다.
+ * 원문이 필요한 교사 블라인드 채점은 loadTeacherBlindRecords(toTeacherBlindRecord)가 따로 맡는다.
  */
 export async function loadResearchRecords(classResearchId: string): Promise<{
   records: Record<string, unknown>[];
@@ -195,11 +201,11 @@ export async function loadResearchRecords(classResearchId: string): Promise<{
     .get();
   const docs = snap.docs.map((d) => ({ ...d.data(), id: d.id }) as Record<string, unknown>);
   return {
-    records: docs.map((r) => (blind ? toTeacherBlindRecord(r) : toResearcherView(r))),
+    records: docs.map((r) => (blind ? toTeacherResearchProgressRecord(r) : toResearcherView(r))),
     rows: docs.map((r) => toResearchRecordRow(stripIdentifiers(r), { blind })),
     blind,
     notice: blind
-      ? '연구ID 자료입니다. 학교명·출석번호·실명 대응표는 포함하지 않습니다. 교사 블라인드 채점을 흐리지 않도록 AI 채점 결과·피드백·제출 시각은 보여 주지 않습니다.'
+      ? '연구ID별 진행 기록입니다. 학교명·출석번호·실명 대응표는 포함하지 않습니다. 교사 블라인드 채점을 흐리지 않도록 학생 문장·AI 채점 결과·피드백·제출 시각은 보여 주지 않습니다.'
       : '연구ID 자료입니다. 학교명·출석번호·실명 대응표는 포함하지 않습니다.',
   };
 }

@@ -386,7 +386,9 @@ Hattie와 Timperley(2007)의 목표·현재 수행·다음 행동 구분을 참�
   응답에서 빼고 보낸다(`stripLegacyScores`, 저장 문서는 그대로).
 - 개인정보 점검으로 멈춘 제출은 **건수만** 보인다(`privacyHoldCount`, 글·학생은 기록하지 않는다).
 - **연구 수업은 교사 블라인드 채점을 흐리지 않도록 AI 판정·답안·시각을 보여 주지 않는다.** 참가자별 진행 수만 보인다.
-  교사 화면의 '연구 자료' 탭도 교사에게는 `toTeacherBlindRecord`(AI 판정·피드백·모든 시각 필드 제거)만 준다. 연구자 역할은 전체를 본다.
+  교사 화면의 '연구 자료' 탭(`loadResearchRecords`)은 교사에게 **연구ID·문항·제출 상태·시도 번호만** 준다(99-1 A3,
+  `toTeacherResearchProgressRecord` — 남기는 목록 방식이라 학생 원문·`feedbackReview.note`·AI 판정·시각이 어떤 이름으로 있어도 빠진다).
+  원문이 필요한 교사 블라인드 채점(`loadTeacherBlindRecords`)은 `toTeacherBlindRecord`(AI 판정·피드백·시각만 제거, 원문 유지)를 쓴다. 연구자 역할은 전체를 본다.
 - 단계 열은 문항 ID로 현재 단계표에서 정한다(옛 기록의 저장된 `lesson`은 3·4단계가 바뀌기 전 값이라 쓰지 않는다).
 
 ## 논문 v12 반영 — 시도 기록·문항별 힌트·연구 추출

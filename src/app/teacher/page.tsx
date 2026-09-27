@@ -1140,7 +1140,9 @@ export default function TeacherPage() {
                     </TableBody>
                   </Table>
                   <details>
-                    <summary className="cursor-pointer text-sm font-medium no-print">비식별 원문 보기</summary>
+                    <summary className="cursor-pointer text-sm font-medium no-print">
+                      {research.blind ? '진행 기록 보기(연구ID·문항·상태)' : '비식별 원문 보기'}
+                    </summary>
                     <pre className="mt-3 text-xs whitespace-pre-wrap">
                       {JSON.stringify(research.records, null, 2)}
                     </pre>
