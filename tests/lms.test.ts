@@ -13,6 +13,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 
 import {
   scoringViewOf,
@@ -53,7 +54,6 @@ function sub(
   at: string,
   extra: Partial<ProgressSubmission> = {}
 ): ProgressSubmission {
-  const overall = levels ? scoringViewOf(areaDoc(levels)) : null;
   return {
     ownerKey,
     researchId: null,
@@ -63,7 +63,6 @@ function sub(
     text: `${questionId} 답`,
     submittedAt: at,
     levels,
-    overallLevel: overall && overall.kind === 'areas' ? overall.overallLevel : null,
     legacy: false,
     reviewed: false,
     ...extra,
@@ -122,54 +121,51 @@ test('다시 들어와 세션이 바뀌어도 같은 번호면 한 줄이다 —
   assert.equal(seven.questionsAttempted, 2);
   assert.deepEqual(seven.attemptedByLesson, { 1: 2 });
   assert.equal(seven.online, true);
-  // L01의 마지막 종합 수준은 (4+3+3)/3=3.33→3, L02는 결측이므로 평균은 3이다(1수준·0점으로 넣지 않는다).
-  assert.equal(seven.averageLevel, 3);
-  // 가장 최근 제출(L02)은 결측이므로 최근 수준은 그 앞의 3이다.
-  assert.equal(seven.latestLevel, 3);
+  // 가장 최근 제출(L02)은 결측이므로 최근 영역 수준은 그 앞 제출의 것이다(1수준·0점으로 채우지 않는다).
   assert.deepEqual(seven.latestLevels, lv(4, 3, 3));
   assert.equal(seven.recent[0].questionId, 'L02');
   assert.equal(seven.recent[0].levels, null);
-  assert.equal(seven.recent[0].overallLevel, null);
   assert.equal(seven.recent[0].legacy, false);
   assert.equal(progress.detailVisible, true);
   assert.equal(progress.totals.online, 2);
   assert.equal(progress.totals.submissions, 3);
-  assert.equal(progress.totals.averageLevel, 3);
 
   const three = progress.students[0];
   assert.equal(three.submissions, 0, '들어오기만 한 학생도 줄로 보인다');
-  assert.equal(three.averageLevel, null);
-  assert.equal(three.latestLevel, null);
+  assert.equal(three.latestLevels, null);
   // 100점 점수 필드는 더 이상 없다.
   assert.equal('averageScore' in three, false);
   assert.equal('latestScore' in three, false);
   assert.equal('averageScore' in progress.totals, false);
 });
 
-test('평균 수준은 정수로 반올림하지 않고 소수 한 자리로 낸다', () => {
+test('99-1 B1: 교사 학생 현황에는 종합 수준·평균 수준이 없고 영역별 수준만 있다', () => {
   const progress = summarizeClassProgress({
     sessionType: 'experience',
     sessions: [session('hhhh8888', 4)],
     submissions: [
       sub('session:hhhh8888', 'L01', lv(2, 2, 2), '2026-09-26T01:10:00.000Z'),
       sub('session:hhhh8888', 'L02', lv(3, 3, 3), '2026-09-26T01:20:00.000Z'),
-      sub('session:hhhh8888', 'L03', lv(3, 3, 3), '2026-09-26T01:30:00.000Z'),
+      sub('session:hhhh8888', 'L03', lv(3, 'not_applicable', 3), '2026-09-26T01:30:00.000Z'),
     ],
     now: NOW,
   });
-  // (2+3+3)/3 = 2.666… → 2.7
-  assert.equal(progress.students[0].averageLevel, 2.7);
-  assert.equal(progress.totals.averageLevel, 2.7);
+  const row = progress.students[0];
+  assert.deepEqual(row.latestLevels, lv(3, 'not_applicable', 3));
+  for (const key of ['averageLevel', 'latestLevel', 'overallLevel']) {
+    assert.equal(key in row, false, `학생 줄에 ${key}가 있으면 안 된다`);
+    assert.equal(key in progress.totals, false, `합계에 ${key}가 있으면 안 된다`);
+  }
+  assert.equal('overallLevel' in row.recent[0], false);
+  // 교사 화면으로 가는 채점 결과 모양에도 종합 수준이 없다.
+  const view = scoringViewOf(areaDoc(lv(4, 'not_applicable', 3)));
+  assert.deepEqual(view, { kind: 'areas', levels: lv(4, 'not_applicable', 3) });
+  assert.doesNotMatch(JSON.stringify(progress), /overallLevel|averageLevel/);
 });
 
-test('해당 없음 영역은 종합 수준 평균에서 빠진다', () => {
-  const doc = areaDoc(lv(4, 'not_applicable', 3));
-  const view = scoringViewOf(doc);
-  assert.equal(view.kind, 'areas');
-  if (view.kind !== 'areas') return;
-  assert.deepEqual(view.levels, lv(4, 'not_applicable', 3));
-  // (4+3)/2 = 3.5 → 반올림 4
-  assert.equal(view.overallLevel, 4);
+test('99-1 B1: 교사 화면 코드에 평균 종합 수준·평균 수준 표시가 없다', () => {
+  const page = readFileSync('src/app/teacher/page.tsx', 'utf8');
+  assert.doesNotMatch(page, /평균 종합 수준|평균 수준|averageLevel|overallLevel/);
 });
 
 test('옛 v7 기록은 옛 채점으로만 남고 v12-2 평균·최근 수준에 섞이지 않는다', () => {
@@ -185,9 +181,8 @@ test('옛 v7 기록은 옛 채점으로만 남고 v12-2 평균·최근 수준에
     now: NOW,
   });
   const row = progress.students[0];
-  // L01만 v12-2: (2+2+1)/3=1.67 → 2
-  assert.equal(row.averageLevel, 2);
-  assert.equal(row.latestLevel, 2);
+  // 최근 영역 수준은 v12-2 기록(L01)에서만 찾는다.
+  assert.deepEqual(row.latestLevels, lv(2, 2, 1));
   assert.equal(row.legacySubmissions, 2);
   assert.equal(progress.totals.legacySubmissions, 2);
   assert.equal(row.recent[0].legacy, true);
@@ -208,14 +203,11 @@ test('연구 수업은 채점 결과·답안·시각을 교사에게 내보내�
     now: NOW,
   });
   assert.equal(progress.detailVisible, false);
-  assert.equal(progress.totals.averageLevel, null);
   assert.equal(progress.totals.legacySubmissions, 0);
   const row = progress.students[0];
   assert.equal(row.label, 'R-001');
   assert.equal(row.submissions, 2);
-  assert.equal(row.latestLevel, null);
   assert.equal(row.latestLevels, null);
-  assert.equal(row.averageLevel, null);
   assert.equal(row.legacySubmissions, 0);
   assert.equal(row.lastActivityAt, null);
   assert.deepEqual(row.recent, []);
@@ -259,7 +251,6 @@ test('저장 실패·미제출 기록은 세지 않고 결측은 null이다', ()
     scoring: { result: { status: 'missing', areas: null, reason: 'schema_error' } },
   });
   assert.equal(missing?.levels, null);
-  assert.equal(missing?.overallLevel, null);
   assert.equal(missing?.legacy, false);
 
   const scored = toProgressSubmission({
@@ -268,8 +259,6 @@ test('저장 실패·미제출 기록은 세지 않고 결측은 null이다', ()
     feedbackReview: { kind: 'kept' },
   });
   assert.deepEqual(scored?.levels, lv(3, 2, 'not_applicable'));
-  // (3+2)/2 = 2.5 → 반올림 3
-  assert.equal(scored?.overallLevel, 3);
   assert.equal(scored?.legacy, false);
   assert.equal(scored?.reviewed, true);
 });
@@ -326,7 +315,6 @@ test('옛 v7 문서는 결과 모양이나 rubricVersion으로 옛 기록이 된
   assert.equal(sub?.legacy, true);
   assert.equal(JSON.stringify(sub).includes('62.5'), false, '옛 100점 점수가 교사 화면 자료에 남아 있다');
   assert.equal(sub?.levels, null);
-  assert.equal(sub?.overallLevel, null);
 });
 
 test('단계는 문항 번호로 지금 6단계 배치에서 정한다', () => {
@@ -393,7 +381,7 @@ test('연구 자료 탭의 줄: 교사(blind)에게는 채점 결과·피드백 
   assert.equal(researcher.stage, 4);
   assert.equal(researcher.legacy, false);
   assert.equal(researcher.feedbackStatus, 'verified');
-  assert.deepEqual(researcher.scoring, { kind: 'areas', levels: lv(3, 'not_applicable', 2), overallLevel: 3 });
+  assert.deepEqual(researcher.scoring, { kind: 'areas', levels: lv(3, 'not_applicable', 2) });
 
   const teacher = toResearchRecordRow(doc, { blind: true });
   assert.equal(teacher.scoring, null);

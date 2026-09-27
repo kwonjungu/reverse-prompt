@@ -31,7 +31,6 @@ import {
   TEACHER_RESEARCH_PROGRESS_FIELDS,
   buildModelPayload,
 } from '@/server/auth/deidentify';
-import { readFileSync } from 'node:fs';
 
 const teacher: ServerPrincipal = {
   uid: 'teacher-1',

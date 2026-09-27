@@ -10,16 +10,17 @@
  *     비연구 수업 기록이며 담당 교사만 본다.
  *   - 연구 수업: 교사 블라인드 채점을 흐리지 않도록 AI 채점 결과와 답안·시각을 보여 주지 않는다
  *     (deidentify.ts의 TEACHER_BLIND_HIDDEN_FIELDS와 같은 취지). 연구ID별 진행 수만 센다.
- *   - 채점 결과는 공통 루브릭 v12-2(3영역 4수준)다. 100점 점수는 쓰지 않는다.
- *     평균·최근은 종합 수준(해당 영역 평균을 반올림한 1~4, src/lib/scoring.ts의 overallLevelOf)이다.
+ *   - 채점 결과는 공통 루브릭 v12-2(3영역 4수준)의 영역별 수준만 보인다. 100점 점수는 쓰지 않는다.
+ *     종합 수준(overallLevelOf)과 그 평균은 교사 화면에 싣지 않는다(99-1 B1, 논문 부록 2 나 — 교사 LMS는 영역별 수준).
+ *     종합 수준은 연구 추출(층 나누기)과 연구자 CSV에만 쓴다.
  *   - 옛 v7 기록(축별 5수준·100점)은 legacy 표시만 남기고 점수는 싣지 않는다. 화면에는 '옛 채점 기록'으로 보이고
- *     v12-2 평균·최근 수준에 섞지 않는다. 옛 기록에서 영역 수준을 지어내지 않는다.
- *   - 결측은 1수준도 0점도 아니라 null이다. 평균에 넣지 않는다.
+ *     최근 영역 수준에 섞지 않는다. 옛 기록에서 영역 수준을 지어내지 않는다.
+ *   - 결측은 1수준도 0점도 아니라 null이다.
  *   - 제출 수는 진행 정보일 뿐 단계 개방 조건이 아니다.
  */
 
 import type { SessionType } from '@/lib/research/types';
-import { overallLevelOf, type AreaLevel, type AreaLevels } from '@/lib/scoring';
+import type { AreaLevels } from '@/lib/scoring';
 import { chasiOfLevel } from '@/lib/stages';
 import { isLegacyPracticeRecord, storedAreaLevels } from '@/server/lessons/store-core';
 
@@ -27,12 +28,12 @@ import { isLegacyPracticeRecord, storedAreaLevels } from '@/server/lessons/store
 
 /**
  * 저장된 제출 문서 한 건의 채점 결과를 화면에 보일 모양으로 줄인 것.
- *   areas   공통 루브릭 v12-2로 채점됨. 영역별 수준(해당 없음 포함)과 종합 수준.
+ *   areas   공통 루브릭 v12-2로 채점됨. 영역별 수준(해당 없음 포함). 종합 수준은 담지 않는다(99-1 B1).
  *   legacy  옛 v7(또는 그 이전) 방식 기록. 100점 점수는 화면·내보내기에 싣지 않으므로 읽지 않는다(논문 v12-2 B1).
  *   missing v12-2 기록인데 채점하지 못했다(결측) 또는 채점 결과가 없다.
  */
 export type ScoringView =
-  | { kind: 'areas'; levels: AreaLevels; overallLevel: AreaLevel | null }
+  | { kind: 'areas'; levels: AreaLevels }
   | { kind: 'legacy' }
   | { kind: 'missing' };
 
@@ -84,7 +85,7 @@ export function scoringViewOf(raw: Record<string, unknown>): ScoringView {
   }
   const levels = storedAreaLevels(result);
   if (!levels) return { kind: 'missing' };
-  return { kind: 'areas', levels, overallLevel: overallLevelOf(levels) };
+  return { kind: 'areas', levels };
 }
 
 /**
@@ -114,9 +115,7 @@ export interface ProgressSubmission {
   submittedAt: string | null;
   /** v12-2로 채점된 영역별 수준. 결측·옛 기록이면 null */
   levels: AreaLevels | null;
-  /** v12-2 종합 수준(1~4). levels가 null이면 null */
-  overallLevel: AreaLevel | null;
-  /** 옛 v7 기록인가. 옛 기록은 v12-2 평균·최근 수준에 넣지 않고 점수도 싣지 않는다. */
+  /** 옛 v7 기록인가. 옛 기록은 최근 영역 수준에 넣지 않고 점수도 싣지 않는다. */
   legacy: boolean;
   reviewed: boolean;
 }
@@ -136,7 +135,6 @@ export interface RecentAttempt {
   attemptNo: number | null;
   /** v12-2 영역별 수준. 결측·옛 기록이면 null */
   levels: AreaLevels | null;
-  overallLevel: AreaLevel | null;
   /** 옛 v7 기록. 화면에는 '옛 채점 기록'으로만 보이고 점수는 없다. */
   legacy: boolean;
   text: string;
@@ -156,16 +154,9 @@ export interface StudentProgressRow {
   questionsAttempted: number;
   submissions: number;
   reviewedCount: number;
-  /** 가장 최근 v12-2 채점 제출의 종합 수준(1~4). 연구 수업이면 항상 null. */
-  latestLevel: AreaLevel | null;
-  /** 그 제출의 영역별 수준. 연구 수업이면 항상 null. */
+  /** 가장 최근 v12-2 채점 제출의 영역별 수준. 연구 수업이면 항상 null. */
   latestLevels: AreaLevels | null;
-  /**
-   * 문항마다 마지막으로 v12-2 채점된 종합 수준의 평균(소수 한 자리, 정수로 반올림하지 않는다).
-   * 결측·옛 기록은 넣지 않는다. 연구 수업이면 null.
-   */
-  averageLevel: number | null;
-  /** 옛 채점(v7) 기록 수. 평균에 넣지 않았다는 것을 알리려고 센다. 연구 수업이면 0. */
+  /** 옛 채점(v7) 기록 수. 영역 수준이 없다는 것을 알리려고 센다. 연구 수업이면 0. */
   legacySubmissions: number;
   /** 최근 제출(새것부터). 연구 수업이면 비어 있다. */
   recent: RecentAttempt[];
@@ -178,9 +169,7 @@ export interface ClassProgress {
     students: number;
     online: number;
     submissions: number;
-    /** 학생·문항마다 마지막 v12-2 종합 수준의 평균(소수 한 자리). 연구 수업이면 null. */
-    averageLevel: number | null;
-    /** 옛 채점 기록 수(평균에 넣지 않음). 연구 수업이면 0. */
+    /** 옛 채점 기록 수(영역 수준 없음). 연구 수업이면 0. */
     legacySubmissions: number;
   };
   students: StudentProgressRow[];
@@ -204,7 +193,6 @@ export function toProgressSubmission(raw: Record<string, unknown>): ProgressSubm
     text: str(raw.text),
     submittedAt: str(raw.submittedAt) ?? str(raw.createdAt),
     levels: view.kind === 'areas' ? view.levels : null,
-    overallLevel: view.kind === 'areas' ? view.overallLevel : null,
     legacy: view.kind === 'legacy',
     reviewed: raw.feedbackReview !== null && raw.feedbackReview !== undefined,
   };
@@ -268,13 +256,6 @@ export function toProgressSession(sid: string, raw: Record<string, unknown>): Pr
 
 function isOnline(session: ProgressSession, nowIso: string): boolean {
   return !session.revokedAt && session.expiresAt !== null && session.expiresAt > nowIso;
-}
-
-/** 평균을 소수 한 자리로 낸다. 정수 수준으로 반올림하지 않는다. 값이 없으면 null. */
-function average(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const sum = values.reduce((a, b) => a + b, 0);
-  return Math.round((sum / values.length) * 10) / 10;
 }
 
 function later(a: string | null, b: string | null): string | null {
@@ -355,30 +336,20 @@ export function summarizeClassProgress(input: {
     b.lastActivityAt = later(b.lastActivityAt, sub.submittedAt);
   }
 
-  const allLatestLevels: number[] = [];
   let allLegacy = 0;
   const students: StudentProgressRow[] = [...buckets.values()].map((b) => {
     const sorted = [...b.items].sort((x, y) => (y.submittedAt ?? '').localeCompare(x.submittedAt ?? ''));
     const byLesson = new Map<number, Set<string>>();
-    const latestLevelByQuestion = new Map<string, number>();
     for (const item of sorted) {
       if (item.lesson !== null) {
         if (!byLesson.has(item.lesson)) byLesson.set(item.lesson, new Set());
         byLesson.get(item.lesson)!.add(item.questionId);
       }
-      // sorted가 새것부터이므로 처음 만난 v12-2 종합 수준이 그 문항의 마지막 수준이다.
-      // 옛 채점·결측은 건너뛴다(평균에 넣지 않는다).
-      if (item.overallLevel !== null && !latestLevelByQuestion.has(item.questionId)) {
-        latestLevelByQuestion.set(item.questionId, item.overallLevel);
-      }
     }
-    const latestScored = sorted.find((i) => i.overallLevel !== null) ?? null;
-    const questionLevels = [...latestLevelByQuestion.values()];
+    // sorted가 새것부터이므로 처음 만난 v12-2 채점이 가장 최근이다. 옛 채점·결측은 건너뛴다.
+    const latestScored = sorted.find((i) => i.levels !== null) ?? null;
     const legacySubmissions = sorted.filter((i) => i.legacy).length;
-    if (!research) {
-      allLatestLevels.push(...questionLevels);
-      allLegacy += legacySubmissions;
-    }
+    if (!research) allLegacy += legacySubmissions;
 
     return {
       key: b.key,
@@ -391,9 +362,7 @@ export function summarizeClassProgress(input: {
       questionsAttempted: new Set(sorted.map((i) => i.questionId)).size,
       submissions: sorted.length,
       reviewedCount: new Set(sorted.filter((i) => i.reviewed).map((i) => i.questionId)).size,
-      latestLevel: research ? null : latestScored?.overallLevel ?? null,
       latestLevels: research ? null : latestScored?.levels ?? null,
-      averageLevel: research ? null : average(questionLevels),
       legacySubmissions: research ? 0 : legacySubmissions,
       recent: research
         ? []
@@ -402,7 +371,6 @@ export function summarizeClassProgress(input: {
             lesson: i.lesson,
             attemptNo: i.attemptNo,
             levels: i.levels,
-            overallLevel: i.overallLevel,
             legacy: i.legacy,
             text: i.text ?? '',
             submittedAt: i.submittedAt,
@@ -424,7 +392,6 @@ export function summarizeClassProgress(input: {
       students: students.length,
       online: students.filter((s) => s.online).length,
       submissions: students.reduce((a, s) => a + s.submissions, 0),
-      averageLevel: research ? null : average(allLatestLevels),
       legacySubmissions: research ? 0 : allLegacy,
     },
     students,

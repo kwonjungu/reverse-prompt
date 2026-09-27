@@ -117,7 +117,7 @@ function ScoringCell({ view, compact = false }: { view: ScoringView | null | und
   }
   if (view.kind === 'legacy') {
     return (
-      <span className="whitespace-nowrap text-xs text-muted-foreground" title="옛 기준으로 채점된 기록입니다. 영역 수준이 없어 평균에 넣지 않습니다.">
+      <span className="whitespace-nowrap text-xs text-muted-foreground" title="옛 기준으로 채점된 기록입니다. 영역 수준이 없습니다.">
         옛 채점 기록
       </span>
     );
@@ -610,19 +610,11 @@ export default function TeacherPage() {
                     </Button>
                   </CardHeader>
                   <CardContent>
-                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <div className="grid grid-cols-3 gap-3">
                       {[
                         { label: '지금 들어와 있음', value: `${progress.totals.online}명` },
                         { label: '학생', value: `${progress.totals.students}명` },
                         { label: '제출', value: `${progress.totals.submissions}건` },
-                        {
-                          label: '평균 종합 수준',
-                          value: progress.detailVisible
-                            ? progress.totals.averageLevel === null
-                              ? '-'
-                              : `${progress.totals.averageLevel.toFixed(1)} / 4`
-                            : '표시 안 함',
-                        },
                       ].map((tile) => (
                         <div key={tile.label} className="rounded-xl bg-muted/50 p-4">
                           <div className="text-xs text-muted-foreground">{tile.label}</div>
@@ -646,10 +638,9 @@ export default function TeacherPage() {
                     {progress.detailVisible && (
                       <p className="mt-3 text-sm text-muted-foreground">
                         AI는 대상·특징·관계 세 영역을 각각 1~4수준으로 봅니다(●가 찬 칸 수). 해당 없는 영역은
-                        보이지 않습니다. 종합 수준은 해당 영역 수준의 평균을 반올림한 1~4이고, 평균은 문항마다
-                        마지막 종합 수준의 평균입니다. 학생 화면에는 종합 수준도 점수도 보이지 않습니다.
+                        보이지 않습니다. 세 영역을 합치거나 평균 내지 않고 영역별로만 보여 줍니다. 학생 화면에는 점수가 보이지 않습니다.
                         {progress.totals.legacySubmissions > 0 &&
-                          ` 옛 기준으로 채점된 기록 ${progress.totals.legacySubmissions}건은 '옛 채점 기록'으로 따로 보이며 평균에 넣지 않았습니다.`}
+                          ` 옛 기준으로 채점된 기록 ${progress.totals.legacySubmissions}건은 영역 수준이 없어 '옛 채점 기록'으로 따로 보입니다.`}
                       </p>
                     )}
                     <p className="mt-2 text-xs text-muted-foreground">
@@ -678,7 +669,6 @@ export default function TeacherPage() {
                               </TableHead>
                             ))}
                             <TableHead className="text-right">제출</TableHead>
-                            {progress.detailVisible && <TableHead className="text-right">평균 수준</TableHead>}
                             {progress.detailVisible && <TableHead>최근 채점</TableHead>}
                             {progress.detailVisible && <TableHead>마지막 활동</TableHead>}
                           </TableRow>
@@ -727,11 +717,6 @@ export default function TeacherPage() {
                                   })}
                                   <TableCell className="text-right tabular-nums">{st.submissions}</TableCell>
                                   {progress.detailVisible && (
-                                    <TableCell className="text-right tabular-nums">
-                                      {st.averageLevel === null ? '-' : st.averageLevel.toFixed(1)}
-                                    </TableCell>
-                                  )}
-                                  {progress.detailVisible && (
                                     <TableCell>
                                       {st.latestLevels ? (
                                         <AreaLevelDots levels={st.latestLevels} compact />
@@ -760,7 +745,7 @@ export default function TeacherPage() {
                                                 <ScoringCell
                                                   view={
                                                     a.levels
-                                                      ? { kind: 'areas', levels: a.levels, overallLevel: a.overallLevel }
+                                                      ? { kind: 'areas', levels: a.levels }
                                                       : a.legacy
                                                         ? { kind: 'legacy' }
                                                         : { kind: 'missing' }
