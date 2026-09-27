@@ -728,3 +728,26 @@ test('99-1 B3: 시도에 제시 순서 기록(outOfOrder)을 읽고, 연구 자�
   assert.match(src, /outOfOrderCount: current\.filter\(\(a\) => a\.outOfOrder === true\)\.length/);
   assert.match(readFileSync('src/app/admin/research-panel.tsx', 'utf8'), /제시 순서를 건너뛴 제출/);
 });
+
+test('99-1 B4: 개인정보 보류 유형별 CSV — 유형·건수·처음/마지막 시각만, 원문·학생·문항 없음', async () => {
+  const { summarizePrivacyHolds, buildPrivacyHoldCsv, PRIVACY_HOLD_COLUMNS } = await import('../src/server/export/practice-summary');
+  const holds = [
+    { types: ['phone'], heldAt: '2026-10-01T01:00:00.000Z', questionId: 'L05', classKey: 'CLS-A', text: '010-1234-5678' },
+    { types: ['phone', 'email'], heldAt: '2026-10-02T01:00:00.000Z', questionId: 'L06' },
+    { types: ['email'], heldAt: '2026-09-30T01:00:00.000Z' },
+    { types: [], heldAt: '2026-10-03T01:00:00.000Z' },
+  ];
+  const rows = summarizePrivacyHolds(holds);
+  assert.deepEqual(rows, [
+    { type: 'ALL', count: 4, firstHeldAt: '2026-09-30T01:00:00.000Z', lastHeldAt: '2026-10-03T01:00:00.000Z' },
+    { type: 'email', count: 2, firstHeldAt: '2026-09-30T01:00:00.000Z', lastHeldAt: '2026-10-02T01:00:00.000Z' },
+    { type: 'phone', count: 2, firstHeldAt: '2026-10-01T01:00:00.000Z', lastHeldAt: '2026-10-02T01:00:00.000Z' },
+    { type: 'unknown', count: 1, firstHeldAt: '2026-10-03T01:00:00.000Z', lastHeldAt: '2026-10-03T01:00:00.000Z' },
+  ]);
+  assert.deepEqual(PRIVACY_HOLD_COLUMNS.map((c) => c.key), ['type', 'count', 'first_held_at', 'last_held_at']);
+  const csv = buildPrivacyHoldCsv(rows);
+  for (const leaked of ['010-1234', 'L05', 'L06', 'CLS-A']) assert.equal(csv.includes(leaked), false, leaked);
+  assert.deepEqual(summarizePrivacyHolds([]), [{ type: 'ALL', count: 0, firstHeldAt: null, lastHeldAt: null }]);
+  const { readFileSync } = await import('node:fs');
+  assert.match(readFileSync('src/app/admin/research-panel.tsx', 'utf8'), /exportCsv\('privacy_holds'\)/);
+});

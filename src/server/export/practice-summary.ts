@@ -1007,3 +1007,47 @@ export const buildSampleCsv = (sampleId: string, seed: string, cases: readonly S
     cases.map((item) => ({ sampleId, seed, item })),
     SAMPLE_COLUMNS
   );
+
+/* ────────────────────────── 개인정보 보류 유형별 건수(99-1 B4) ────────────────────────── */
+
+/** 개인정보 점검 보류 기록에서 유형별 건수와 처음·마지막 시각. 원문·학생·문항은 싣지 않는다. */
+export interface PrivacyHoldRow {
+  /** 점검 유형(예: phone, email). 'ALL'은 보류 전체 건수(한 건에 유형이 여럿이면 유형별로는 각각 센다). */
+  type: string;
+  count: number;
+  firstHeldAt: string | null;
+  lastHeldAt: string | null;
+}
+
+/** 보류 기록 → 유형별 줄. 맨 앞은 전체(ALL), 그다음 유형 이름 순. 유형이 비었으면 'unknown'. */
+export function summarizePrivacyHolds(
+  holds: readonly { types?: readonly string[] | null; heldAt?: string | null }[]
+): PrivacyHoldRow[] {
+  const byType = new Map<string, PrivacyHoldRow>();
+  const add = (type: string, at: string | null) => {
+    const row = byType.get(type) ?? { type, count: 0, firstHeldAt: null, lastHeldAt: null };
+    row.count += 1;
+    if (at && (!row.firstHeldAt || at < row.firstHeldAt)) row.firstHeldAt = at;
+    if (at && (!row.lastHeldAt || at > row.lastHeldAt)) row.lastHeldAt = at;
+    byType.set(type, row);
+  };
+  for (const h of holds) {
+    const at = typeof h.heldAt === 'string' && h.heldAt ? h.heldAt : null;
+    add('ALL', at);
+    const types = [...new Set((h.types ?? []).filter((t): t is string => typeof t === 'string' && t.length > 0))];
+    for (const t of types.length ? types : ['unknown']) add(t, at);
+  }
+  const all = byType.get('ALL') ?? { type: 'ALL', count: 0, firstHeldAt: null, lastHeldAt: null };
+  byType.delete('ALL');
+  return [all, ...[...byType.values()].sort((a, b) => a.type.localeCompare(b.type))];
+}
+
+export const PRIVACY_HOLD_COLUMNS: CsvColumn<PrivacyHoldRow>[] = [
+  { key: 'type', get: (r) => r.type },
+  { key: 'count', get: (r) => r.count },
+  { key: 'first_held_at', get: (r) => r.firstHeldAt },
+  { key: 'last_held_at', get: (r) => r.lastHeldAt },
+];
+
+export const buildPrivacyHoldCsv = (rows: readonly PrivacyHoldRow[]) => toCsv(rows, PRIVACY_HOLD_COLUMNS);
+

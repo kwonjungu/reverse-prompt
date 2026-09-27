@@ -64,6 +64,8 @@ import {
   buildExpertSampleCsv,
   buildExtractionCsv,
   buildQuestionSummaryCsv,
+  buildPrivacyHoldCsv,
+  summarizePrivacyHolds,
   buildResearcherSampleCsv,
   buildStudentQuestionCsv,
   countLegacyAttempts,
@@ -284,7 +286,8 @@ export async function loadResearchOverviewAction(input: {
 
 /* ────────────────────────── CSV 내보내기 ────────────────────────── */
 
-export type ResearchCsvKind = 'attempts' | 'student_question' | 'question';
+/** privacy_holds는 개인정보 점검 보류의 유형별 건수(원문 없이 유형·건수·처음/마지막 시각, 99-1 B4) */
+export type ResearchCsvKind = 'attempts' | 'student_question' | 'question' | 'privacy_holds';
 
 export interface CsvFile {
   filename: string;
@@ -300,6 +303,28 @@ export async function exportResearchCsvAction(input: {
   return run(async () => {
     await requireAdmin();
     const scope = scopeOf(input?.classResearchId);
+    if (input.kind === 'privacy_holds') {
+      // 보류 기록에는 원래 유형·시각만 있다(글·학생·세션 없음). 문항 ID도 CSV에는 싣지 않는다.
+      const base = getAdminFirestore().collection(RESEARCH_PRIVACY_HOLDS_PATH);
+      const snap = scope ? await base.where('classKey', '==', scope).get() : await base.get();
+      const holdRows = summarizePrivacyHolds(
+        snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            types: Array.isArray(data.types) ? (data.types as unknown[]).filter((t): t is string => typeof t === 'string') : [],
+            heldAt: typeof data.heldAt === 'string' ? data.heldAt : null,
+          };
+        })
+      );
+      const holdFile: CsvFile = {
+        filename: `rp_privacy_holds_${fileScope(scope)}_${stamp()}.csv`,
+        csv: buildPrivacyHoldCsv(holdRows),
+        rowCount: holdRows.length,
+      };
+      privacy.assertNoSecrets([holdFile.csv]);
+      await recordAdminEvent('research_export', scope, { kind: input.kind, rows: holdFile.rowCount });
+      return holdFile;
+    }
     const { attempts } = await loadConsentedAttempts(scope);
     const rows = summarizeStudentQuestions(attempts);
     let file: CsvFile;

@@ -336,6 +336,14 @@ export function ResearchPanel({ onSignedOut }: { onSignedOut: () => void }) {
               <Button variant="outline" disabled={busy} onClick={() => void exportCsv('question')}>
                 <Download className="mr-2 h-4 w-4" /> 문항 요약 CSV
               </Button>
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => void exportCsv('privacy_holds')}
+                title="개인정보 점검으로 멈춘 제출의 유형별 건수와 처음·마지막 시각(글·학생·문항 없음)"
+              >
+                <Download className="mr-2 h-4 w-4" /> 개인정보 보류 유형별 CSV
+              </Button>
             </div>
           </div>
 
